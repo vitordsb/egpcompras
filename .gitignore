@@ -1,0 +1,16 @@
+node_modules
+dist
+dist-ssr
+.env
+.env.local
+*.log
+.DS_Store
+.pnpm-store
+
+# Vitor — instruções pessoais e contexto Claude
+CLAUDE.md
+AVISOS.md
+AVISOS_arquivados.md
+ARCHITECTURE.md
+.claude/
+_sessions/
