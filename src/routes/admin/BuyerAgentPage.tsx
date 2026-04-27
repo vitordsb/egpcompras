@@ -15,17 +15,22 @@ import { cn } from '@/lib/utils';
 
 const PROVIDER_STORAGE_KEY = 'appCompras.aiProvider';
 
-// Em produção, força Groq (cloud, free tier estável) e não permite trocar.
-// Em dev, deixa o usuário escolher livremente.
-const PROVIDER_LOCKED_IN_PROD = 'groq';
-const isProductionLocked = import.meta.env.PROD;
+// Em produção, ocultamos o Ollama (provider local — não há servidor lá).
+// Groq e Gemini ficam disponíveis pro usuário escolher livremente.
+const isProd = import.meta.env.PROD;
+const PROVIDER_DEFAULT_IN_PROD = 'groq';
+
+function getAvailableProviders() {
+  return isProd ? PROVIDERS.filter((p) => p.id !== 'ollama') : PROVIDERS;
+}
 
 function loadInitialProviderId(): string {
-  if (isProductionLocked) return PROVIDER_LOCKED_IN_PROD;
-  if (typeof window === 'undefined') return 'gemini';
+  const available = getAvailableProviders();
+  if (typeof window === 'undefined') return available[0]?.id ?? 'gemini';
   const saved = window.localStorage.getItem(PROVIDER_STORAGE_KEY);
-  if (saved && PROVIDERS.some((p) => p.id === saved)) return saved;
-  const firstConfigured = PROVIDERS.find((p) => p.isConfigured());
+  if (saved && available.some((p) => p.id === saved)) return saved;
+  if (isProd) return PROVIDER_DEFAULT_IN_PROD;
+  const firstConfigured = available.find((p) => p.isConfigured());
   return firstConfigured?.id ?? 'gemini';
 }
 
@@ -64,6 +69,7 @@ export default function BuyerAgentPage() {
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<FriendlyError | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<ChatSummary | null>(null);
+  const [chatsDrawerOpen, setChatsDrawerOpen] = useState(false);
 
   const [providerId, setProviderId] = useState<string>(() => loadInitialProviderId());
   const provider: AgentProvider = getProvider(providerId) ?? PROVIDERS[0];
@@ -79,6 +85,21 @@ export default function BuyerAgentPage() {
   useEffect(() => {
     window.localStorage.setItem(PROVIDER_STORAGE_KEY, providerId);
   }, [providerId]);
+
+  // Fecha drawer mobile ao trocar de conversa
+  useEffect(() => {
+    setChatsDrawerOpen(false);
+  }, [currentChatId]);
+
+  // Fecha drawer com Esc
+  useEffect(() => {
+    if (!chatsDrawerOpen) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') setChatsDrawerOpen(false);
+    }
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [chatsDrawerOpen]);
 
   // Ping no provider quando muda
   useEffect(() => {
@@ -244,18 +265,43 @@ export default function BuyerAgentPage() {
   // ---- Render ---------------------------------------------------------
 
   return (
-    <div className="flex h-full bg-slate-50">
-      {/* Sidebar de chats */}
-      <aside className="flex w-64 shrink-0 flex-col border-r border-slate-200 bg-white">
-        <div className="border-b border-slate-200 p-3">
+    <div className="relative flex h-full bg-slate-50">
+      {/* Backdrop quando drawer aberto em mobile */}
+      {chatsDrawerOpen && (
+        <div
+          className="fixed inset-0 z-30 bg-slate-900/40 md:hidden"
+          onClick={() => setChatsDrawerOpen(false)}
+          aria-hidden="true"
+        />
+      )}
+
+      {/* Sidebar de chats — drawer no mobile, fixa no desktop */}
+      <aside
+        className={cn(
+          'fixed inset-y-0 left-0 z-40 flex w-72 flex-col border-r border-slate-200 bg-white transition-transform duration-200',
+          'md:relative md:inset-auto md:w-64 md:translate-x-0',
+          chatsDrawerOpen ? 'translate-x-0 shadow-xl' : '-translate-x-full md:shadow-none'
+        )}
+      >
+        <div className="flex items-center justify-between gap-2 border-b border-slate-200 p-3">
           <Button
             type="button"
             onClick={newChat}
             disabled={running}
-            className="w-full justify-center"
+            className="flex-1 justify-center"
           >
             + Nova conversa
           </Button>
+          <button
+            type="button"
+            onClick={() => setChatsDrawerOpen(false)}
+            aria-label="Fechar lista de conversas"
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-slate-400 hover:bg-slate-100 hover:text-slate-700 md:hidden"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
+            </svg>
+          </button>
         </div>
         <div className="flex-1 overflow-y-auto p-2">
           {chats.length === 0 ? (
@@ -269,7 +315,7 @@ export default function BuyerAgentPage() {
                     onClick={() => selectChat(c.id)}
                     disabled={running}
                     className={cn(
-                      'flex w-full flex-col rounded-md px-3 py-2 text-left transition-colors',
+                      'flex w-full flex-col rounded-md px-3 py-2 pr-8 text-left transition-colors',
                       currentChatId === c.id
                         ? 'bg-brand-50 text-brand-700'
                         : 'text-slate-700 hover:bg-slate-100',
@@ -288,7 +334,7 @@ export default function BuyerAgentPage() {
                       setConfirmDelete(c);
                     }}
                     aria-label="Excluir conversa"
-                    className="absolute right-2 top-2 hidden rounded p-1 text-slate-400 hover:bg-white hover:text-red-600 group-hover:block"
+                    className="absolute right-2 top-2 rounded p-1 text-slate-400 hover:bg-white hover:text-red-600 md:hidden md:group-hover:block"
                   >
                     ×
                   </button>
@@ -301,17 +347,27 @@ export default function BuyerAgentPage() {
 
       {/* Área principal */}
       <div className="flex flex-1 flex-col overflow-hidden">
-        <header className="border-b border-slate-200 bg-white px-8 py-4">
-          <div className="mx-auto flex max-w-3xl items-center justify-between gap-3">
-            <div className="flex items-center gap-3">
-              <div className="flex h-9 w-9 items-center justify-center rounded-md bg-brand-600 text-white">
+        <header className="border-b border-slate-200 bg-white px-4 py-3 md:px-8 md:py-4">
+          <div className="mx-auto flex max-w-3xl items-center justify-between gap-2 md:gap-3">
+            <div className="flex min-w-0 items-center gap-2 md:gap-3">
+              <button
+                type="button"
+                onClick={() => setChatsDrawerOpen(true)}
+                aria-label="Abrir lista de conversas"
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-slate-600 hover:bg-slate-100 md:hidden"
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-5 w-5">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 6.75h12M8.25 12h12m-12 5.25h12M3.75 6.75h.007v.008H3.75V6.75Zm.375 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0ZM3.75 12h.007v.008H3.75V12Zm.375 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm-.375 5.25h.007v.008H3.75v-.008Zm.375 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Z" />
+                </svg>
+              </button>
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-brand-600 text-white">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-5 w-5">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09Z" />
                 </svg>
               </div>
-              <div>
-                <h1 className="text-lg font-semibold text-slate-900">Comprador</h1>
-                <p className="text-xs text-slate-500">
+              <div className="min-w-0">
+                <h1 className="truncate text-base font-semibold text-slate-900 md:text-lg">Comprador</h1>
+                <p className="hidden text-xs text-slate-500 sm:block">
                   Assistente que executa ações no sistema
                 </p>
               </div>
@@ -334,30 +390,24 @@ export default function BuyerAgentPage() {
                       : providerStatus.message ?? 'offline'
                 }
               />
-              {isProductionLocked ? (
-                <div className="h-9 rounded-md border border-slate-200 bg-slate-50 px-3 flex items-center text-sm text-slate-700">
-                  {provider.name} · {provider.modelLabel}
-                </div>
-              ) : (
-                <select
-                  value={providerId}
-                  onChange={(e) => setProviderId(e.target.value)}
-                  disabled={running}
-                  className="h-9 rounded-md border border-slate-300 bg-white px-2 text-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
-                >
-                  {PROVIDERS.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name} · {p.modelLabel}
-                    </option>
-                  ))}
-                </select>
-              )}
+              <select
+                value={providerId}
+                onChange={(e) => setProviderId(e.target.value)}
+                disabled={running}
+                className="h-9 rounded-md border border-slate-300 bg-white px-2 text-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
+              >
+                {getAvailableProviders().map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name} · {p.modelLabel}
+                  </option>
+                ))}
+              </select>
             </div>
           </div>
         </header>
 
         {providerStatus && !providerStatus.ok && (
-          <div className="mx-auto mt-4 w-full max-w-3xl px-8">
+          <div className="mx-auto mt-4 w-full max-w-3xl px-4 md:px-8">
             <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
               <strong>{provider.name}</strong> indisponível: {providerStatus.message}
               {provider.id === 'ollama' && (
@@ -370,7 +420,7 @@ export default function BuyerAgentPage() {
           </div>
         )}
 
-        <div ref={scrollRef} className="flex-1 overflow-y-auto px-8 py-8">
+        <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4 md:px-8 md:py-8">
           <div className="mx-auto max-w-3xl">
             {history.length === 0 && !running && (
               <div className="space-y-6">
@@ -531,7 +581,7 @@ export default function BuyerAgentPage() {
           </div>
         </div>
 
-        <div className="border-t border-slate-200 bg-white px-8 py-4">
+        <div className="border-t border-slate-200 bg-white px-4 py-3 md:px-8 md:py-4">
           <div className="mx-auto max-w-3xl">
             <form
               onSubmit={(e) => {

@@ -43,13 +43,21 @@ export function parseAgentError(err: unknown): FriendlyError {
     };
   }
 
-  if (code === 429 || /RESOURCE_EXHAUSTED|quota/i.test(msg)) {
+  if (
+    code === 429 ||
+    /RESOURCE_EXHAUSTED|quota|rate_limit_exceeded|Rate limit reached/i.test(msg)
+  ) {
+    const retryS = extractRetryDelaySeconds(msg);
+    const isGroq = /groq/i.test(msg);
     return {
-      title: 'Limite de uso atingido',
+      title: 'Limite por minuto atingido',
       description:
-        'Você bateu um dos limites de chamadas/tokens da API. Pode ser RPM (por minuto) ou RPD (por dia).',
-      hint:
-        'Aguarde ~60 segundos pro RPM resetar. Veja detalhes na aba Consumo IA.',
+        retryS != null
+          ? `O modelo bateu o limite de tokens/minuto. Já tentei automaticamente respeitando ${retryS}s de espera, mas ainda não passou.`
+          : 'Você bateu um dos limites de uso (tokens ou requests por minuto/dia).',
+      hint: isGroq
+        ? 'Aguarde ~30s e tente de novo. Pra contornar: divida em mensagens menores, troque pro Gemini no select, ou ative o Dev Tier do Groq pra subir limites.'
+        : 'Aguarde ~60s pro limite resetar. Veja detalhes na aba Consumo IA.',
       technical: msg,
     };
   }
@@ -111,14 +119,28 @@ export function parseAgentError(err: unknown): FriendlyError {
 }
 
 /**
+ * Tenta extrair "try again in X.Xs" ou "retryDelay":"Xs" da mensagem de erro.
+ */
+export function extractRetryDelaySeconds(msg: string): number | null {
+  const m1 = msg.match(/try again in ([\d.]+)\s*s/i);
+  if (m1) return parseFloat(m1[1]);
+  const m2 = msg.match(/"retryDelay":\s*"(\d+(?:\.\d+)?)s"/);
+  if (m2) return parseFloat(m2[1]);
+  const m3 = msg.match(/retry[_\s-]?after[":\s]+(\d+(?:\.\d+)?)/i);
+  if (m3) return parseFloat(m3[1]);
+  return null;
+}
+
+/**
  * Tenta a chamada ao provider com retry exponencial pra erros recuperáveis
- * (503 UNAVAILABLE, network, timeouts). Erros como 401/429 não são retentados.
+ * (503 UNAVAILABLE, 429 rate-limit, network, timeouts).
+ * Pra 429 com retryDelay no payload, respeita o tempo sugerido.
  */
 async function generateWithRetry(
   provider: AgentProvider,
   args: ProviderRunArgs
 ): Promise<ProviderResponse> {
-  const MAX_RETRIES = 3;
+  const MAX_RETRIES = 5;
   let lastErr: unknown;
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
     try {
@@ -126,10 +148,27 @@ async function generateWithRetry(
     } catch (err) {
       lastErr = err;
       const msg = err instanceof Error ? err.message : String(err);
-      const recoverable = /503|UNAVAILABLE|network|fetch failed|ECONNRESET|ETIMEDOUT|overloaded/i.test(msg);
+      const isRateLimit = /\b429\b|rate_limit_exceeded|Rate limit reached/i.test(msg);
+      const isOverloaded = /503|UNAVAILABLE|overloaded/i.test(msg);
+      const isNetwork = /network|fetch failed|ECONNRESET|ETIMEDOUT/i.test(msg);
+      const recoverable = isRateLimit || isOverloaded || isNetwork;
       if (!recoverable || attempt === MAX_RETRIES - 1) throw err;
-      const delayMs = 1000 * Math.pow(2, attempt); // 1s, 2s, 4s
-      console.warn(`[agent] erro recuperável (tentativa ${attempt + 1}): ${msg} — retry em ${delayMs}ms`);
+
+      let delayMs: number;
+      const retryS = extractRetryDelaySeconds(msg);
+      if (retryS != null) {
+        // Respeita o tempo sugerido pelo provider + 500ms de buffer
+        delayMs = Math.ceil(retryS * 1000) + 500;
+      } else if (isRateLimit) {
+        // 429 sem dica de tempo: backoff mais longo
+        delayMs = 3000 * Math.pow(2, attempt);
+      } else {
+        // Outros erros recuperáveis: backoff curto
+        delayMs = 1000 * Math.pow(2, attempt);
+      }
+      console.warn(
+        `[agent] erro recuperável (tentativa ${attempt + 1}/${MAX_RETRIES}): ${msg.slice(0, 200)} — retry em ${delayMs}ms`
+      );
       await new Promise((r) => setTimeout(r, delayMs));
     }
   }

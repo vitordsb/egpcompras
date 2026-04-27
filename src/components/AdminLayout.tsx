@@ -189,9 +189,9 @@ export default function AdminLayout() {
   const configActive = configLinks.some((l) => location.pathname.startsWith(l.to));
 
   return (
-    <div className="flex h-screen bg-slate-50">
-      {/* Topbar mobile (visível só em <md) */}
-      <header className="fixed inset-x-0 top-0 z-30 flex h-12 items-center justify-between border-b border-slate-200 bg-white px-3 md:hidden">
+    <div className="flex h-screen flex-col bg-slate-50 md:flex-row">
+      {/* Topbar mobile (visível só em <md, ocupa espaço no flow) */}
+      <header className="flex h-12 shrink-0 items-center justify-between border-b border-slate-200 bg-white px-3 md:hidden">
         <button
           type="button"
           onClick={() => setMobileOpen(true)}
@@ -296,7 +296,7 @@ export default function AdminLayout() {
         </div>
       </aside>
 
-      <main className="flex-1 overflow-auto pt-12 md:pt-0">
+      <main className="flex-1 min-h-0 overflow-auto">
         <Outlet />
       </main>
     </div>
