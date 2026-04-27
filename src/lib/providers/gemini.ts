@@ -24,7 +24,22 @@ export const geminiProvider: AgentProvider = {
     if (!this.isConfigured()) {
       return { ok: false, message: 'VITE_GEMINI_API_KEY não definido' };
     }
-    return { ok: true };
+    // Chamada light pra validar a chave de verdade (lista modelos).
+    // Pega 401/403/400 com chave inválida sem consumir cota de geração.
+    try {
+      const res = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`,
+        { signal: AbortSignal.timeout(5000) }
+      );
+      if (res.ok) return { ok: true };
+      if (res.status === 400 || res.status === 401 || res.status === 403) {
+        return { ok: false, message: 'Chave inválida ou sem permissão' };
+      }
+      return { ok: false, message: `HTTP ${res.status}` };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { ok: false, message: `Falha ao conectar: ${msg}` };
+    }
   },
 
   async generate({ systemInstruction, tools, history }): Promise<ProviderResponse> {
