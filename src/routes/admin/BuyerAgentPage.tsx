@@ -12,6 +12,7 @@ import { describeToolCall } from '@/lib/tool-labels';
 import type { AgentProvider } from '@/lib/providers/types';
 import { supabase } from '@/lib/supabase';
 import { useInternalAuth } from '@/lib/auth-context';
+import { processXmlFile, processZipFile, type ParsedAttachment } from '@/lib/nfe-parser';
 import { Button } from '@/components/ui/Button';
 import MarkdownText from '@/components/MarkdownText';
 import { cn } from '@/lib/utils';
@@ -64,6 +65,7 @@ export default function BuyerAgentPage() {
   const [history, setHistory] = useState<ChatTurn[]>([]);
   const [input, setInput] = useState('');
   const [pendingFile, setPendingFile] = useState<{ name: string; mimeType: string; data: string } | null>(null);
+  const [pendingParsed, setPendingParsed] = useState<ParsedAttachment | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<FriendlyError | null>(null);
@@ -253,12 +255,37 @@ export default function BuyerAgentPage() {
   }
 
   async function attachFile(file: File) {
-    if (file.type !== 'application/pdf') {
-      setError({ title: 'Arquivo não suportado', description: 'Só PDFs são aceitos por enquanto.' });
+    const name = file.name.toLowerCase();
+    if (file.type === 'application/pdf' || name.endsWith('.pdf')) {
+      const data = await readFileAsBase64(file);
+      setPendingFile({ name: file.name, mimeType: 'application/pdf', data });
+      setPendingParsed(null);
+    } else if (name.endsWith('.xml') || file.type === 'text/xml' || file.type === 'application/xml') {
+      const content = await file.text();
+      const parsed = processXmlFile(file.name, content);
+      if (!parsed) {
+        setError({ title: 'XML não reconhecido', description: 'O arquivo não é uma NF-e nem CC-e válida.' });
+        return;
+      }
+      setPendingParsed(parsed);
+      setPendingFile(null);
+    } else if (name.endsWith('.zip') || file.type === 'application/zip' || file.type === 'application/x-zip-compressed') {
+      try {
+        const parsed = await processZipFile(file);
+        if (!parsed) {
+          setError({ title: 'ZIP sem conteúdo reconhecido', description: 'O ZIP não contém NF-e nem CC-e válidas.' });
+          return;
+        }
+        setPendingParsed(parsed);
+        setPendingFile(null);
+      } catch {
+        setError({ title: 'Falha ao ler ZIP', description: 'Não foi possível abrir o arquivo ZIP.' });
+        return;
+      }
+    } else {
+      setError({ title: 'Formato não suportado', description: 'Aceitos: PDF, XML (NF-e/CC-e) e ZIP.' });
       return;
     }
-    const data = await readFileAsBase64(file);
-    setPendingFile({ name: file.name, mimeType: file.type, data });
     inputRef.current?.focus();
   }
 
@@ -280,7 +307,7 @@ export default function BuyerAgentPage() {
 
   async function send(text?: string) {
     const message = (text ?? input).trim();
-    if ((!message && !pendingFile) || running) return;
+    if ((!message && !pendingFile && !pendingParsed) || running) return;
     if (!provider.isConfigured()) {
       setError({
         title: `Provider ${provider.name} não está configurado`,
@@ -288,10 +315,14 @@ export default function BuyerAgentPage() {
       });
       return;
     }
-    const finalMessage = message || (pendingFile ? `Importar pedido: ${pendingFile.name}` : '');
+    const parsedToSend = pendingParsed;
     const fileToSend = pendingFile;
+    const finalMessage = parsedToSend
+      ? (message ? `${message}\n\n${parsedToSend.text}` : parsedToSend.text)
+      : (message || (fileToSend ? `Importar pedido: ${fileToSend.name}` : ''));
     setInput('');
     setPendingFile(null);
+    setPendingParsed(null);
     setError(null);
     setRunning(true);
     setRunStartedAt(Date.now());
@@ -308,7 +339,8 @@ export default function BuyerAgentPage() {
     try {
       let chatId = currentChatId;
       if (!chatId) {
-        const title = finalMessage.length > 80 ? finalMessage.slice(0, 80) + '…' : finalMessage;
+        const titleText = parsedToSend ? (message || parsedToSend.label) : finalMessage;
+        const title = titleText.length > 80 ? titleText.slice(0, 80) + '…' : titleText;
         const { data, error: createErr } = await supabase
           .from('ai_chats')
           .insert({ title })
@@ -551,7 +583,7 @@ export default function BuyerAgentPage() {
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="mx-auto mb-2 h-10 w-10 text-brand-500">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m.75 12 3 3m0 0 3-3m-3 3v-6m-1.5-9H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" />
                 </svg>
-                <p className="text-sm font-medium text-brand-700">Solte o PDF aqui para importar o pedido</p>
+                <p className="text-sm font-medium text-brand-700">Solte o arquivo aqui (PDF, XML NF-e/CC-e, ZIP)</p>
               </div>
             </div>
           )}
@@ -591,6 +623,42 @@ export default function BuyerAgentPage() {
             <div className="space-y-3">
               {history.map((t, idx) => {
                 if (t.role === 'user' && (t.text || t.inlineData)) {
+                  // Detecta se é mensagem com dados de NF-e/CC-e extraídos (começa com "[NF-e" ou "[Carta")
+                  const nfeMatch = t.text?.match(/^\[(NF-e \d+[^\]]*|Carta de Corre[^\]]*|ZIP[^\]]*)\]/);
+                  if (nfeMatch) {
+                    const firstLine = t.text!.split('\n')[0];
+                    const rest = t.text!.slice(firstLine.length).trim();
+                    const userPart = rest.includes('\n[') ? rest.slice(0, rest.indexOf('\n[')).trim() : '';
+                    const dataPart = userPart ? rest.slice(userPart.length).trim() : rest;
+                    return (
+                      <div key={idx} className="flex flex-col items-end gap-1">
+                        <span className="px-1 text-[11px] font-medium text-slate-400">{userLabel}</span>
+                        {/* Cabeçalho: tipo do documento */}
+                        <div className="flex items-center gap-1.5 rounded-md border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs text-emerald-700">
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-3.5 w-3.5 shrink-0">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" />
+                          </svg>
+                          <span className="font-semibold">{firstLine.replace(/^\[|\]$/g, '')}</span>
+                          <span className="rounded bg-emerald-100 px-1 text-[10px] font-bold uppercase text-emerald-600">extraído</span>
+                        </div>
+                        {/* Instrução do usuário (se houver) */}
+                        {userPart && (
+                          <div className="max-w-[80%] rounded-lg bg-brand-600 px-4 py-2.5 text-white whitespace-pre-wrap">
+                            {userPart}
+                          </div>
+                        )}
+                        {/* Dados técnicos colapsáveis */}
+                        <details className="max-w-[80%] rounded-md border border-slate-200 bg-slate-50 text-xs">
+                          <summary className="cursor-pointer select-none px-3 py-1.5 text-slate-500 hover:text-slate-700">
+                            dados extraídos
+                          </summary>
+                          <pre className="overflow-x-auto px-3 pb-2 font-mono text-[11px] text-slate-600 whitespace-pre-wrap break-all">
+                            {dataPart}
+                          </pre>
+                        </details>
+                      </div>
+                    );
+                  }
                   return (
                     <div key={idx} className="flex flex-col items-end gap-1">
                       <span className="px-1 text-[11px] font-medium text-slate-400">
@@ -769,18 +837,26 @@ export default function BuyerAgentPage() {
 
         <div className="border-t border-slate-200 bg-white px-4 py-3 md:px-8 md:py-4">
           <div className="mx-auto max-w-3xl space-y-2">
-            {/* Badge do PDF pendente */}
-            {pendingFile && (
-              <div className="flex items-center gap-2 rounded-md border border-brand-200 bg-brand-50 px-3 py-1.5 text-xs">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-4 w-4 shrink-0 text-brand-600">
+            {/* Badge do arquivo pendente (PDF, XML ou ZIP) */}
+            {(pendingFile || pendingParsed) && (
+              <div className={cn(
+                'flex items-center gap-2 rounded-md border px-3 py-1.5 text-xs',
+                pendingParsed
+                  ? 'border-emerald-200 bg-emerald-50'
+                  : 'border-brand-200 bg-brand-50'
+              )}>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className={cn('h-4 w-4 shrink-0', pendingParsed ? 'text-emerald-600' : 'text-brand-600')}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" />
                 </svg>
-                <span className="min-w-0 flex-1 truncate font-medium text-brand-700">{pendingFile.name}</span>
+                <span className={cn('min-w-0 flex-1 truncate font-medium', pendingParsed ? 'text-emerald-700' : 'text-brand-700')}>
+                  {pendingParsed ? `${pendingParsed.label} — ${pendingParsed.name}` : pendingFile?.name}
+                </span>
+                {pendingParsed && <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-emerald-600">extraído</span>}
                 <button
                   type="button"
-                  onClick={() => setPendingFile(null)}
-                  aria-label="Remover PDF"
-                  className="text-brand-400 hover:text-brand-700"
+                  onClick={() => { setPendingFile(null); setPendingParsed(null); }}
+                  aria-label="Remover arquivo"
+                  className={cn('hover:opacity-70', pendingParsed ? 'text-emerald-400' : 'text-brand-400')}
                 >
                   ×
                 </button>
@@ -797,7 +873,7 @@ export default function BuyerAgentPage() {
               <input
                 ref={fileInputRef}
                 type="file"
-                accept="application/pdf"
+                accept=".pdf,.xml,.zip,application/pdf,text/xml,application/xml,application/zip"
                 className="sr-only"
                 onChange={(e) => {
                   const f = e.target.files?.[0];
@@ -809,13 +885,15 @@ export default function BuyerAgentPage() {
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
                 disabled={running}
-                title="Anexar PDF de pedido"
-                aria-label="Anexar PDF"
+                title="Anexar arquivo (PDF, XML NF-e/CC-e, ZIP)"
+                aria-label="Anexar arquivo"
                 className={cn(
                   'flex h-10 w-10 shrink-0 items-center justify-center rounded-md border transition-colors',
-                  pendingFile
-                    ? 'border-brand-300 bg-brand-50 text-brand-600'
-                    : 'border-slate-300 text-slate-500 hover:border-slate-400 hover:text-slate-700',
+                  pendingParsed
+                    ? 'border-emerald-300 bg-emerald-50 text-emerald-600'
+                    : pendingFile
+                      ? 'border-brand-300 bg-brand-50 text-brand-600'
+                      : 'border-slate-300 text-slate-500 hover:border-slate-400 hover:text-slate-700',
                   running && 'cursor-not-allowed opacity-50'
                 )}
               >
@@ -835,7 +913,7 @@ export default function BuyerAgentPage() {
                       send();
                     }
                   }}
-                  placeholder={pendingFile ? 'Instruções extras (opcional) — Enter envia' : 'Diga o que você quer fazer… (Enter envia, Shift+Enter quebra linha)'}
+                  placeholder={(pendingFile || pendingParsed) ? 'Instruções extras (opcional) — Enter envia' : 'Diga o que você quer fazer… (Enter envia, Shift+Enter quebra linha)'}
                   rows={2}
                   disabled={running || !provider.isConfigured()}
                   className="block w-full resize-none rounded-md bg-transparent px-3 py-2 text-sm leading-6 outline-none disabled:bg-slate-50"
@@ -848,7 +926,7 @@ export default function BuyerAgentPage() {
                   </div>
                 )}
               </div>
-              <Button type="submit" disabled={(!input.trim() && !pendingFile) || running || !provider.isConfigured()}>
+              <Button type="submit" disabled={(!input.trim() && !pendingFile && !pendingParsed) || running || !provider.isConfigured()}>
                 Enviar
               </Button>
             </form>

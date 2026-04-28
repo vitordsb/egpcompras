@@ -481,6 +481,7 @@ export const toolDeclarations = [
         valor_total:          { type: 'NUMBER' as Type, description: 'Valor líquido total (produtos + frete).' },
         forma_pagamento:      { type: 'STRING' as Type, description: 'Ex: PIX, Boleto Bancário, Cartão.' },
         condicao_pagamento:   { type: 'STRING' as Type, description: 'Ex: À VISTA, 28-56-84.' },
+        chave_acesso:         { type: 'STRING' as Type, description: 'Chave de acesso da NF-e (44 dígitos, SEFAZ).' },
         notes: { type: 'STRING' as Type, description: 'Observação geral (opcional).' },
         items: {
           type: 'ARRAY' as Type,
@@ -1861,6 +1862,7 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
         valor_total:         args.valor_total != null   ? Number(args.valor_total)             : null,
         forma_pagamento:     args.forma_pagamento     ? String(args.forma_pagamento).trim()   : null,
         condicao_pagamento:  args.condicao_pagamento  ? String(args.condicao_pagamento).trim(): null,
+        chave_acesso:        args.chave_acesso        ? String(args.chave_acesso).replace(/\D/g,'').slice(0,44) || null : null,
         notes:               args.notes               ? String(args.notes).trim()             : null,
       };
       const { data: created, error } = await supabase

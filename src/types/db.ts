@@ -127,6 +127,7 @@ export interface Shipment {
   valor_total: number | null;
   forma_pagamento: string | null;
   condicao_pagamento: string | null;
+  chave_acesso: string | null;
   notes: string | null;
   created_at: string;
   updated_at: string;
