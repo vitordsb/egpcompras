@@ -109,6 +109,10 @@ function AuthenticatedApp() {
 
   useEffect(() => {
     let mounted = true;
+    const loadingGuard = window.setTimeout(() => {
+      if (!mounted) return;
+      setLoading(false);
+    }, 2500);
     Promise.all([
       withTimeout(supabase.auth.getSession(), { data: { session: null }, error: null }),
       withTimeout(
@@ -128,11 +132,13 @@ function AuthenticatedApp() {
       }
       setSession(data.session);
       setMasterAuthenticated(Boolean(master?.authenticated && master?.master));
+      window.clearTimeout(loadingGuard);
       setLoading(false);
     }).catch(() => {
       if (!mounted) return;
       setSession(null);
       setMasterAuthenticated(false);
+      window.clearTimeout(loadingGuard);
       setLoading(false);
     });
     const { data: authListener } = supabase.auth.onAuthStateChange((event, nextSession) => {
@@ -143,6 +149,7 @@ function AuthenticatedApp() {
     });
     return () => {
       mounted = false;
+      window.clearTimeout(loadingGuard);
       authListener.subscription.unsubscribe();
     };
   }, []);
