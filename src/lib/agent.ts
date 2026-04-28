@@ -5,7 +5,6 @@
 import { toolDeclarations, executeTool } from '@/lib/agent-tools';
 import { supabase } from '@/lib/supabase';
 import { geminiProvider } from '@/lib/providers/gemini';
-import { ollamaProvider } from '@/lib/providers/ollama';
 import { groqProvider } from '@/lib/providers/groq';
 import type { AgentProvider, ProviderResponse, ProviderRunArgs } from '@/lib/providers/types';
 import type { ChatTurn } from '@/lib/agent-types';
@@ -66,8 +65,7 @@ export function parseAgentError(err: unknown): FriendlyError {
     return {
       title: 'Chave de API inválida',
       description: 'A chave configurada não foi aceita pelo provider.',
-      hint:
-        'Verifique VITE_GEMINI_API_KEY no .env e reinicie o dev server. Pra Ollama, confira se está rodando localmente.',
+      hint: 'Verifique VITE_GEMINI_API_KEY ou VITE_GROQ_API_KEY no .env e reinicie o dev server.',
       technical: msg,
     };
   }
@@ -87,15 +85,6 @@ export function parseAgentError(err: unknown): FriendlyError {
       title: 'Sem conexão',
       description: 'Não consegui falar com o provider de IA.',
       hint: 'Verifique sua internet. Se estiver no Ollama, confirme que ele está rodando com CORS liberado (OLLAMA_ORIGINS=*).',
-      technical: msg,
-    };
-  }
-
-  if (/Ollama|ECONNREFUSED|11434/i.test(msg)) {
-    return {
-      title: 'Ollama não está respondendo',
-      description: 'O servidor local do Ollama não respondeu na URL configurada.',
-      hint: 'Inicie com: OLLAMA_ORIGINS=* ollama serve',
       technical: msg,
     };
   }
@@ -131,6 +120,13 @@ export function extractRetryDelaySeconds(msg: string): number | null {
   return null;
 }
 
+export interface RetryStatus {
+  attempt: number;
+  total: number;
+  delayMs: number;
+  reason: 'rate_limit' | 'overloaded' | 'network';
+}
+
 /**
  * Tenta a chamada ao provider com retry exponencial pra erros recuperáveis
  * (503 UNAVAILABLE, 429 rate-limit, network, timeouts).
@@ -138,13 +134,21 @@ export function extractRetryDelaySeconds(msg: string): number | null {
  */
 async function generateWithRetry(
   provider: AgentProvider,
-  args: ProviderRunArgs
+  args: ProviderRunArgs,
+  options?: {
+    signal?: AbortSignal;
+    onRetry?: (status: RetryStatus) => void;
+    onRetryClear?: () => void;
+  }
 ): Promise<ProviderResponse> {
   const MAX_RETRIES = 5;
   let lastErr: unknown;
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    if (options?.signal?.aborted) throw new Error('Cancelado pelo usuário');
     try {
-      return await provider.generate(args);
+      const result = await provider.generate(args);
+      options?.onRetryClear?.();
+      return result;
     } catch (err) {
       lastErr = err;
       const msg = err instanceof Error ? err.message : String(err);
@@ -157,19 +161,33 @@ async function generateWithRetry(
       let delayMs: number;
       const retryS = extractRetryDelaySeconds(msg);
       if (retryS != null) {
-        // Respeita o tempo sugerido pelo provider + 500ms de buffer
         delayMs = Math.ceil(retryS * 1000) + 500;
       } else if (isRateLimit) {
-        // 429 sem dica de tempo: backoff mais longo
         delayMs = 3000 * Math.pow(2, attempt);
       } else {
-        // Outros erros recuperáveis: backoff curto
         delayMs = 1000 * Math.pow(2, attempt);
       }
       console.warn(
         `[agent] erro recuperável (tentativa ${attempt + 1}/${MAX_RETRIES}): ${msg.slice(0, 200)} — retry em ${delayMs}ms`
       );
-      await new Promise((r) => setTimeout(r, delayMs));
+      options?.onRetry?.({
+        attempt: attempt + 1,
+        total: MAX_RETRIES,
+        delayMs,
+        reason: isRateLimit ? 'rate_limit' : isOverloaded ? 'overloaded' : 'network',
+      });
+      // Sleep cancelável: aborta antes do tempo se signal for disparado
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(resolve, delayMs);
+        options?.signal?.addEventListener(
+          'abort',
+          () => {
+            clearTimeout(timer);
+            reject(new Error('Cancelado pelo usuário'));
+          },
+          { once: true }
+        );
+      });
     }
   }
   throw lastErr;
@@ -177,7 +195,7 @@ async function generateWithRetry(
 
 export type { ChatTurn } from '@/lib/agent-types';
 
-export const PROVIDERS: AgentProvider[] = [geminiProvider, groqProvider, ollamaProvider];
+export const PROVIDERS: AgentProvider[] = [geminiProvider, groqProvider];
 
 export function getProvider(id: string): AgentProvider | undefined {
   return PROVIDERS.find((p) => p.id === id);
@@ -190,11 +208,23 @@ const SYSTEM_INSTRUCTION = `Você é o "Comprador", assistente operacional da EG
 - **Cadastrar e configurar**: criar componentes, produtos, fornecedores; ajustar markup; adicionar/remover itens da BOM.
 - **Executar tarefas**: criar cotação completa com exclusões, fornecedores e condições; atualizar e excluir registros.
 
+## Princípio fundamental: EXECUTE direto, sem confirmação intermediária
+Quando o usuário descreve uma tarefa com informação suficiente, **EXECUTE TUDO numa rodada só** — chame as tools necessárias na ordem certa e relate o resultado **depois**.
+
+❌ NÃO faça: "Vou cadastrar X e Y. Posso prosseguir?"
+❌ NÃO faça: "Encontrei o produto. Quer que eu atualize?"
+❌ NÃO faça: "Aqui está o plano: 1... 2... 3... confirma?"
+✅ FAÇA: chame todas as tools, depois relate "Cadastrei X, atualizei Y, removi Z."
+
+Pergunte SOMENTE quando:
+- **Falta info crítica** sem a qual uma tool não pode rodar (ex: "qual produto?" se nome ambíguo demais)
+- **Ambiguidade real**: tool retorna ambiguous=true com candidatos → liste e pergunte
+- **Ação destrutiva impactante** (delete_product com cotações ativas, esvaziar BOM inteira) → UMA pergunta curta antes de executar
+
+Frases tipo "vou fazer X" sem ter feito = PROIBIDO. Se você sabe o que fazer, faça e relate.
+
 ## Regras importantes
-1. **Execute deletes/edições direto** quando o usuário pedir explicitamente. NÃO peça confirmação dupla pra ações claras como "remove o componente X" ou "atualiza o produto Y". Apenas:
-   - Em deletes muito impactantes (produto com cotações ativas, fornecedor com histórico) — avise UMA vez antes em uma frase curta.
-   - Em ambiguidade (mais de um match no nome) — mostre os candidatos e pergunte qual.
-2. Pra encontrar IDs, use as tools de leitura primeiro. NUNCA invente IDs/tokens.
+1. Pra encontrar IDs, use as tools de leitura primeiro. NUNCA invente IDs/tokens.
    PORÉM: nas tools que aceitam, prefira passar nomes (component_name, supplier_email, etc) — mais natural pro usuário. NÃO peça IDs ao usuário se houver alternativa por nome.
    Se a tool retornar ambiguous=true com candidatos, mostre a lista pro usuário e pergunte qual.
 3. Pra cotação: se o usuário mencionar produto por nome, use find_product_by_name antes; se mencionar emails, passe em supplier_emails (emails não cadastrados são ignorados, mas você é avisado).
@@ -244,23 +274,9 @@ async function loadProcedureCatalog(): Promise<{ name: string; description: stri
   return (data ?? []) as { name: string; description: string | null }[];
 }
 
-const VERBOSE_EXTRA = `
-## Guia detalhado pra modelos locais (atenção)
-1. SEMPRE que precisar de dados (produto, componente, fornecedor), USE PRIMEIRO uma tool de leitura. Não invente IDs nem valores.
-2. Quando o usuário fornecer um nome, use as tools com nome (find_product_by_name, find_component_by_name, find_supplier_by_email) — NÃO peça IDs ao usuário.
-3. Pra cadastrar VÁRIOS componentes de uma vez, use SEMPRE bulk_create_components com a lista completa numa só chamada. NÃO faça um por um.
-4. Ao receber resultado de uma tool, leia com atenção e responda em texto curto e direto. Use markdown leve.
-5. Se a tool retornar { ambiguous: true, candidates: [...] }, mostre os candidatos pro usuário e PERGUNTE qual ele quer.
-6. Procedures (playbooks): quando o usuário disser "roda o procedimento X", chame run_procedure(name="X"). Depois, leia os steps retornados e execute as tools que cada passo descreve. NÃO repita os steps de volta — execute.
-7. Quando o usuário disser "aprenda a fazer X", chame define_procedure passando name (curto, único), description (1 linha) e steps (texto detalhado com TODOS os parâmetros).
-8. Confirme em UMA frase curta antes de ações destrutivas (delete_*, esvaziar BOM). Não pergunte 3 vezes.
-9. Sempre responda em português do Brasil.
-`;
-
 function buildSystemInstruction(
   memories: { id: string; content: string }[],
-  procedures: { name: string; description: string | null }[],
-  verbose: boolean
+  procedures: { name: string; description: string | null }[]
 ): string {
   let out = SYSTEM_INSTRUCTION;
   if (memories.length > 0) {
@@ -275,7 +291,6 @@ function buildSystemInstruction(
         .map((p, i) => `${i + 1}. **${p.name}** — ${p.description ?? '(sem descrição)'}`)
         .join('\n');
   }
-  if (verbose) out += VERBOSE_EXTRA;
   return out;
 }
 
@@ -284,6 +299,12 @@ export interface RunOptions {
   history: ChatTurn[];
   userMessage: string;
   onTurn?: (turn: ChatTurn) => void;
+  /** Sinal pra cancelar a execução (entre steps). */
+  signal?: AbortSignal;
+  /** Disparado quando entra em retry de erro recuperável. */
+  onRetry?: (status: RetryStatus) => void;
+  /** Disparado quando o retry foi resolvido (chamada bem-sucedida). */
+  onRetryClear?: () => void;
 }
 
 export async function runAgent({
@@ -291,6 +312,9 @@ export async function runAgent({
   history,
   userMessage,
   onTurn,
+  signal,
+  onRetry,
+  onRetryClear,
 }: RunOptions): Promise<ChatTurn[]> {
   if (!provider.isConfigured()) {
     throw new Error(`Provider ${provider.name} não configurado.`);
@@ -337,19 +361,22 @@ export async function runAgent({
   // Se o user usar remember/define_procedure durante o loop, vão valer só no
   // próximo runAgent — aceitável.
   const [memories, procedures] = await Promise.all([loadMemories(), loadProcedureCatalog()]);
-  const fullSystemInstruction = buildSystemInstruction(
-    memories,
-    procedures,
-    Boolean(provider.verboseInstructions)
-  );
+  const fullSystemInstruction = buildSystemInstruction(memories, procedures);
 
   const MAX_STEPS = 25;
   for (let step = 0; step < MAX_STEPS; step++) {
-    const response = await generateWithRetry(provider, {
-      systemInstruction: fullSystemInstruction,
-      tools: toolDeclarations as any,
-      history: workingHistory,
-    });
+    if (signal?.aborted) {
+      throw new Error('Cancelado pelo usuário');
+    }
+    const response = await generateWithRetry(
+      provider,
+      {
+        systemInstruction: fullSystemInstruction,
+        tools: toolDeclarations as any,
+        history: workingHistory,
+      },
+      { signal, onRetry, onRetryClear }
+    );
     apiRequestsCount++;
     promptTokens += response.usage.promptTokens;
     responseTokens += response.usage.responseTokens;

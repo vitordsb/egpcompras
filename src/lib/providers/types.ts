@@ -33,15 +33,9 @@ export interface ProviderRunArgs {
 }
 
 export interface AgentProvider {
-  id: 'gemini' | 'ollama' | 'groq';
+  id: 'gemini' | 'groq';
   name: string;
   modelLabel: string;
-  /**
-   * Modelos abertos pequenos (Ollama com qwen2.5:3b, llama3.2, etc) precisam
-   * de instruções mais detalhadas e exemplos pra acertar function calling.
-   * Modelos grandes/cloud (Gemini) entendem instruções concisas.
-   */
-  verboseInstructions?: boolean;
   /** Se a configuração mínima (chave / URL) está presente */
   isConfigured(): boolean;
   /** Verifica se o provider está realmente acessível agora */

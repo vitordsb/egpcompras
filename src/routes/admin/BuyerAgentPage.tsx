@@ -6,7 +6,9 @@ import {
   parseAgentError,
   type ChatTurn,
   type FriendlyError,
+  type RetryStatus,
 } from '@/lib/agent';
+import { describeToolCall } from '@/lib/tool-labels';
 import type { AgentProvider } from '@/lib/providers/types';
 import { supabase } from '@/lib/supabase';
 import { Button } from '@/components/ui/Button';
@@ -15,22 +17,15 @@ import { cn } from '@/lib/utils';
 
 const PROVIDER_STORAGE_KEY = 'appCompras.aiProvider';
 
-// Em produção, ocultamos o Ollama (provider local — não há servidor lá).
-// Groq e Gemini ficam disponíveis pro usuário escolher livremente.
 const isProd = import.meta.env.PROD;
 const PROVIDER_DEFAULT_IN_PROD = 'groq';
 
-function getAvailableProviders() {
-  return isProd ? PROVIDERS.filter((p) => p.id !== 'ollama') : PROVIDERS;
-}
-
 function loadInitialProviderId(): string {
-  const available = getAvailableProviders();
-  if (typeof window === 'undefined') return available[0]?.id ?? 'gemini';
+  if (typeof window === 'undefined') return PROVIDERS[0]?.id ?? 'gemini';
   const saved = window.localStorage.getItem(PROVIDER_STORAGE_KEY);
-  if (saved && available.some((p) => p.id === saved)) return saved;
+  if (saved && PROVIDERS.some((p) => p.id === saved)) return saved;
   if (isProd) return PROVIDER_DEFAULT_IN_PROD;
-  const firstConfigured = available.find((p) => p.isConfigured());
+  const firstConfigured = PROVIDERS.find((p) => p.isConfigured());
   return firstConfigured?.id ?? 'gemini';
 }
 
@@ -70,6 +65,10 @@ export default function BuyerAgentPage() {
   const [error, setError] = useState<FriendlyError | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<ChatSummary | null>(null);
   const [chatsDrawerOpen, setChatsDrawerOpen] = useState(false);
+  const [runStartedAt, setRunStartedAt] = useState<number | null>(null);
+  const [elapsedSec, setElapsedSec] = useState(0);
+  const [retryStatus, setRetryStatus] = useState<RetryStatus | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
 
   const [providerId, setProviderId] = useState<string>(() => loadInitialProviderId());
   const provider: AgentProvider = getProvider(providerId) ?? PROVIDERS[0];
@@ -100,6 +99,28 @@ export default function BuyerAgentPage() {
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
   }, [chatsDrawerOpen]);
+
+  // Timer de elapsed enquanto roda (atualiza a cada segundo)
+  useEffect(() => {
+    if (!running || !runStartedAt) {
+      setElapsedSec(0);
+      return;
+    }
+    const tick = () => setElapsedSec(Math.floor((Date.now() - runStartedAt) / 1000));
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [running, runStartedAt]);
+
+  // Auto-grow do textarea conforme o usuário digita.
+  // Cresce de ~2 linhas até ~12 linhas, depois ativa scroll interno.
+  useEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    const next = Math.min(el.scrollHeight, 320); // ~12 linhas
+    el.style.height = `${next}px`;
+  }, [input]);
 
   // Ping no provider quando muda
   useEffect(() => {
@@ -193,6 +214,10 @@ export default function BuyerAgentPage() {
 
   // ---- Enviar mensagem -------------------------------------------------
 
+  function cancelRun() {
+    abortRef.current?.abort();
+  }
+
   async function send(text?: string) {
     const message = (text ?? input).trim();
     if (!message || running) return;
@@ -206,9 +231,18 @@ export default function BuyerAgentPage() {
     setInput('');
     setError(null);
     setRunning(true);
+    setRunStartedAt(Date.now());
+    setRetryStatus(null);
+
+    // AbortController + timeout client-side de 3min (impede UI travada eterna)
+    const controller = new AbortController();
+    abortRef.current = controller;
+    const timeoutMs = 3 * 60 * 1000;
+    const timeoutId = window.setTimeout(() => {
+      controller.abort();
+    }, timeoutMs);
 
     try {
-      // Garante que existe um chat
       let chatId = currentChatId;
       if (!chatId) {
         const title = message.length > 80 ? message.slice(0, 80) + '…' : message;
@@ -224,17 +258,18 @@ export default function BuyerAgentPage() {
         setCurrentChatId(chatId);
       }
 
-      // Position counter — começa do tamanho atual do histórico
       let nextPosition = history.length;
 
       await runAgent({
         provider,
         history,
         userMessage: message,
+        signal: controller.signal,
+        onRetry: (s) => setRetryStatus(s),
+        onRetryClear: () => setRetryStatus(null),
         onTurn: (t) => {
           setHistory((prev) => [...prev, t]);
           const pos = nextPosition++;
-          // fire-and-forget com log de erro
           supabase
             .from('ai_messages')
             .insert({
@@ -248,16 +283,34 @@ export default function BuyerAgentPage() {
         },
       });
 
-      // Atualiza updated_at do chat (e refresca a lista pra subir o atual)
       await supabase
         .from('ai_chats')
         .update({ updated_at: new Date().toISOString() })
         .eq('id', chatId);
       await loadChats();
     } catch (err) {
-      setError(parseAgentError(err));
+      const msg = err instanceof Error ? err.message : String(err);
+      if (controller.signal.aborted) {
+        // Cancelamento: pode ter sido manual ou pelo timeout
+        const wasTimeout = !msg.includes('Cancelado pelo usuário') || (Date.now() - (runStartedAt ?? 0)) >= timeoutMs;
+        setError({
+          title: wasTimeout ? 'Tempo limite excedido' : 'Cancelado',
+          description: wasTimeout
+            ? 'O agente passou de 3 minutos sem responder.'
+            : 'Você cancelou a execução.',
+          hint: wasTimeout
+            ? 'Tente novamente. Se persistir, troque pra outro provider no select ou divida o pedido em partes menores.'
+            : 'Tente reformular ou mande um pedido mais simples.',
+        });
+      } else {
+        setError(parseAgentError(err));
+      }
     } finally {
+      window.clearTimeout(timeoutId);
+      abortRef.current = null;
       setRunning(false);
+      setRunStartedAt(null);
+      setRetryStatus(null);
       inputRef.current?.focus();
     }
   }
@@ -396,7 +449,7 @@ export default function BuyerAgentPage() {
                 disabled={running}
                 className="h-9 rounded-md border border-slate-300 bg-white px-2 text-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
               >
-                {getAvailableProviders().map((p) => (
+                {PROVIDERS.map((p) => (
                   <option key={p.id} value={p.id}>
                     {p.name} · {p.modelLabel}
                   </option>
@@ -410,12 +463,6 @@ export default function BuyerAgentPage() {
           <div className="mx-auto mt-4 w-full max-w-3xl px-4 md:px-8">
             <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
               <strong>{provider.name}</strong> indisponível: {providerStatus.message}
-              {provider.id === 'ollama' && (
-                <div className="mt-1 text-xs">
-                  Cheque se está rodando com CORS liberado:{' '}
-                  <code>OLLAMA_ORIGINS=* ollama serve</code>
-                </div>
-              )}
             </div>
           </div>
         )}
@@ -467,13 +514,11 @@ export default function BuyerAgentPage() {
                 }
                 if (t.role === 'model' && t.text) {
                   const providerColor =
-                    t.provider?.id === 'ollama'
-                      ? 'text-emerald-600'
-                      : t.provider?.id === 'gemini'
-                        ? 'text-brand-600'
-                        : t.provider?.id === 'groq'
-                          ? 'text-cyan-600'
-                          : 'text-slate-400';
+                    t.provider?.id === 'gemini'
+                      ? 'text-brand-600'
+                      : t.provider?.id === 'groq'
+                        ? 'text-cyan-600'
+                        : 'text-slate-400';
                   return (
                     <div key={idx} className="flex flex-col items-start">
                       <div className="max-w-[85%] rounded-lg bg-white border border-slate-200 px-4 py-3 text-sm text-slate-800 shadow-sm">
@@ -490,26 +535,34 @@ export default function BuyerAgentPage() {
                 }
                 if (t.toolCall) {
                   const borderColor =
-                    t.provider?.id === 'ollama'
-                      ? 'border-emerald-300'
-                      : t.provider?.id === 'gemini'
-                        ? 'border-brand-300'
-                        : t.provider?.id === 'groq'
-                          ? 'border-cyan-300'
-                          : 'border-slate-300';
+                    t.provider?.id === 'gemini'
+                      ? 'border-brand-300'
+                      : t.provider?.id === 'groq'
+                        ? 'border-cyan-300'
+                        : 'border-slate-300';
+                  const label = describeToolCall(t.toolCall.name, t.toolCall.args);
+                  const hasArgs = Object.keys(t.toolCall.args ?? {}).length > 0;
                   return (
                     <div key={idx} className="flex justify-start">
                       <div
                         className={cn(
-                          'max-w-[85%] rounded-md border border-dashed bg-white px-3 py-1.5 text-xs',
+                          'flex max-w-[85%] items-center gap-2 rounded-md border border-dashed bg-white px-3 py-1.5 text-xs',
                           borderColor
                         )}
                       >
-                        <span className="font-mono text-slate-500">→ {t.toolCall.name}</span>
-                        {Object.keys(t.toolCall.args ?? {}).length > 0 && (
-                          <span className="ml-2 font-mono text-slate-400">
-                            {JSON.stringify(t.toolCall.args)}
-                          </span>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-3.5 w-3.5 shrink-0 text-slate-400">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.324.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 0 1 1.37.49l1.296 2.247a1.125 1.125 0 0 1-.26 1.431l-1.003.827c-.293.241-.438.613-.43.992a7.723 7.723 0 0 1 0 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.955.26 1.43l-1.298 2.247a1.125 1.125 0 0 1-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.47 6.47 0 0 1-.22.128c-.331.183-.581.495-.644.869l-.213 1.281c-.09.543-.56.94-1.11.94h-2.594c-.55 0-1.019-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 0 1-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 0 1-1.369-.49l-1.297-2.247a1.125 1.125 0 0 1 .26-1.431l1.004-.827c.292-.24.437-.613.43-.991a6.932 6.932 0 0 1 0-.255c.007-.38-.138-.751-.43-.992l-1.004-.827a1.125 1.125 0 0 1-.26-1.43l1.297-2.247a1.125 1.125 0 0 1 1.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.086.22-.128.332-.183.582-.495.644-.869l.214-1.28Z" />
+                        </svg>
+                        <span className="text-slate-700">{label}</span>
+                        {hasArgs && (
+                          <details className="ml-auto">
+                            <summary className="cursor-pointer text-[10px] text-slate-400 hover:text-slate-600">
+                              técnico
+                            </summary>
+                            <pre className="mt-1 max-w-[400px] overflow-x-auto whitespace-pre-wrap break-all rounded bg-slate-50 p-2 text-[10px] font-mono text-slate-500">
+                              {t.toolCall.name}({JSON.stringify(t.toolCall.args, null, 2)})
+                            </pre>
+                          </details>
                         )}
                       </div>
                     </div>
@@ -533,12 +586,45 @@ export default function BuyerAgentPage() {
 
               {running && (
                 <div className="flex justify-start">
-                  <div className="rounded-lg bg-white border border-slate-200 px-4 py-3 shadow-sm">
-                    <span className="inline-flex items-center gap-1">
-                      <span className="h-2 w-2 animate-pulse rounded-full bg-slate-400" />
-                      <span className="h-2 w-2 animate-pulse rounded-full bg-slate-400 [animation-delay:120ms]" />
-                      <span className="h-2 w-2 animate-pulse rounded-full bg-slate-400 [animation-delay:240ms]" />
-                    </span>
+                  <div className="flex max-w-[85%] flex-col gap-1 rounded-lg bg-white border border-slate-200 px-4 py-3 shadow-sm">
+                    <div className="flex items-center gap-3">
+                      <span className="inline-flex items-center gap-1">
+                        <span className="h-2 w-2 animate-pulse rounded-full bg-slate-400" />
+                        <span className="h-2 w-2 animate-pulse rounded-full bg-slate-400 [animation-delay:120ms]" />
+                        <span className="h-2 w-2 animate-pulse rounded-full bg-slate-400 [animation-delay:240ms]" />
+                      </span>
+                      <span className="text-sm text-slate-700">
+                        {(() => {
+                          // Status derivado do último turn no histórico
+                          const last = history[history.length - 1];
+                          if (last?.toolCall) {
+                            return describeToolCall(last.toolCall.name, last.toolCall.args) + '…';
+                          }
+                          if (last?.toolResponse) return 'Processando resposta…';
+                          return 'Pensando…';
+                        })()}
+                      </span>
+                      <span className="text-xs text-slate-400">{elapsedSec}s</span>
+                      <button
+                        type="button"
+                        onClick={cancelRun}
+                        className="ml-auto text-xs text-red-600 hover:underline"
+                      >
+                        cancelar
+                      </button>
+                    </div>
+                    {retryStatus && (
+                      <div className="rounded bg-amber-50 px-2 py-1 text-xs text-amber-800">
+                        {retryStatus.reason === 'rate_limit'
+                          ? `Limite atingido. Tentando de novo em ${Math.ceil(retryStatus.delayMs / 1000)}s…`
+                          : retryStatus.reason === 'overloaded'
+                            ? `Modelo sobrecarregado. Tentando de novo em ${Math.ceil(retryStatus.delayMs / 1000)}s…`
+                            : `Falha de rede. Tentando de novo em ${Math.ceil(retryStatus.delayMs / 1000)}s…`}{' '}
+                        <span className="text-amber-600">
+                          (tentativa {retryStatus.attempt}/{retryStatus.total})
+                        </span>
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
@@ -590,21 +676,30 @@ export default function BuyerAgentPage() {
               }}
               className="flex items-end gap-2"
             >
-              <textarea
-                ref={inputRef}
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.shiftKey) {
-                    e.preventDefault();
-                    send();
-                  }
-                }}
-                placeholder="Diga o que você quer fazer… (Enter envia, Shift+Enter quebra linha)"
-                rows={2}
-                disabled={running || !provider.isConfigured()}
-                className="flex-1 resize-none rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500 disabled:bg-slate-50"
-              />
+              <div className="flex-1 rounded-md border border-slate-300 bg-white focus-within:border-brand-500 focus-within:ring-1 focus-within:ring-brand-500">
+                <textarea
+                  ref={inputRef}
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      send();
+                    }
+                  }}
+                  placeholder="Diga o que você quer fazer… (Enter envia, Shift+Enter quebra linha)"
+                  rows={2}
+                  disabled={running || !provider.isConfigured()}
+                  className="block w-full resize-none rounded-md bg-transparent px-3 py-2 text-sm leading-6 outline-none disabled:bg-slate-50"
+                  style={{ minHeight: '52px', maxHeight: '320px' }}
+                />
+                {input.length > 200 && (
+                  <div className="flex items-center justify-end border-t border-slate-100 px-3 py-1 text-[11px] text-slate-400">
+                    {input.length} caracteres · {input.split('\n').length} linha
+                    {input.split('\n').length !== 1 ? 's' : ''}
+                  </div>
+                )}
+              </div>
               <Button type="submit" disabled={!input.trim() || running || !provider.isConfigured()}>
                 Enviar
               </Button>

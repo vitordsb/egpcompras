@@ -894,6 +894,37 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
         componentId = found.id;
       }
       if (!componentId) throw new Error('Forneça component_id ou component_name.');
+
+      // Verifica se já existe esse componente na BOM. Se sim, atualiza
+      // qty/valor em vez de duplicar (a constraint UNIQUE em
+      // (product_id, component_id) bloqueia duplicatas).
+      const { data: existing, error: lookupErr } = await supabase
+        .from('bom_items')
+        .select('id, quantity, target_price_brl')
+        .eq('product_id', productId)
+        .eq('component_id', componentId)
+        .maybeSingle();
+      if (lookupErr) throw new Error(lookupErr.message);
+
+      if (existing) {
+        const updatePayload: any = { quantity: qty };
+        if (args.value_unit !== undefined) {
+          updatePayload.target_price_brl = Number(args.value_unit);
+        }
+        const { error: upErr } = await supabase
+          .from('bom_items')
+          .update(updatePayload)
+          .eq('id', (existing as any).id);
+        if (upErr) throw new Error(upErr.message);
+        return {
+          action: 'updated_existing',
+          bom_item_id: (existing as any).id,
+          note: `Esse componente já estava na BOM — atualizei qty pra ${qty}${
+            args.value_unit !== undefined ? ` e valor pra ${args.value_unit}` : ''
+          }.`,
+        };
+      }
+
       const payload: any = {
         product_id: productId,
         component_id: componentId,
@@ -906,7 +937,7 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
         .select('id, component_id, quantity, target_price_brl')
         .single();
       if (error) throw new Error(error.message);
-      return { created: data };
+      return { action: 'created', bom_item: data };
     }
 
     case 'update_bom_item': {

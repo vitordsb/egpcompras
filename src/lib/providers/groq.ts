@@ -114,9 +114,6 @@ export const groqProvider: AgentProvider = {
   id: 'groq',
   name: 'Groq (cloud)',
   modelLabel: GROQ_MODEL,
-  // Modelos abertos via Groq são bem capazes (Llama 70B), mas ainda compensa
-  // verbose pra function calling consistente em cenários complexos.
-  verboseInstructions: false,
 
   isConfigured() {
     return Boolean(apiKey && apiKey.trim());
