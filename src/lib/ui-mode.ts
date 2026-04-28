@@ -2,9 +2,11 @@
 // - 'manual' = sidebar lateral + páginas administrativas (default)
 // - 'ai'     = chat com a IA em tela inteira, sem sidebar
 //
-// O modo é salvo em localStorage por navegador. Toggle é feito pelo header.
+// O modo é DERIVADO DA URL (fonte da verdade) — `/ia*` é Modo IA, qualquer
+// outra rota admin é Modo Manual. localStorage só armazena a preferência
+// pra decidir o redirect da home na próxima visita.
 
-import { useEffect, useState } from 'react';
+import { useLocation } from 'react-router-dom';
 
 export type UIMode = 'manual' | 'ai';
 
@@ -37,20 +39,12 @@ export function writeLastAdminRoute(path: string): void {
 }
 
 /**
- * Hook que reage a mudanças no modo (incluindo de outras abas via storage event).
+ * Modo atual derivado da URL — sempre consistente com o que está sendo
+ * renderizado. `/ia` ou `/ia/...` = 'ai'; resto = 'manual'.
  */
 export function useUIMode(): UIMode {
-  const [mode, setMode] = useState<UIMode>(() => readUIMode());
-
-  useEffect(() => {
-    function onStorage(e: StorageEvent) {
-      if (e.key === STORAGE_KEY && (e.newValue === 'ai' || e.newValue === 'manual')) {
-        setMode(e.newValue);
-      }
-    }
-    window.addEventListener('storage', onStorage);
-    return () => window.removeEventListener('storage', onStorage);
-  }, []);
-
-  return mode;
+  const location = useLocation();
+  return location.pathname === '/ia' || location.pathname.startsWith('/ia/')
+    ? 'ai'
+    : 'manual';
 }
