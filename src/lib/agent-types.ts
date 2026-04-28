@@ -14,8 +14,10 @@ export interface ChatTurn {
   toolResponse?: { name: string; data: unknown; error?: string };
   /** Marcado em turns do model — qual provider gerou aquela resposta */
   provider?: ChatTurnProvider;
-  /** Arquivo inline (PDF, etc.) anexado pelo usuário — só Gemini suporta */
+  /** Arquivo inline único (legado — mantido para compat com histórico gravado) */
   inlineData?: { mimeType: string; data: string; fileName?: string };
+  /** Lista de arquivos inline — usado quando múltiplos PDFs são enviados de uma vez */
+  inlineDataList?: Array<{ mimeType: string; data: string; fileName?: string }>;
   /** ISO timestamp de quando o turn foi gerado (apenas turns novos — histórico carregado não terá) */
   timestamp?: string;
 }

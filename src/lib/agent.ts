@@ -253,7 +253,14 @@ O usuário pode enviar:
 - Chama add_shipment_observation com o texto_correcao como conteúdo
 - Confirma: "Correção registrada no pedido NF 5556."
 
-**PASSO 1 — Para NF-e e Venda PDF/XML — sempre pergunte o contexto antes:**
+**Importação em lote (múltiplos PDFs/XMLs de uma vez):**
+Quando o usuário enviar vários documentos juntos:
+1. Leia todos e liste um resumo: "Recebi 3 pedidos: Venda 5810 (SYVAL, R$1.872), Venda 5811 (TELEVES, R$4.320), Venda 5812 (INTELBRAS, R$980)."
+2. Faça a pergunta de contexto UMA vez para todos: "Esses pedidos são apenas controle de saída ou algum vai para financeira?"
+3. Conforme a resposta, processe cada um. Se datas previstas estiverem nos documentos, use-as. Para os que não tiverem, pergunte agrupado: "Venda 5810 e 5811 não têm data de saída — qual é a data prevista para cada um?"
+4. Crie todos com create_shipment em sequência e confirme no final: "3 pedidos criados com sucesso."
+
+**PASSO 1 — Para NF-e e Venda PDF/XML individual — sempre pergunte o contexto antes:**
 "Esse pedido é apenas **controle de saída**, ou também precisa **anotar troca com financeira**?"
 Aguarde a resposta antes de continuar. Não crie nada sem essa confirmação.
 
@@ -384,8 +391,10 @@ export interface RunOptions {
   provider: AgentProvider;
   history: ChatTurn[];
   userMessage: string;
-  /** Arquivo inline (PDF) a ser enviado junto com a mensagem — só Gemini suporta */
+  /** PDF único (legado) */
   userInlineData?: { mimeType: string; data: string; fileName?: string };
+  /** Múltiplos PDFs enviados de uma vez */
+  userInlineDataList?: Array<{ mimeType: string; data: string; fileName?: string }>;
   onTurn?: (turn: ChatTurn) => void;
   /** Sinal pra cancelar a execução (entre steps). */
   signal?: AbortSignal;
@@ -400,6 +409,7 @@ export async function runAgent({
   history,
   userMessage,
   userInlineData,
+  userInlineDataList,
   onTurn,
   signal,
   onRetry,
@@ -414,7 +424,8 @@ export async function runAgent({
   const newTurns: ChatTurn[] = [];
 
   const userTurn: ChatTurn = { role: 'user', text: userMessage };
-  if (userInlineData) userTurn.inlineData = userInlineData;
+  if (userInlineDataList?.length) userTurn.inlineDataList = userInlineDataList;
+  else if (userInlineData) userTurn.inlineData = userInlineData;
   workingHistory.push(userTurn);
   newTurns.push(userTurn);
   onTurn?.(userTurn);

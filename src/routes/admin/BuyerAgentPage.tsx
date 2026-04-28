@@ -54,8 +54,8 @@ export default function BuyerAgentPage() {
   const [currentChatId, setCurrentChatId] = useState<string | null>(null);
   const [history, setHistory] = useState<ChatTurn[]>([]);
   const [input, setInput] = useState('');
-  const [pendingFile, setPendingFile] = useState<{ name: string; mimeType: string; data: string } | null>(null);
-  const [pendingParsed, setPendingParsed] = useState<ParsedAttachment | null>(null);
+  const [pendingFiles, setPendingFiles] = useState<Array<{ name: string; mimeType: string; data: string }>>([]);
+  const [pendingParseds, setPendingParseds] = useState<ParsedAttachment[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<FriendlyError | null>(null);
@@ -237,8 +237,7 @@ export default function BuyerAgentPage() {
     const name = file.name.toLowerCase();
     if (file.type === 'application/pdf' || name.endsWith('.pdf')) {
       const data = await readFileAsBase64(file);
-      setPendingFile({ name: file.name, mimeType: 'application/pdf', data });
-      setPendingParsed(null);
+      setPendingFiles((prev) => [...prev, { name: file.name, mimeType: 'application/pdf', data }]);
     } else if (name.endsWith('.xml') || file.type === 'text/xml' || file.type === 'application/xml') {
       const content = await file.text();
       const parsed = processXmlFile(file.name, content);
@@ -246,8 +245,7 @@ export default function BuyerAgentPage() {
         setError({ title: 'XML não reconhecido', description: 'O arquivo não é uma NF-e nem CC-e válida.' });
         return;
       }
-      setPendingParsed(parsed);
-      setPendingFile(null);
+      setPendingParseds((prev) => [...prev, parsed]);
     } else if (name.endsWith('.zip') || file.type === 'application/zip' || file.type === 'application/x-zip-compressed') {
       try {
         const parsed = await processZipFile(file);
@@ -255,8 +253,7 @@ export default function BuyerAgentPage() {
           setError({ title: 'ZIP sem conteúdo reconhecido', description: 'O ZIP não contém NF-e nem CC-e válidas.' });
           return;
         }
-        setPendingParsed(parsed);
-        setPendingFile(null);
+        setPendingParseds((prev) => [...prev, parsed]);
       } catch {
         setError({ title: 'Falha ao ler ZIP', description: 'Não foi possível abrir o arquivo ZIP.' });
         return;
@@ -266,6 +263,10 @@ export default function BuyerAgentPage() {
       return;
     }
     inputRef.current?.focus();
+  }
+
+  async function attachFiles(files: FileList | File[]) {
+    for (const file of Array.from(files)) await attachFile(file);
   }
 
   function handleDragOver(e: React.DragEvent) {
@@ -280,13 +281,14 @@ export default function BuyerAgentPage() {
   async function handleDrop(e: React.DragEvent) {
     e.preventDefault();
     setIsDragging(false);
-    const file = e.dataTransfer.files[0];
-    if (file) await attachFile(file);
+    if (e.dataTransfer.files.length > 0) await attachFiles(e.dataTransfer.files);
   }
 
   async function send(text?: string) {
     const message = (text ?? input).trim();
-    if ((!message && !pendingFile && !pendingParsed) || running) return;
+    const hasPdfs = pendingFiles.length > 0;
+    const hasParseds = pendingParseds.length > 0;
+    if ((!message && !hasPdfs && !hasParseds) || running) return;
     if (!provider.isConfigured()) {
       setError({
         title: `Provider ${provider.name} não está configurado`,
@@ -294,14 +296,20 @@ export default function BuyerAgentPage() {
       });
       return;
     }
-    const parsedToSend = pendingParsed;
-    const fileToSend = pendingFile;
-    const finalMessage = parsedToSend
-      ? (message ? `${message}\n\n${parsedToSend.text}` : parsedToSend.text)
-      : (message || (fileToSend ? `Importar pedido: ${fileToSend.name}` : ''));
+    const filesToSend = [...pendingFiles];
+    const parsedsToSend = [...pendingParseds];
+
+    // Monta texto da mensagem: texto do usuário + todos os XMLs parseados
+    const parsedText = parsedsToSend.map((p) => p.text).join('\n\n');
+    const finalMessage = parsedText
+      ? (message ? `${message}\n\n${parsedText}` : parsedText)
+      : (message || (hasPdfs
+          ? `Importar ${filesToSend.length} pedido${filesToSend.length > 1 ? 's' : ''}: ${filesToSend.map((f) => f.name).join(', ')}`
+          : ''));
+
     setInput('');
-    setPendingFile(null);
-    setPendingParsed(null);
+    setPendingFiles([]);
+    setPendingParseds([]);
     setError(null);
     setRunning(true);
     setRunStartedAt(Date.now());
@@ -318,7 +326,9 @@ export default function BuyerAgentPage() {
     try {
       let chatId = currentChatId;
       if (!chatId) {
-        const titleText = parsedToSend ? (message || parsedToSend.label) : finalMessage;
+        const titleText = parsedsToSend.length > 0
+          ? (message || parsedsToSend.map((p) => p.label).join(', '))
+          : finalMessage;
         const title = titleText.length > 80 ? titleText.slice(0, 80) + '…' : titleText;
         const { data, error: createErr } = await supabase
           .from('ai_chats')
@@ -338,7 +348,9 @@ export default function BuyerAgentPage() {
         provider,
         history,
         userMessage: finalMessage,
-        userInlineData: fileToSend ? { mimeType: fileToSend.mimeType, data: fileToSend.data, fileName: fileToSend.name } : undefined,
+        userInlineDataList: filesToSend.length > 0
+          ? filesToSend.map((f) => ({ mimeType: f.mimeType, data: f.data, fileName: f.name }))
+          : undefined,
         signal: controller.signal,
         onRetry: (s) => setRetryStatus(s),
         onRetryClear: () => setRetryStatus(null),
@@ -354,9 +366,11 @@ export default function BuyerAgentPage() {
               position: pos,
               // inlineData (PDF base64) não é armazenado — pesa muito e não é
               // necessário recarregar. Fica apenas o nome do arquivo no texto.
-              payload: t.inlineData
-                ? { ...t, inlineData: { mimeType: t.inlineData.mimeType, fileName: t.inlineData.fileName } }
-                : t as unknown as Record<string, unknown>,
+              payload: t.inlineDataList
+                ? { ...t, inlineDataList: t.inlineDataList.map((d) => ({ mimeType: d.mimeType, fileName: d.fileName })) }
+                : t.inlineData
+                  ? { ...t, inlineData: { mimeType: t.inlineData.mimeType, fileName: t.inlineData.fileName } }
+                  : t as unknown as Record<string, unknown>,
             })
             .then(({ error: insErr }) => {
               if (insErr) console.error('[ai_messages] insert failed:', insErr);
@@ -639,7 +653,21 @@ export default function BuyerAgentPage() {
                       <span className="px-1 text-[11px] font-medium text-slate-400">
                         {userLabel}
                       </span>
-                      {t.inlineData && (
+                      {/* Múltiplos PDFs */}
+                      {t.inlineDataList && t.inlineDataList.length > 0 && (
+                        <div className="flex flex-wrap justify-end gap-1">
+                          {t.inlineDataList.map((d, i) => (
+                            <div key={i} className="flex items-center gap-1.5 rounded-md border border-brand-200 bg-brand-50 px-2.5 py-1 text-xs text-brand-700">
+                              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-3.5 w-3.5 shrink-0">
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" />
+                              </svg>
+                              {d.fileName ?? 'pedido.pdf'}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {/* PDF único (legado) */}
+                      {!t.inlineDataList && t.inlineData && (
                         <div className="flex items-center gap-1.5 rounded-md border border-brand-200 bg-brand-50 px-2.5 py-1 text-xs text-brand-700">
                           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-3.5 w-3.5 shrink-0">
                             <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" />
@@ -815,29 +843,28 @@ export default function BuyerAgentPage() {
 
         <div className="border-t border-slate-200 bg-white px-4 py-3 md:px-8 md:py-4">
           <div className="mx-auto max-w-3xl space-y-2">
-            {/* Badge do arquivo pendente (PDF, XML ou ZIP) */}
-            {(pendingFile || pendingParsed) && (
-              <div className={cn(
-                'flex items-center gap-2 rounded-md border px-3 py-1.5 text-xs',
-                pendingParsed
-                  ? 'border-emerald-200 bg-emerald-50'
-                  : 'border-brand-200 bg-brand-50'
-              )}>
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className={cn('h-4 w-4 shrink-0', pendingParsed ? 'text-emerald-600' : 'text-brand-600')}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" />
-                </svg>
-                <span className={cn('min-w-0 flex-1 truncate font-medium', pendingParsed ? 'text-emerald-700' : 'text-brand-700')}>
-                  {pendingParsed ? `${pendingParsed.label} — ${pendingParsed.name}` : pendingFile?.name}
-                </span>
-                {pendingParsed && <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-emerald-600">extraído</span>}
-                <button
-                  type="button"
-                  onClick={() => { setPendingFile(null); setPendingParsed(null); }}
-                  aria-label="Remover arquivo"
-                  className={cn('hover:opacity-70', pendingParsed ? 'text-emerald-400' : 'text-brand-400')}
-                >
-                  ×
-                </button>
+            {/* Fila de arquivos pendentes */}
+            {(pendingFiles.length > 0 || pendingParseds.length > 0) && (
+              <div className="flex flex-wrap gap-1.5">
+                {pendingFiles.map((f, i) => (
+                  <div key={i} className="flex items-center gap-1.5 rounded-md border border-brand-200 bg-brand-50 px-2.5 py-1 text-xs text-brand-700">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-3.5 w-3.5 shrink-0 text-brand-500">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" />
+                    </svg>
+                    <span className="max-w-[180px] truncate font-medium">{f.name}</span>
+                    <button type="button" onClick={() => setPendingFiles((p) => p.filter((_, j) => j !== i))} className="text-brand-400 hover:opacity-70">×</button>
+                  </div>
+                ))}
+                {pendingParseds.map((p, i) => (
+                  <div key={i} className="flex items-center gap-1.5 rounded-md border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs text-emerald-700">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-3.5 w-3.5 shrink-0 text-emerald-500">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" />
+                    </svg>
+                    <span className="max-w-[180px] truncate font-medium">{p.label}</span>
+                    <span className="rounded bg-emerald-100 px-1 text-[10px] font-bold uppercase text-emerald-600">extraído</span>
+                    <button type="button" onClick={() => setPendingParseds((prev) => prev.filter((_, j) => j !== i))} className="text-emerald-400 hover:opacity-70">×</button>
+                  </div>
+                ))}
               </div>
             )}
             <form
@@ -852,10 +879,10 @@ export default function BuyerAgentPage() {
                 ref={fileInputRef}
                 type="file"
                 accept=".pdf,.xml,.zip,application/pdf,text/xml,application/xml,application/zip"
+                multiple
                 className="sr-only"
                 onChange={(e) => {
-                  const f = e.target.files?.[0];
-                  if (f) attachFile(f);
+                  if (e.target.files?.length) attachFiles(e.target.files);
                   e.target.value = '';
                 }}
               />
@@ -867,9 +894,9 @@ export default function BuyerAgentPage() {
                 aria-label="Anexar arquivo"
                 className={cn(
                   'flex h-10 w-10 shrink-0 items-center justify-center rounded-md border transition-colors',
-                  pendingParsed
+                  pendingParseds.length > 0
                     ? 'border-emerald-300 bg-emerald-50 text-emerald-600'
-                    : pendingFile
+                    : pendingFiles.length > 0
                       ? 'border-brand-300 bg-brand-50 text-brand-600'
                       : 'border-slate-300 text-slate-500 hover:border-slate-400 hover:text-slate-700',
                   running && 'cursor-not-allowed opacity-50'
@@ -891,7 +918,7 @@ export default function BuyerAgentPage() {
                       send();
                     }
                   }}
-                  placeholder={(pendingFile || pendingParsed) ? 'Instruções extras (opcional) — Enter envia' : 'Diga o que você quer fazer… (Enter envia, Shift+Enter quebra linha)'}
+                  placeholder={(pendingFiles.length > 0 || pendingParseds.length > 0) ? 'Instruções extras (opcional) — Enter envia' : 'Diga o que você quer fazer… (Enter envia, Shift+Enter quebra linha)'}
                   rows={2}
                   disabled={running || !provider.isConfigured()}
                   className="block w-full resize-none rounded-md bg-transparent px-3 py-2 text-sm leading-6 outline-none disabled:bg-slate-50"
@@ -904,7 +931,7 @@ export default function BuyerAgentPage() {
                   </div>
                 )}
               </div>
-              <Button type="submit" disabled={(!input.trim() && !pendingFile && !pendingParsed) || running || !provider.isConfigured()}>
+              <Button type="submit" disabled={(!input.trim() && pendingFiles.length === 0 && pendingParseds.length === 0) || running || !provider.isConfigured()}>
                 Enviar
               </Button>
             </form>

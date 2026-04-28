@@ -46,11 +46,15 @@ export const geminiProvider: AgentProvider = {
     const ai = getClient();
     const contents: Content[] = [];
     for (const t of history) {
-      if (t.role === 'user' && (t.text || t.inlineData)) {
+      if (t.role === 'user' && (t.text || t.inlineData || t.inlineDataList)) {
         const parts: any[] = [];
-        if (t.inlineData?.data) {
-          // Só inclui o PDF se ainda tiver o base64 (memória desta sessão).
-          // Turns carregados do banco não têm o data — são ignorados.
+        // Múltiplos PDFs (novo fluxo em lote)
+        if (t.inlineDataList) {
+          for (const d of t.inlineDataList) {
+            if (d.data) parts.push({ inlineData: { mimeType: d.mimeType, data: d.data } });
+          }
+        } else if (t.inlineData?.data) {
+          // Legado: PDF único
           parts.push({ inlineData: { mimeType: t.inlineData.mimeType, data: t.inlineData.data } });
         }
         if (t.text) parts.push({ text: t.text });
