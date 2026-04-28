@@ -45,11 +45,19 @@ export const geminiProvider: AgentProvider = {
   async generate({ systemInstruction, tools, history }): Promise<ProviderResponse> {
     const ai = getClient();
     const contents: Content[] = [];
-    for (const t of history) {
+    // Só o ÚLTIMO turn de usuário pode ter inlineData (o arquivo atual).
+    // Turns anteriores com PDF ficam apenas com o texto — reenviar o base64
+    // inteiro a cada mensagem causa timeouts e desperdiça tokens.
+    const lastUserIdx = [...history].map((t, i) => ({ t, i })).reverse()
+      .find(({ t }) => t.role === 'user' && (t.text || t.inlineData))?.i ?? -1;
+
+    for (const [idx, t] of history.entries()) {
       if (t.role === 'user' && (t.text || t.inlineData)) {
         const parts: any[] = [];
-        if (t.inlineData) {
+        if (t.inlineData && idx === lastUserIdx) {
           parts.push({ inlineData: { mimeType: t.inlineData.mimeType, data: t.inlineData.data } });
+        } else if (t.inlineData && idx !== lastUserIdx) {
+          parts.push({ text: `[PDF anexado: ${t.inlineData.fileName ?? 'arquivo.pdf'}]` });
         }
         if (t.text) parts.push({ text: t.text });
         contents.push({ role: 'user', parts });

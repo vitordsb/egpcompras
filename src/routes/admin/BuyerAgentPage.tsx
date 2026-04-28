@@ -339,7 +339,11 @@ export default function BuyerAgentPage() {
             .insert({
               chat_id: chatId,
               position: pos,
-              payload: t as unknown as Record<string, unknown>,
+              // inlineData (PDF base64) não é armazenado — pesa muito e não é
+              // necessário recarregar. Fica apenas o nome do arquivo no texto.
+              payload: t.inlineData
+                ? { ...t, inlineData: { mimeType: t.inlineData.mimeType, fileName: t.inlineData.fileName } }
+                : t as unknown as Record<string, unknown>,
             })
             .then(({ error: insErr }) => {
               if (insErr) console.error('[ai_messages] insert failed:', insErr);
