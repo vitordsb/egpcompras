@@ -73,6 +73,41 @@ export function requireMaster(req, res) {
   return false;
 }
 
+function readBearerToken(req) {
+  const header = req.headers.authorization || '';
+  const match = header.match(/^Bearer\s+(.+)$/i);
+  return match?.[1] || '';
+}
+
+function getMasterEmail() {
+  const explicit = process.env.MASTER_ADMIN_EMAIL || '';
+  if (explicit) return explicit.trim().toLowerCase();
+  const login = process.env.MASTER_LOGIN || '';
+  if (!login) return '';
+  return login.includes('@') ? login.trim().toLowerCase() : `${login.trim().toLowerCase()}@grupoegp.local`;
+}
+
+function isAccessAdminUser(user) {
+  const email = user?.email?.toLowerCase();
+  return Boolean(
+    email &&
+      (email === getMasterEmail() || user?.app_metadata?.access_admin === true)
+  );
+}
+
+export async function requireAccessAdmin(req, res, supabaseAdmin) {
+  if (isValidSessionToken(readCookie(req))) return true;
+
+  const token = readBearerToken(req);
+  if (token && supabaseAdmin) {
+    const { data, error } = await supabaseAdmin.auth.getUser(token);
+    if (!error && isAccessAdminUser(data?.user)) return true;
+  }
+
+  res.status(401).json({ error: 'Não autorizado.' });
+  return false;
+}
+
 export function credentialsAreValid(login, password) {
   const expectedLogin = process.env.MASTER_LOGIN || '';
   const expectedPassword = process.env.MASTER_PASSWORD || '';

@@ -23,6 +23,8 @@ import { InternalAuthProvider } from '@/lib/auth-context';
 
 const INTERNAL_SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 const INTERNAL_SESSION_EXPIRES_AT_KEY = 'appCompras.internalSessionExpiresAt';
+const MASTER_ADMIN_EMAIL =
+  import.meta.env.VITE_MASTER_ADMIN_EMAIL ?? 'vitinho123@grupoegp.local';
 
 function setInternalSessionDeadline() {
   window.localStorage.setItem(
@@ -49,6 +51,15 @@ function withTimeout<T>(promise: Promise<T>, fallback: T, timeoutMs = 5000): Pro
       .catch(() => resolve(fallback))
       .finally(() => window.clearTimeout(timer));
   });
+}
+
+function isAccessAdminSession(session: Session | null): boolean {
+  const email = session?.user.email?.toLowerCase();
+  return Boolean(
+    email &&
+      (email === MASTER_ADMIN_EMAIL.toLowerCase() ||
+        session?.user.app_metadata?.access_admin === true)
+  );
 }
 
 /**
@@ -193,9 +204,10 @@ function AuthenticatedApp() {
   // Home redireciona pro último modo escolhido (default Manual → última rota admin)
   const initialMode = readUIMode();
   const homeTarget = initialMode === 'ai' ? '/ia' : readLastAdminRoute();
+  const isAccessAdmin = masterAuthenticated || isAccessAdminSession(session);
 
   return (
-    <InternalAuthProvider isMaster={masterAuthenticated}>
+    <InternalAuthProvider isMaster={isAccessAdmin}>
     <Routes>
       <Route path="/" element={<Navigate to={homeTarget} replace />} />
       <Route path="/login" element={<Navigate to={homeTarget} replace />} />
@@ -224,7 +236,7 @@ function AuthenticatedApp() {
         <Route path="procedimentos" element={<ProceduresPage />} />
         <Route
           path="acessos"
-          element={masterAuthenticated ? <AccessUsersPage /> : <Navigate to="/admin/produtos" replace />}
+          element={isAccessAdmin ? <AccessUsersPage /> : <Navigate to="/admin/produtos" replace />}
         />
       </Route>
 

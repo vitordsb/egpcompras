@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { Button } from '@/components/ui/Button';
 import { Card, CardBody, CardHeader, CardTitle } from '@/components/ui/Card';
 import { Input, Label } from '@/components/ui/Input';
+import { supabase } from '@/lib/supabase';
 
 interface AccessUser {
   id: string;
@@ -14,6 +15,12 @@ async function readJson(res: Response) {
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error ?? 'Falha na operação.');
   return data;
+}
+
+async function authHeaders(): Promise<Record<string, string>> {
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token;
+  return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
 export default function AccessUsersPage() {
@@ -31,7 +38,7 @@ export default function AccessUsersPage() {
     setLoading(true);
     setError(null);
     try {
-      const data = await readJson(await fetch('/api/master-users'));
+      const data = await readJson(await fetch('/api/master-users', { headers: await authHeaders() }));
       setUsers(data.users ?? []);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -52,7 +59,7 @@ export default function AccessUsersPage() {
       await readJson(
         await fetch('/api/master-users', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { ...(await authHeaders()), 'Content-Type': 'application/json' },
           body: JSON.stringify({ email, password }),
         })
       );
@@ -75,7 +82,7 @@ export default function AccessUsersPage() {
       await readJson(
         await fetch('/api/master-users', {
           method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { ...(await authHeaders()), 'Content-Type': 'application/json' },
           body: JSON.stringify({ user_id: resetUser.id, password: resetPassword }),
         })
       );
@@ -94,7 +101,12 @@ export default function AccessUsersPage() {
     setDeletingId(user.id);
     setError(null);
     try {
-      await readJson(await fetch(`/api/master-users?id=${encodeURIComponent(user.id)}`, { method: 'DELETE' }));
+      await readJson(
+        await fetch(`/api/master-users?id=${encodeURIComponent(user.id)}`, {
+          method: 'DELETE',
+          headers: await authHeaders(),
+        })
+      );
       await loadUsers();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));

@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
-import { requireMaster } from './_master-auth.js';
+import { requireAccessAdmin } from './_master-auth.js';
 
 function getAdminClient() {
   const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
@@ -25,14 +25,14 @@ function publicUser(user) {
 }
 
 export default async function handler(req, res) {
-  if (!requireMaster(req, res)) return;
-
   let supabase;
   try {
     supabase = getAdminClient();
   } catch (err) {
     return res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
   }
+
+  if (!(await requireAccessAdmin(req, res, supabase))) return;
 
   if (req.method === 'GET') {
     const { data, error } = await supabase.auth.admin.listUsers({ page: 1, perPage: 1000 });
