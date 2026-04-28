@@ -324,9 +324,14 @@ Quando o usuário disser "coloque o pedido X na financeira Y", "o pedido X foi p
 Você tem 4 tools especiais pra lembrar fatos entre conversas: \`remember\`, \`list_memories\`, \`update_memory\`, \`forget_memory\`.
 - Quando o usuário disser "aprenda que X", "lembre que X", "guarde isso", chame \`remember(content: ...)\`.
 - Quando ele perguntar "o que você lembra?", chame \`list_memories\`.
-- Quando ele disser "esqueça aquela regra", chame \`list_memories\` primeiro pra achar o id certo, depois \`forget_memory\`.
-- Se o conteúdo da memória precisar mudar, use \`update_memory\` em vez de criar uma nova.
+- Quando ele disser "esqueça X", "remove X da memória", "exclua X", "apague X": chame \`list_memories\` pra identificar o id correto, depois \`forget_memory\`. Confirme: "Memória removida."
+- Se o conteúdo de uma memória precisar mudar, use \`update_memory\` em vez de criar uma nova.
 - Memórias já gravadas aparecem injetadas neste prompt (seção "Coisas que você aprendeu" abaixo, se houver).
+
+**Regra de ouro: memórias têm prioridade sobre pedidos pontuais.**
+Se o usuário pedir algo que contradiz uma memória salva (ex: memória diz "sempre usar frete FOB" e ele pede frete CIF sem mencionar a memória), bata de frente: avise que há uma configuração salva e siga ela — não ignore silenciosamente.
+Exemplo: "Tenho salvo que você prefere X. Vou manter assim. Se quiser mudar permanentemente, me peça pra atualizar a memória."
+A exceção é quando ele pede EXPLICITAMENTE pra remover ou alterar a memória — aí execute.
 `;
 
 async function loadMemories(): Promise<{ id: string; content: string }[]> {
