@@ -28,6 +28,10 @@ interface ChatSummary {
   updated_at: string;
 }
 
+function formatMsgTime(iso: string): string {
+  return new Date(iso).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+}
+
 function formatRelativeDate(iso: string): string {
   const d = new Date(iso);
   const now = new Date();
@@ -339,7 +343,9 @@ export default function BuyerAgentPage() {
         onRetry: (s) => setRetryStatus(s),
         onRetryClear: () => setRetryStatus(null),
         onTurn: (t) => {
-          setHistory((prev) => [...prev, t]);
+          const ts = new Date().toISOString();
+          const turn = { ...t, timestamp: ts };
+          setHistory((prev) => [...prev, turn]);
           const pos = nextPosition++;
           supabase
             .from('ai_messages')
@@ -622,6 +628,9 @@ export default function BuyerAgentPage() {
                             {dataPart}
                           </pre>
                         </details>
+                        {t.timestamp && (
+                          <span className="px-1 text-[10px] text-slate-400">{formatMsgTime(t.timestamp)}</span>
+                        )}
                       </div>
                     );
                   }
@@ -643,6 +652,9 @@ export default function BuyerAgentPage() {
                           {t.text}
                         </div>
                       )}
+                      {t.timestamp && (
+                        <span className="px-1 text-[10px] text-slate-400">{formatMsgTime(t.timestamp)}</span>
+                      )}
                     </div>
                   );
                 }
@@ -653,12 +665,17 @@ export default function BuyerAgentPage() {
                       <div className="max-w-[85%] rounded-lg bg-white border border-slate-200 px-4 py-3 text-sm text-slate-800 shadow-sm">
                         <MarkdownText text={t.text} />
                       </div>
-                      {t.provider && (
-                        <div className={cn('mt-1 px-1 text-[11px]', providerColor)}>
-                          via <strong>{t.provider.name}</strong>
-                          <span className="text-slate-400"> · {t.provider.model}</span>
-                        </div>
-                      )}
+                      <div className="mt-1 flex items-center gap-2 px-1">
+                        {t.provider && (
+                          <span className={cn('text-[11px]', providerColor)}>
+                            via <strong>{t.provider.name}</strong>
+                            <span className="text-slate-400"> · {t.provider.model}</span>
+                          </span>
+                        )}
+                        {t.timestamp && (
+                          <span className="text-[10px] text-slate-400">{formatMsgTime(t.timestamp)}</span>
+                        )}
+                      </div>
                     </div>
                   );
                 }

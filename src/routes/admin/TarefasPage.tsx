@@ -117,7 +117,16 @@ export default function TarefasPage() {
                       <p className="mt-1 text-[11px] text-slate-400">
                         Última execução: {fmtDate(task.last_run_at)}
                         {task.last_result && (
-                          <span className="ml-2 text-slate-500">— {task.last_result.slice(0, 80)}{task.last_result.length > 80 ? '…' : ''}</span>
+                          task.last_result.length > 80
+                            ? (
+                              <details className="mt-0.5 inline">
+                                <summary className="ml-2 cursor-pointer text-slate-500 hover:text-slate-700">
+                                  — {task.last_result.slice(0, 80)}… <span className="underline">ver mais</span>
+                                </summary>
+                                <span className="ml-2 text-slate-600 whitespace-pre-wrap">{task.last_result}</span>
+                              </details>
+                            )
+                            : <span className="ml-2 text-slate-500">— {task.last_result}</span>
                         )}
                       </p>
                     )}
@@ -180,8 +189,19 @@ export default function TarefasPage() {
                           {run.status === 'ok' ? '✓ OK' : run.status === 'error' ? '✗ Erro' : 'Rodando…'}
                         </span>
                       </td>
-                      <td className="px-5 py-2 text-xs text-slate-500 max-w-xs truncate">
-                        {run.result ? run.result.slice(0, 100) : '—'}
+                      <td className="px-5 py-2 text-xs text-slate-500 max-w-xs">
+                        {run.result
+                          ? run.result.length > 100
+                            ? (
+                              <details>
+                                <summary className="cursor-pointer truncate text-slate-500 hover:text-slate-700">
+                                  {run.result.slice(0, 100)}… <span className="underline">ver mais</span>
+                                </summary>
+                                <span className="whitespace-pre-wrap break-words text-slate-600">{run.result}</span>
+                              </details>
+                            )
+                            : run.result
+                          : '—'}
                       </td>
                     </tr>
                   ))}

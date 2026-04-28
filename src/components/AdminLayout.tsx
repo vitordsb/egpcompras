@@ -352,6 +352,7 @@ export default function AdminLayout() {
   const [configOpen, setConfigOpen] = useState(false);
   const [quickChatOpen, setQuickChatOpen] = useState(false);
   const configRef = useRef<HTMLDivElement>(null);
+  const navRef = useRef<HTMLElement>(null);
 
   // Título dinâmico da aba por rota
   useEffect(() => {
@@ -384,10 +385,11 @@ export default function AdminLayout() {
     writeLastAdminRoute(location.pathname);
   }, [location.pathname]);
 
-  // Fecha drawer mobile ao mudar de rota
+  // Fecha drawer mobile e reseta scroll da nav ao mudar de rota
   useEffect(() => {
     setMobileOpen(false);
     setConfigOpen(false);
+    if (navRef.current) navRef.current.scrollTop = 0;
   }, [location.pathname]);
 
   // Atalhos globais:
@@ -483,7 +485,7 @@ export default function AdminLayout() {
           </button>
         </div>
 
-        <nav className="flex-1 space-y-1 overflow-y-auto p-3">
+        <nav ref={navRef} className="flex-1 space-y-1 overflow-y-auto p-3">
           {mainLinks.map((l) =>
             l.children ? (
               <NavGroup key={l.label} item={l} />

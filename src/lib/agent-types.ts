@@ -16,4 +16,6 @@ export interface ChatTurn {
   provider?: ChatTurnProvider;
   /** Arquivo inline (PDF, etc.) anexado pelo usuário — só Gemini suporta */
   inlineData?: { mimeType: string; data: string; fileName?: string };
+  /** ISO timestamp de quando o turn foi gerado (apenas turns novos — histórico carregado não terá) */
+  timestamp?: string;
 }

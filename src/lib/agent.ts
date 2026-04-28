@@ -263,6 +263,7 @@ Aguarde a resposta antes de continuar. Não crie nada sem essa confirmação.
 - Se PDF de Venda/NF-e: extraia os campos. Se XML: os campos já estão disponíveis.
 - Se data_prevista não estiver no documento, pergunte antes de criar
 - Chame create_shipment com todos os campos (incluindo chave_acesso se NF-e)
+- Nos itens: mapeie codigo→item_code, descricao→item_name, quantidade→quantity, valor_unitario→unit_price
 - Confirme: "Pedido NF 5556 — TELEVES criado. 3 itens, R$ 4.320,23, saída X."
 
 **Financeira (+ saída):**
@@ -270,7 +271,7 @@ Aguarde a resposta antes de continuar. Não crie nada sem essa confirmação.
 - Pergunte: "Qual financeira recebeu esse título?" — busque com find_financeira_by_name
 - Se não encontrar, pergunte se quer cadastrar e use create_financeira
 - Se data_prevista não estiver, pergunte
-- Chame create_shipment com todos os campos
+- Chame create_shipment com todos os campos; nos itens mapeie valor_unitario→unit_price
 - Para NF-e com duplicatas: chame register_titulo para CADA duplicata, com o vencimento e valor individuais
   Ex: NF 5556 tem 3 duplicatas → 3 chamadas register_titulo (001 R$1440,08 venc 15/05, 002..., 003...)
 - Confirme: "Pedido criado. 3 títulos registrados na Financeira XYZ: R$1.440,08 (15/05), R$1.440,08 (15/06), R$1.440,07 (15/07)."
