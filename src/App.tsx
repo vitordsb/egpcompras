@@ -41,6 +41,16 @@ function internalSessionExpired() {
   return Number(raw) <= Date.now();
 }
 
+function withTimeout<T>(promise: Promise<T>, fallback: T, timeoutMs = 5000): Promise<T> {
+  return new Promise((resolve) => {
+    const timer = window.setTimeout(() => resolve(fallback), timeoutMs);
+    promise
+      .then((value) => resolve(value))
+      .catch(() => resolve(fallback))
+      .finally(() => window.clearTimeout(timer));
+  });
+}
+
 /**
  * Detecta se a app está rodando como portal público de cotação
  * (subdomínio cotacao.*). Nesse modo, expomos APENAS a rota /:token
@@ -100,10 +110,11 @@ function AuthenticatedApp() {
   useEffect(() => {
     let mounted = true;
     Promise.all([
-      supabase.auth.getSession(),
-      fetch('/api/master-session')
-        .then((res) => (res.ok ? res.json() : null))
-        .catch(() => null),
+      withTimeout(supabase.auth.getSession(), { data: { session: null }, error: null }),
+      withTimeout(
+        fetch('/api/master-session').then((res) => (res.ok ? res.json() : null)),
+        null
+      ),
     ]).then(([{ data }, master]) => {
       if (!mounted) return;
       if ((data.session || master?.authenticated) && internalSessionExpired()) {
@@ -117,6 +128,11 @@ function AuthenticatedApp() {
       }
       setSession(data.session);
       setMasterAuthenticated(Boolean(master?.authenticated && master?.master));
+      setLoading(false);
+    }).catch(() => {
+      if (!mounted) return;
+      setSession(null);
+      setMasterAuthenticated(false);
       setLoading(false);
     });
     const { data: authListener } = supabase.auth.onAuthStateChange((event, nextSession) => {
