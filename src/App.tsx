@@ -17,6 +17,7 @@ import MemoriesPage from '@/routes/admin/MemoriesPage';
 import ProceduresPage from '@/routes/admin/ProceduresPage';
 import AccessUsersPage from '@/routes/admin/AccessUsersPage';
 import TarefasPage from '@/routes/admin/TarefasPage';
+import BriefingPage from '@/routes/admin/BriefingPage';
 import ComNotaPage from '@/routes/admin/financeira/ComNotaPage';
 import SemNotaPage from '@/routes/admin/financeira/SemNotaPage';
 import RelatorioFinanceiraPage from '@/routes/admin/financeira/RelatorioFinanceiraPage';
@@ -224,7 +225,7 @@ function AuthenticatedApp() {
 
       {/* Modo Manual — sidebar + páginas */}
       <Route path="/admin" element={<AdminLayout />}>
-        <Route index element={<Navigate to="produtos" replace />} />
+        <Route index element={<BriefingPage />} />
         <Route path="produtos" element={<ProductsPage />} />
         <Route path="componentes" element={<ComponentsPage />} />
         <Route path="cotacoes" element={<QuotationsPage />} />
