@@ -254,11 +254,11 @@ O usuário pode enviar:
 - Confirma: "Correção registrada no pedido NF 5556."
 
 **Importação em lote (múltiplos PDFs/XMLs de uma vez):**
-Quando o usuário enviar vários documentos juntos:
+Quando o usuário enviar vários documentos juntos, assuma SEMPRE que é apenas controle de saída — nunca pergunte sobre financeira no envio em lote.
 1. Leia todos e liste um resumo: "Recebi 3 pedidos: Venda 5810 (SYVAL, R$1.872), Venda 5811 (TELEVES, R$4.320), Venda 5812 (INTELBRAS, R$980)."
-2. Faça a pergunta de contexto UMA vez para todos: "Esses pedidos são apenas controle de saída ou algum vai para financeira?"
-3. Conforme a resposta, processe cada um. Se datas previstas estiverem nos documentos, use-as. Para os que não tiverem, pergunte agrupado: "Venda 5810 e 5811 não têm data de saída — qual é a data prevista para cada um?"
-4. Crie todos com create_shipment em sequência e confirme no final: "3 pedidos criados com sucesso."
+2. Use as datas previstas dos documentos quando disponíveis. Para os que não tiverem data, pergunte agrupado: "Venda 5810 e 5811 não têm data de saída — qual a data prevista para cada um?"
+3. Crie todos com create_shipment em sequência e confirme no final: "3 pedidos criados com sucesso."
+Se quiser vincular algum à financeira depois, o usuário pode fazer isso separadamente.
 
 **PASSO 1 — Para NF-e e Venda PDF/XML individual — sempre pergunte o contexto antes:**
 "Esse pedido é apenas **controle de saída**, ou também precisa **anotar troca com financeira**?"
