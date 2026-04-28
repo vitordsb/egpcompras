@@ -46,8 +46,13 @@ export const geminiProvider: AgentProvider = {
     const ai = getClient();
     const contents: Content[] = [];
     for (const t of history) {
-      if (t.role === 'user' && t.text) {
-        contents.push({ role: 'user', parts: [{ text: t.text }] });
+      if (t.role === 'user' && (t.text || t.inlineData)) {
+        const parts: any[] = [];
+        if (t.inlineData) {
+          parts.push({ inlineData: { mimeType: t.inlineData.mimeType, data: t.inlineData.data } });
+        }
+        if (t.text) parts.push({ text: t.text });
+        contents.push({ role: 'user', parts });
       } else if (t.role === 'model' && t.text) {
         contents.push({ role: 'model', parts: [{ text: t.text }] });
       } else if (t.toolCall) {

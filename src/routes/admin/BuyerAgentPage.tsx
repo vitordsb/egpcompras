@@ -61,6 +61,8 @@ export default function BuyerAgentPage() {
   const [currentChatId, setCurrentChatId] = useState<string | null>(null);
   const [history, setHistory] = useState<ChatTurn[]>([]);
   const [input, setInput] = useState('');
+  const [pendingFile, setPendingFile] = useState<{ name: string; mimeType: string; data: string } | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<FriendlyError | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<ChatSummary | null>(null);
@@ -79,6 +81,7 @@ export default function BuyerAgentPage() {
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   // Persiste escolha
   useEffect(() => {
@@ -234,9 +237,48 @@ export default function BuyerAgentPage() {
     abortRef.current?.abort();
   }
 
+  function readFileAsBase64(file: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = reader.result as string;
+        // Remove o prefixo "data:application/pdf;base64,"
+        resolve(result.split(',')[1]);
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  }
+
+  async function attachFile(file: File) {
+    if (file.type !== 'application/pdf') {
+      setError({ title: 'Arquivo não suportado', description: 'Só PDFs são aceitos por enquanto.' });
+      return;
+    }
+    const data = await readFileAsBase64(file);
+    setPendingFile({ name: file.name, mimeType: file.type, data });
+    inputRef.current?.focus();
+  }
+
+  function handleDragOver(e: React.DragEvent) {
+    e.preventDefault();
+    setIsDragging(true);
+  }
+
+  function handleDragLeave(e: React.DragEvent) {
+    if (!e.currentTarget.contains(e.relatedTarget as Node)) setIsDragging(false);
+  }
+
+  async function handleDrop(e: React.DragEvent) {
+    e.preventDefault();
+    setIsDragging(false);
+    const file = e.dataTransfer.files[0];
+    if (file) await attachFile(file);
+  }
+
   async function send(text?: string) {
     const message = (text ?? input).trim();
-    if (!message || running) return;
+    if ((!message && !pendingFile) || running) return;
     if (!provider.isConfigured()) {
       setError({
         title: `Provider ${provider.name} não está configurado`,
@@ -244,7 +286,10 @@ export default function BuyerAgentPage() {
       });
       return;
     }
+    const finalMessage = message || (pendingFile ? `Importar pedido: ${pendingFile.name}` : '');
+    const fileToSend = pendingFile;
     setInput('');
+    setPendingFile(null);
     setError(null);
     setRunning(true);
     setRunStartedAt(Date.now());
@@ -261,7 +306,7 @@ export default function BuyerAgentPage() {
     try {
       let chatId = currentChatId;
       if (!chatId) {
-        const title = message.length > 80 ? message.slice(0, 80) + '…' : message;
+        const title = finalMessage.length > 80 ? finalMessage.slice(0, 80) + '…' : finalMessage;
         const { data, error: createErr } = await supabase
           .from('ai_chats')
           .insert({ title })
@@ -279,7 +324,8 @@ export default function BuyerAgentPage() {
       await runAgent({
         provider,
         history,
-        userMessage: message,
+        userMessage: finalMessage,
+        userInlineData: fileToSend ? { mimeType: fileToSend.mimeType, data: fileToSend.data, fileName: fileToSend.name } : undefined,
         signal: controller.signal,
         onRetry: (s) => setRetryStatus(s),
         onRetryClear: () => setRetryStatus(null),
@@ -483,7 +529,26 @@ export default function BuyerAgentPage() {
           </div>
         )}
 
-        <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4 md:px-8 md:py-8">
+        <div
+          ref={scrollRef}
+          className={cn(
+            'relative flex-1 overflow-y-auto px-4 py-4 md:px-8 md:py-8 transition-colors',
+            isDragging && 'bg-brand-50'
+          )}
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
+        >
+          {isDragging && (
+            <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center">
+              <div className="rounded-xl border-2 border-dashed border-brand-400 bg-brand-50/90 px-10 py-8 text-center shadow-lg">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="mx-auto mb-2 h-10 w-10 text-brand-500">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m.75 12 3 3m0 0 3-3m-3 3v-6m-1.5-9H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" />
+                </svg>
+                <p className="text-sm font-medium text-brand-700">Solte o PDF aqui para importar o pedido</p>
+              </div>
+            </div>
+          )}
           <div className="mx-auto max-w-3xl">
             {history.length === 0 && !running && (
               <div className="space-y-6">
@@ -519,12 +584,22 @@ export default function BuyerAgentPage() {
 
             <div className="space-y-3">
               {history.map((t, idx) => {
-                if (t.role === 'user' && t.text) {
+                if (t.role === 'user' && (t.text || t.inlineData)) {
                   return (
-                    <div key={idx} className="flex justify-end">
-                      <div className="max-w-[80%] rounded-lg bg-brand-600 px-4 py-2.5 text-white whitespace-pre-wrap">
-                        {t.text}
-                      </div>
+                    <div key={idx} className="flex flex-col items-end gap-1">
+                      {t.inlineData && (
+                        <div className="flex items-center gap-1.5 rounded-md border border-brand-200 bg-brand-50 px-2.5 py-1 text-xs text-brand-700">
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-3.5 w-3.5 shrink-0">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" />
+                          </svg>
+                          {t.inlineData.fileName ?? 'pedido.pdf'}
+                        </div>
+                      )}
+                      {t.text && (
+                        <div className="max-w-[80%] rounded-lg bg-brand-600 px-4 py-2.5 text-white whitespace-pre-wrap">
+                          {t.text}
+                        </div>
+                      )}
                     </div>
                   );
                 }
@@ -684,7 +759,24 @@ export default function BuyerAgentPage() {
         </div>
 
         <div className="border-t border-slate-200 bg-white px-4 py-3 md:px-8 md:py-4">
-          <div className="mx-auto max-w-3xl">
+          <div className="mx-auto max-w-3xl space-y-2">
+            {/* Badge do PDF pendente */}
+            {pendingFile && (
+              <div className="flex items-center gap-2 rounded-md border border-brand-200 bg-brand-50 px-3 py-1.5 text-xs">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-4 w-4 shrink-0 text-brand-600">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" />
+                </svg>
+                <span className="min-w-0 flex-1 truncate font-medium text-brand-700">{pendingFile.name}</span>
+                <button
+                  type="button"
+                  onClick={() => setPendingFile(null)}
+                  aria-label="Remover PDF"
+                  className="text-brand-400 hover:text-brand-700"
+                >
+                  ×
+                </button>
+              </div>
+            )}
             <form
               onSubmit={(e) => {
                 e.preventDefault();
@@ -692,6 +784,37 @@ export default function BuyerAgentPage() {
               }}
               className="flex items-end gap-2"
             >
+              {/* Botão de upload de PDF */}
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="application/pdf"
+                className="sr-only"
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) attachFile(f);
+                  e.target.value = '';
+                }}
+              />
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={running}
+                title="Anexar PDF de pedido"
+                aria-label="Anexar PDF"
+                className={cn(
+                  'flex h-10 w-10 shrink-0 items-center justify-center rounded-md border transition-colors',
+                  pendingFile
+                    ? 'border-brand-300 bg-brand-50 text-brand-600'
+                    : 'border-slate-300 text-slate-500 hover:border-slate-400 hover:text-slate-700',
+                  running && 'cursor-not-allowed opacity-50'
+                )}
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-4.5 w-4.5 h-[18px] w-[18px]">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m.75 12 3 3m0 0 3-3m-3 3v-6m-1.5-9H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" />
+                </svg>
+              </button>
+
               <div className="flex-1 rounded-md border border-slate-300 bg-white focus-within:border-brand-500 focus-within:ring-1 focus-within:ring-brand-500">
                 <textarea
                   ref={inputRef}
@@ -703,7 +826,7 @@ export default function BuyerAgentPage() {
                       send();
                     }
                   }}
-                  placeholder="Diga o que você quer fazer… (Enter envia, Shift+Enter quebra linha)"
+                  placeholder={pendingFile ? 'Instruções extras (opcional) — Enter envia' : 'Diga o que você quer fazer… (Enter envia, Shift+Enter quebra linha)'}
                   rows={2}
                   disabled={running || !provider.isConfigured()}
                   className="block w-full resize-none rounded-md bg-transparent px-3 py-2 text-sm leading-6 outline-none disabled:bg-slate-50"
@@ -716,7 +839,7 @@ export default function BuyerAgentPage() {
                   </div>
                 )}
               </div>
-              <Button type="submit" disabled={!input.trim() || running || !provider.isConfigured()}>
+              <Button type="submit" disabled={(!input.trim() && !pendingFile) || running || !provider.isConfigured()}>
                 Enviar
               </Button>
             </form>

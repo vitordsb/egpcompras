@@ -462,26 +462,38 @@ export const toolDeclarations = [
   {
     name: 'create_shipment',
     description:
-      'Cria um pedido de saída (controle paralelo ao Conta Azul). Use quando o usuário disser "adiciona pedido X pra sair", "registra a saída de X", "cadastra pedido Y do cliente Z". Pode incluir produtos com qtd e número da NFe.',
+      'Cria um pedido de saída (controle paralelo ao Conta Azul). Use quando o usuário disser "adiciona pedido X pra sair", "registra a saída de X", "cadastra pedido Y do cliente Z", ou ao importar um PDF de venda. Pode incluir produtos com qtd e todos os dados do Conta Azul.',
     parameters: {
       type: 'OBJECT' as Type,
       properties: {
-        client_name: { type: 'STRING' as Type, description: 'Nome do cliente.' },
-        numero_nfe: { type: 'STRING' as Type, description: 'Número da NFe (opcional).' },
-        data_prevista: {
-          type: 'STRING' as Type,
-          description: 'Data prevista pra sair, formato ISO YYYY-MM-DD (opcional).',
-        },
+        client_name:          { type: 'STRING' as Type, description: 'Nome do cliente.' },
+        numero_nfe:           { type: 'STRING' as Type, description: 'Número da NFe (opcional).' },
+        numero_venda:         { type: 'STRING' as Type, description: 'Número da venda no Conta Azul (ex: 5785).' },
+        data_venda:           { type: 'STRING' as Type, description: 'Data da emissão da venda, YYYY-MM-DD.' },
+        data_prevista:        { type: 'STRING' as Type, description: 'Data prevista pra sair, YYYY-MM-DD.' },
+        client_cnpj:          { type: 'STRING' as Type, description: 'CNPJ ou CPF do cliente.' },
+        client_phone:         { type: 'STRING' as Type, description: 'Telefone do cliente.' },
+        client_email:         { type: 'STRING' as Type, description: 'E-mail do cliente.' },
+        client_address:       { type: 'STRING' as Type, description: 'Endereço completo do cliente.' },
+        frete_tipo:           { type: 'STRING' as Type, description: 'Ex: SEDEX, PAC, TRL FOB, Retirada.' },
+        frete_valor:          { type: 'NUMBER' as Type, description: 'Valor do frete em R$.' },
+        total_produtos:       { type: 'NUMBER' as Type, description: 'Subtotal dos produtos (sem frete).' },
+        valor_total:          { type: 'NUMBER' as Type, description: 'Valor líquido total (produtos + frete).' },
+        forma_pagamento:      { type: 'STRING' as Type, description: 'Ex: PIX, Boleto Bancário, Cartão.' },
+        condicao_pagamento:   { type: 'STRING' as Type, description: 'Ex: À VISTA, 28-56-84.' },
         notes: { type: 'STRING' as Type, description: 'Observação geral (opcional).' },
         items: {
           type: 'ARRAY' as Type,
-          description: 'Itens do pedido. Cada item tem product_name (fuzzy match) ou product_id, e quantity.',
+          description: 'Itens do pedido. Cada item pode ter product_name (fuzzy match), item_code, item_name, unit_price e quantity.',
           items: {
             type: 'OBJECT' as Type,
             properties: {
-              product_name: { type: 'STRING' as Type },
-              product_id: { type: 'STRING' as Type },
-              quantity: { type: 'NUMBER' as Type },
+              product_name: { type: 'STRING' as Type, description: 'Nome pra fuzzy match no catálogo.' },
+              product_id:   { type: 'STRING' as Type, description: 'UUID do produto se já conhecido.' },
+              item_code:    { type: 'STRING' as Type, description: 'Código do item no Conta Azul (ex: cod17, EGPADV1).' },
+              item_name:    { type: 'STRING' as Type, description: 'Descrição livre do item.' },
+              unit_price:   { type: 'NUMBER' as Type, description: 'Valor unitário em R$.' },
+              quantity:     { type: 'NUMBER' as Type },
             },
             required: ['quantity'],
           },
@@ -541,15 +553,27 @@ export const toolDeclarations = [
   {
     name: 'update_shipment',
     description:
-      'Edita campos de um pedido (notes, data_prevista, numero_nfe, client_name). Pra mudar status, prefira mark_shipment_status.',
+      'Edita campos de um pedido. Pra mudar status, prefira mark_shipment_status.',
     parameters: {
       type: 'OBJECT' as Type,
       properties: {
-        shipment_id: { type: 'STRING' as Type },
-        client_name: { type: 'STRING' as Type },
-        numero_nfe: { type: 'STRING' as Type },
-        data_prevista: { type: 'STRING' as Type },
-        notes: { type: 'STRING' as Type },
+        shipment_id:          { type: 'STRING' as Type },
+        client_name:          { type: 'STRING' as Type },
+        numero_nfe:           { type: 'STRING' as Type },
+        numero_venda:         { type: 'STRING' as Type },
+        data_venda:           { type: 'STRING' as Type },
+        data_prevista:        { type: 'STRING' as Type },
+        client_cnpj:          { type: 'STRING' as Type },
+        client_phone:         { type: 'STRING' as Type },
+        client_email:         { type: 'STRING' as Type },
+        client_address:       { type: 'STRING' as Type },
+        frete_tipo:           { type: 'STRING' as Type },
+        frete_valor:          { type: 'NUMBER' as Type },
+        total_produtos:       { type: 'NUMBER' as Type },
+        valor_total:          { type: 'NUMBER' as Type },
+        forma_pagamento:      { type: 'STRING' as Type },
+        condicao_pagamento:   { type: 'STRING' as Type },
+        notes:                { type: 'STRING' as Type },
       },
       required: ['shipment_id'],
     },
@@ -595,7 +619,7 @@ export const toolDeclarations = [
   {
     name: 'add_shipment_items',
     description:
-      'Adiciona itens (produto + qtd) a um pedido existente. Use product_name (fuzzy) ou product_id. Se o produto já estiver no pedido, atualiza a quantidade.',
+      'Adiciona itens a um pedido existente. Suporta itens com product_name/product_id (match no catálogo) ou itens livres com item_code/item_name/unit_price. Se o item já estiver no pedido, atualiza.',
     parameters: {
       type: 'OBJECT' as Type,
       properties: {
@@ -606,8 +630,11 @@ export const toolDeclarations = [
             type: 'OBJECT' as Type,
             properties: {
               product_name: { type: 'STRING' as Type },
-              product_id: { type: 'STRING' as Type },
-              quantity: { type: 'NUMBER' as Type },
+              product_id:   { type: 'STRING' as Type },
+              item_code:    { type: 'STRING' as Type, description: 'Código no Conta Azul (ex: EGPADV1).' },
+              item_name:    { type: 'STRING' as Type, description: 'Descrição livre.' },
+              unit_price:   { type: 'NUMBER' as Type, description: 'Valor unitário R$.' },
+              quantity:     { type: 'NUMBER' as Type },
             },
             required: ['quantity'],
           },
@@ -1659,50 +1686,62 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
     case 'create_shipment': {
       const clientName = String(args.client_name ?? '').trim();
       if (!clientName) throw new Error('client_name é obrigatório');
-      const payload: any = {
-        client_name: clientName,
-        numero_nfe: args.numero_nfe ? String(args.numero_nfe).trim() : null,
-        data_prevista: args.data_prevista ? String(args.data_prevista) : null,
-        notes: args.notes ? String(args.notes).trim() : null,
+      const payload: Record<string, unknown> = {
+        client_name:         clientName,
+        numero_nfe:          args.numero_nfe          ? String(args.numero_nfe).trim()        : null,
+        numero_venda:        args.numero_venda        ? String(args.numero_venda).trim()      : null,
+        data_venda:          args.data_venda          ? String(args.data_venda)               : null,
+        data_prevista:       args.data_prevista       ? String(args.data_prevista)            : null,
+        client_cnpj:         args.client_cnpj         ? String(args.client_cnpj).trim()       : null,
+        client_phone:        args.client_phone        ? String(args.client_phone).trim()      : null,
+        client_email:        args.client_email        ? String(args.client_email).trim()      : null,
+        client_address:      args.client_address      ? String(args.client_address).trim()    : null,
+        frete_tipo:          args.frete_tipo          ? String(args.frete_tipo).trim()        : null,
+        frete_valor:         args.frete_valor != null  ? Number(args.frete_valor)              : null,
+        total_produtos:      args.total_produtos != null ? Number(args.total_produtos)         : null,
+        valor_total:         args.valor_total != null   ? Number(args.valor_total)             : null,
+        forma_pagamento:     args.forma_pagamento     ? String(args.forma_pagamento).trim()   : null,
+        condicao_pagamento:  args.condicao_pagamento  ? String(args.condicao_pagamento).trim(): null,
+        notes:               args.notes               ? String(args.notes).trim()             : null,
       };
       const { data: created, error } = await supabase
         .from('shipments')
         .insert(payload)
-        .select('id, client_name, numero_nfe, status')
+        .select('id, client_name, numero_venda, numero_nfe, status')
         .single();
       if (error || !created) throw new Error(error?.message ?? 'Falha ao criar pedido');
       const shipmentId = (created as any).id as string;
 
-      const itemsInput: Array<{ product_name?: string; product_id?: string; quantity: number }> =
-        Array.isArray(args.items) ? args.items : [];
+      const itemsInput: Array<{
+        product_name?: string; product_id?: string;
+        item_code?: string; item_name?: string; unit_price?: number; quantity: number;
+      }> = Array.isArray(args.items) ? args.items : [];
       const itemsAdded: any[] = [];
       const itemsFailed: any[] = [];
       for (const it of itemsInput) {
         let productId = it.product_id ? String(it.product_id) : '';
         if (!productId && it.product_name) {
           const found = await findProductByName(String(it.product_name));
-          if (!found) {
-            itemsFailed.push({ product_name: it.product_name, error: 'Produto não encontrado' });
-            continue;
-          }
-          productId = found.id;
-        }
-        if (!productId) {
-          itemsFailed.push({ error: 'item sem product_id nem product_name' });
-          continue;
+          if (found) productId = found.id;
         }
         const qty = Number(it.quantity);
         if (!(qty > 0)) {
-          itemsFailed.push({ product_name: it.product_name, error: 'quantity inválido' });
+          itemsFailed.push({ item_name: it.item_name ?? it.product_name, error: 'quantity inválido' });
           continue;
         }
-        const { error: insErr } = await supabase
-          .from('shipment_items')
-          .insert({ shipment_id: shipmentId, product_id: productId, quantity: qty });
+        const itemPayload: Record<string, unknown> = {
+          shipment_id: shipmentId,
+          product_id:  productId || null,
+          item_code:   it.item_code  ? String(it.item_code).trim()  : null,
+          item_name:   it.item_name  ? String(it.item_name).trim()  : null,
+          unit_price:  it.unit_price != null ? Number(it.unit_price) : null,
+          quantity:    qty,
+        };
+        const { error: insErr } = await supabase.from('shipment_items').insert(itemPayload);
         if (insErr) {
-          itemsFailed.push({ product_name: it.product_name, error: insErr.message });
+          itemsFailed.push({ item_name: it.item_name ?? it.product_name, error: insErr.message });
         } else {
-          itemsAdded.push({ product_id: productId, product_name: it.product_name, quantity: qty });
+          itemsAdded.push({ product_id: productId || null, item_code: it.item_code, item_name: it.item_name ?? it.product_name, quantity: qty });
         }
       }
       return { created, items_added: itemsAdded, items_failed: itemsFailed };
@@ -1773,17 +1812,24 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
     case 'update_shipment': {
       const id = String(args.shipment_id ?? '');
       if (!id) throw new Error('shipment_id é obrigatório');
-      const payload: any = { updated_at: new Date().toISOString() };
-      if (args.client_name) payload.client_name = String(args.client_name).trim();
-      if (args.numero_nfe !== undefined) {
-        payload.numero_nfe = args.numero_nfe ? String(args.numero_nfe).trim() : null;
-      }
-      if (args.data_prevista !== undefined) {
-        payload.data_prevista = args.data_prevista ? String(args.data_prevista) : null;
-      }
-      if (args.notes !== undefined) {
-        payload.notes = args.notes ? String(args.notes).trim() : null;
-      }
+      const payload: Record<string, unknown> = { updated_at: new Date().toISOString() };
+      const str = (v: unknown) => (v ? String(v).trim() : null);
+      if (args.client_name       !== undefined) payload.client_name        = str(args.client_name);
+      if (args.numero_nfe        !== undefined) payload.numero_nfe         = str(args.numero_nfe);
+      if (args.numero_venda      !== undefined) payload.numero_venda       = str(args.numero_venda);
+      if (args.data_venda        !== undefined) payload.data_venda         = str(args.data_venda);
+      if (args.data_prevista     !== undefined) payload.data_prevista      = str(args.data_prevista);
+      if (args.client_cnpj       !== undefined) payload.client_cnpj        = str(args.client_cnpj);
+      if (args.client_phone      !== undefined) payload.client_phone       = str(args.client_phone);
+      if (args.client_email      !== undefined) payload.client_email       = str(args.client_email);
+      if (args.client_address    !== undefined) payload.client_address     = str(args.client_address);
+      if (args.frete_tipo        !== undefined) payload.frete_tipo         = str(args.frete_tipo);
+      if (args.frete_valor       !== undefined) payload.frete_valor        = args.frete_valor != null ? Number(args.frete_valor) : null;
+      if (args.total_produtos    !== undefined) payload.total_produtos     = args.total_produtos != null ? Number(args.total_produtos) : null;
+      if (args.valor_total       !== undefined) payload.valor_total        = args.valor_total != null ? Number(args.valor_total) : null;
+      if (args.forma_pagamento   !== undefined) payload.forma_pagamento    = str(args.forma_pagamento);
+      if (args.condicao_pagamento !== undefined) payload.condicao_pagamento = str(args.condicao_pagamento);
+      if (args.notes             !== undefined) payload.notes              = str(args.notes);
       if (Object.keys(payload).length === 1) throw new Error('Nada a atualizar');
       const { error } = await supabase.from('shipments').update(payload).eq('id', id);
       if (error) throw new Error(error.message);
@@ -1857,8 +1903,10 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
     case 'add_shipment_items': {
       const id = String(args.shipment_id ?? '');
       if (!id) throw new Error('shipment_id é obrigatório');
-      const itemsInput: Array<{ product_name?: string; product_id?: string; quantity: number }> =
-        Array.isArray(args.items) ? args.items : [];
+      const itemsInput: Array<{
+        product_name?: string; product_id?: string;
+        item_code?: string; item_name?: string; unit_price?: number; quantity: number;
+      }> = Array.isArray(args.items) ? args.items : [];
       if (itemsInput.length === 0) throw new Error('items é obrigatório');
       const added: any[] = [];
       const failed: any[] = [];
@@ -1866,54 +1914,42 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
         let productId = it.product_id ? String(it.product_id) : '';
         if (!productId && it.product_name) {
           const found = await findProductByName(String(it.product_name));
-          if (!found) {
-            failed.push({ product_name: it.product_name, error: 'Produto não encontrado' });
-            continue;
-          }
-          productId = found.id;
-        }
-        if (!productId) {
-          failed.push({ error: 'item sem product_id nem product_name' });
-          continue;
+          if (found) productId = found.id;
         }
         const qty = Number(it.quantity);
         if (!(qty > 0)) {
-          failed.push({ product_name: it.product_name, error: 'quantity inválido' });
+          failed.push({ item_name: it.item_name ?? it.product_name, error: 'quantity inválido' });
           continue;
         }
-        // Verifica se produto já está no pedido — se sim, atualiza (idempotente)
-        const { data: existing } = await supabase
-          .from('shipment_items')
-          .select('id')
-          .eq('shipment_id', id)
-          .eq('product_id', productId)
-          .maybeSingle();
-        if (existing) {
-          const { error: upErr } = await supabase
+        const itemPayload: Record<string, unknown> = {
+          shipment_id: id,
+          product_id:  productId || null,
+          item_code:   it.item_code  ? String(it.item_code).trim()  : null,
+          item_name:   it.item_name  ? String(it.item_name).trim()  : null,
+          unit_price:  it.unit_price != null ? Number(it.unit_price) : null,
+          quantity:    qty,
+        };
+        // Idempotência por product_id (quando vinculado ao catálogo)
+        if (productId) {
+          const { data: existing } = await supabase
             .from('shipment_items')
-            .update({ quantity: qty })
-            .eq('id', (existing as any).id);
-          if (upErr) failed.push({ product_name: it.product_name, error: upErr.message });
-          else
-            added.push({
-              action: 'updated',
-              product_id: productId,
-              product_name: it.product_name,
-              quantity: qty,
-            });
-        } else {
-          const { error: insErr } = await supabase
-            .from('shipment_items')
-            .insert({ shipment_id: id, product_id: productId, quantity: qty });
-          if (insErr) failed.push({ product_name: it.product_name, error: insErr.message });
-          else
-            added.push({
-              action: 'created',
-              product_id: productId,
-              product_name: it.product_name,
-              quantity: qty,
-            });
+            .select('id')
+            .eq('shipment_id', id)
+            .eq('product_id', productId)
+            .maybeSingle();
+          if (existing) {
+            const { error: upErr } = await supabase
+              .from('shipment_items')
+              .update({ quantity: qty, unit_price: itemPayload.unit_price })
+              .eq('id', (existing as any).id);
+            if (upErr) failed.push({ item_name: it.item_name ?? it.product_name, error: upErr.message });
+            else added.push({ action: 'updated', product_id: productId, item_name: it.item_name ?? it.product_name, quantity: qty });
+            continue;
+          }
         }
+        const { error: insErr } = await supabase.from('shipment_items').insert(itemPayload);
+        if (insErr) failed.push({ item_name: it.item_name ?? it.product_name, error: insErr.message });
+        else added.push({ action: 'created', product_id: productId, item_name: it.item_name ?? it.product_name, quantity: qty });
       }
       return { items_processed: added, items_failed: failed };
     }

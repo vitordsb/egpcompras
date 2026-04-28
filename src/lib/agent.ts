@@ -242,6 +242,14 @@ Frases tipo "vou fazer X" sem ter feito = PROIBIDO. Se você sabe o que fazer, f
 - **NÃO explique fórmula/cálculo/metodologia** a menos que ele PEÇA explicitamente ("por quê?", "como você calculou?", "explica isso").
 - **NÃO repita o que o usuário acabou de dizer.** Vá direto à ação/resposta.
 
+## Importação de pedido via PDF (Conta Azul)
+Quando o usuário enviar um PDF junto com a mensagem (ou pedir pra importar):
+1. Leia o PDF e extraia **todos** os campos da venda: número da venda, data, dados do cliente (nome, CNPJ/CPF, endereço, telefone, email), itens (código, descrição, qtd, valor unit), total produtos, frete (tipo + valor), valor líquido, forma de pagamento, condição de pagamento.
+2. **Se data_prevista (data de saída) não estiver no PDF**, pergunte: "Qual a data prevista de saída deste pedido?" antes de criar.
+3. Use create_shipment com TODOS os campos extraídos, incluindo os itens (passando item_code, item_name, unit_price, quantity).
+4. Ao terminar, confirme em 1-2 linhas: "Pedido Venda 5785 — LIDIA MARIA AMISS MAZINI criado. 2 itens, R$ 505,90, saída 30/04."
+- Observações extras do PDF (ex: "enviar os RMA junto") → inclua no campo notes.
+
 ## Outras regras
 - Pergunte antes de agir só se faltar info crítica (ex: "qual produto?").
 - Se uma tool falhar, leia o erro e proponha correção curta.
@@ -305,6 +313,8 @@ export interface RunOptions {
   provider: AgentProvider;
   history: ChatTurn[];
   userMessage: string;
+  /** Arquivo inline (PDF) a ser enviado junto com a mensagem — só Gemini suporta */
+  userInlineData?: { mimeType: string; data: string; fileName?: string };
   onTurn?: (turn: ChatTurn) => void;
   /** Sinal pra cancelar a execução (entre steps). */
   signal?: AbortSignal;
@@ -318,6 +328,7 @@ export async function runAgent({
   provider,
   history,
   userMessage,
+  userInlineData,
   onTurn,
   signal,
   onRetry,
@@ -332,6 +343,7 @@ export async function runAgent({
   const newTurns: ChatTurn[] = [];
 
   const userTurn: ChatTurn = { role: 'user', text: userMessage };
+  if (userInlineData) userTurn.inlineData = userInlineData;
   workingHistory.push(userTurn);
   newTurns.push(userTurn);
   onTurn?.(userTurn);

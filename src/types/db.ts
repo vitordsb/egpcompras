@@ -110,11 +110,23 @@ export type ShipmentStatus = 'pending' | 'shipped' | 'returned' | 'cancelled';
 export interface Shipment {
   id: string;
   numero_nfe: string | null;
+  numero_venda: string | null;
+  data_venda: string | null;
   client_name: string;
+  client_cnpj: string | null;
+  client_phone: string | null;
+  client_email: string | null;
+  client_address: string | null;
   status: ShipmentStatus;
   data_prevista: string | null;
   data_saida: string | null;
   data_retorno: string | null;
+  frete_tipo: string | null;
+  frete_valor: number | null;
+  total_produtos: number | null;
+  valor_total: number | null;
+  forma_pagamento: string | null;
+  condicao_pagamento: string | null;
   notes: string | null;
   created_at: string;
   updated_at: string;
@@ -123,7 +135,10 @@ export interface Shipment {
 export interface ShipmentItem {
   id: string;
   shipment_id: string;
-  product_id: string;
+  product_id: string | null;
+  item_code: string | null;
+  item_name: string | null;
+  unit_price: number | null;
   quantity: number;
 }
 

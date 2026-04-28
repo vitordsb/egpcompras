@@ -63,8 +63,10 @@ export default function PedidosPage() {
     const { data, error } = await supabase
       .from('shipments')
       .select(
-        `id, client_name, numero_nfe, status, data_prevista, data_saida, data_retorno, notes, created_at, updated_at,
-         observations:shipment_observations(id)`
+        `id, client_name, numero_nfe, numero_venda, data_venda, status, data_prevista, data_saida, data_retorno,
+         client_cnpj, client_phone, client_email, client_address,
+         frete_tipo, frete_valor, total_produtos, valor_total, forma_pagamento, condicao_pagamento,
+         notes, created_at, updated_at, observations:shipment_observations(id)`
       )
       .order('created_at', { ascending: false })
       .limit(200);
@@ -96,7 +98,7 @@ export default function PedidosPage() {
       if (statusFilter !== 'all' && s.status !== statusFilter) return false;
       if (search.trim()) {
         const q = search.toLowerCase();
-        const hay = `${s.client_name} ${s.numero_nfe ?? ''}`.toLowerCase();
+        const hay = `${s.client_name} ${s.numero_nfe ?? ''} ${s.numero_venda ?? ''}`.toLowerCase();
         if (!hay.includes(q)) return false;
       }
       return true;
@@ -255,7 +257,7 @@ export default function PedidosPage() {
           .order('created_at', { ascending: false }),
         supabase
           .from('shipment_items')
-          .select('id, quantity, product:products(id, name)')
+          .select('id, quantity, item_code, item_name, unit_price, product:products(id, name)')
           .eq('shipment_id', detailId),
       ]);
       if (cancelled) return;
@@ -421,10 +423,10 @@ export default function PedidosPage() {
               <thead className="border-b border-slate-200 bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
                 <tr>
                   <th className="px-5 py-3">Cliente</th>
-                  <th className="px-5 py-3">NFe</th>
+                  <th className="px-5 py-3">Venda / NFe</th>
                   <th className="px-5 py-3">Status</th>
                   <th className="px-5 py-3">Prevista</th>
-                  <th className="px-5 py-3">Saiu em</th>
+                  <th className="px-5 py-3 text-right">Total</th>
                   <th className="px-5 py-3 text-right">Obs.</th>
                   <th className="px-5 py-3"></th>
                 </tr>
@@ -432,8 +434,16 @@ export default function PedidosPage() {
               <tbody>
                 {filtered.map((s) => (
                   <tr key={s.id} className="border-b border-slate-100 last:border-0">
-                    <td className="px-5 py-3 font-medium text-slate-900">{s.client_name}</td>
-                    <td className="px-5 py-3 text-slate-600">{s.numero_nfe ?? '—'}</td>
+                    <td className="px-5 py-3">
+                      <div className="font-medium text-slate-900">{s.client_name}</div>
+                      {s.client_cnpj && <div className="text-xs text-slate-400">{s.client_cnpj}</div>}
+                    </td>
+                    <td className="px-5 py-3 text-slate-600">
+                      {s.numero_venda ? <span className="font-medium">#{s.numero_venda}</span> : null}
+                      {s.numero_venda && s.numero_nfe ? <span className="text-slate-300"> · </span> : null}
+                      {s.numero_nfe ? <span className="text-xs">NFe {s.numero_nfe}</span> : null}
+                      {!s.numero_venda && !s.numero_nfe ? '—' : null}
+                    </td>
                     <td className="px-5 py-3">
                       <span
                         className={cn(
@@ -445,7 +455,9 @@ export default function PedidosPage() {
                       </span>
                     </td>
                     <td className="px-5 py-3 text-slate-600">{formatDate(s.data_prevista)}</td>
-                    <td className="px-5 py-3 text-slate-600">{formatDate(s.data_saida)}</td>
+                    <td className="px-5 py-3 text-right text-slate-600">
+                      {s.valor_total != null ? `R$ ${Number(s.valor_total).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` : '—'}
+                    </td>
                     <td className="px-5 py-3 text-right">
                       {(s.observations_count ?? 0) > 0 ? (
                         <span className="inline-flex items-center rounded-full bg-purple-100 px-2 py-0.5 text-xs font-medium text-purple-700">
@@ -684,13 +696,28 @@ export default function PedidosPage() {
                   {STATUS_LABEL[detailShipment.status]}
                 </span>
               </div>
-              <p className="text-xs text-slate-500">
-                NFe: {detailShipment.numero_nfe ?? '—'} · Prevista:{' '}
-                {formatDate(detailShipment.data_prevista)}
-                {detailShipment.data_saida && ` · Saiu: ${formatDate(detailShipment.data_saida)}`}
-                {detailShipment.data_retorno &&
-                  ` · Voltou: ${formatDate(detailShipment.data_retorno)}`}
-              </p>
+              <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-slate-500">
+                {detailShipment.numero_venda && <span>Venda #{detailShipment.numero_venda}</span>}
+                {detailShipment.data_venda && <span>Emitido {formatDate(detailShipment.data_venda)}</span>}
+                {detailShipment.numero_nfe && <span>NFe {detailShipment.numero_nfe}</span>}
+                {detailShipment.data_prevista && <span>Prevista {formatDate(detailShipment.data_prevista)}</span>}
+                {detailShipment.data_saida && <span>Saiu {formatDate(detailShipment.data_saida)}</span>}
+                {detailShipment.data_retorno && <span>Voltou {formatDate(detailShipment.data_retorno)}</span>}
+              </div>
+              {(detailShipment.client_cnpj || detailShipment.client_phone || detailShipment.client_email) && (
+                <div className="mt-1 flex flex-wrap gap-x-3 text-xs text-slate-400">
+                  {detailShipment.client_cnpj && <span>{detailShipment.client_cnpj}</span>}
+                  {detailShipment.client_phone && <span>{detailShipment.client_phone}</span>}
+                  {detailShipment.client_email && <span>{detailShipment.client_email}</span>}
+                </div>
+              )}
+              {(detailShipment.valor_total != null || detailShipment.frete_tipo) && (
+                <div className="mt-1 flex flex-wrap gap-x-3 text-xs text-slate-400">
+                  {detailShipment.frete_tipo && <span>Frete: {detailShipment.frete_tipo}{detailShipment.frete_valor ? ` R$ ${Number(detailShipment.frete_valor).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` : ''}</span>}
+                  {detailShipment.valor_total != null && <span className="font-medium text-slate-600">Total: R$ {Number(detailShipment.valor_total).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>}
+                  {detailShipment.forma_pagamento && <span>{detailShipment.forma_pagamento}{detailShipment.condicao_pagamento ? ` · ${detailShipment.condicao_pagamento}` : ''}</span>}
+                </div>
+              )}
             </div>
 
             <div className="flex-1 space-y-5 overflow-y-auto px-5 py-5">
@@ -715,15 +742,23 @@ export default function PedidosPage() {
                   <table className="w-full text-sm">
                     <thead className="border-b border-slate-200 bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
                       <tr>
-                        <th className="px-5 py-2">Produto</th>
+                        <th className="px-5 py-2">Cód.</th>
+                        <th className="px-5 py-2">Produto / Item</th>
                         <th className="px-5 py-2 text-right">Qtd</th>
+                        <th className="px-5 py-2 text-right">Unit.</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {detailItems.map((it) => (
+                      {detailItems.map((it: any) => (
                         <tr key={it.id} className="border-b border-slate-100 last:border-0">
-                          <td className="px-5 py-2">{it.product?.name ?? '—'}</td>
+                          <td className="px-5 py-2 text-xs text-slate-400">{it.item_code ?? '—'}</td>
+                          <td className="px-5 py-2">
+                            {it.product?.name ?? it.item_name ?? '—'}
+                          </td>
                           <td className="px-5 py-2 text-right">{Number(it.quantity)}</td>
+                          <td className="px-5 py-2 text-right text-slate-500">
+                            {it.unit_price != null ? `R$ ${Number(it.unit_price).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` : '—'}
+                          </td>
                         </tr>
                       ))}
                     </tbody>

@@ -14,4 +14,6 @@ export interface ChatTurn {
   toolResponse?: { name: string; data: unknown; error?: string };
   /** Marcado em turns do model — qual provider gerou aquela resposta */
   provider?: ChatTurnProvider;
+  /** Arquivo inline (PDF, etc.) anexado pelo usuário — só Gemini suporta */
+  inlineData?: { mimeType: string; data: string; fileName?: string };
 }
