@@ -435,7 +435,7 @@ export default function BuyerAgentPage() {
                 </svg>
               </div>
               <div className="min-w-0">
-                <h1 className="truncate text-base font-semibold text-slate-900 md:text-lg">Comprador</h1>
+                <h1 className="truncate text-base font-semibold text-slate-900 md:text-lg">EGP</h1>
                 <p className="hidden text-xs text-slate-500 sm:block">
                   Assistente que executa ações no sistema
                 </p>

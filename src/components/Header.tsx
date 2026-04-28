@@ -52,7 +52,7 @@ export default function Header({ mode, onMenuClick }: HeaderProps) {
         <ModeButton
           active={mode === 'ai'}
           onClick={() => switchTo('ai')}
-          label="IA"
+          label="EGP"
           shortcut="⌘M"
           icon={
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-3.5 w-3.5">

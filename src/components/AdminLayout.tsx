@@ -455,8 +455,8 @@ export default function AdminLayout() {
         <button
           type="button"
           onClick={() => setQuickChatOpen(true)}
-          aria-label="Abrir chat IA (Cmd+K)"
-          title="Abrir chat IA (Cmd+K)"
+          aria-label="Abrir EGP (Cmd+K)"
+          title="Abrir EGP (Cmd+K)"
           className="fixed bottom-5 right-5 z-30 flex h-12 w-12 items-center justify-center rounded-full bg-brand-600 text-white shadow-lg transition-all hover:bg-brand-700 hover:shadow-xl"
         >
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-5 w-5">

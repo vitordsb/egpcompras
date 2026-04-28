@@ -132,7 +132,7 @@ export default function AiUsagePage() {
         <div>
           <h1 className="text-2xl font-semibold text-slate-900">Consumo IA</h1>
           <p className="text-sm text-slate-500">
-            Tokens e requests da API Gemini consumidos pelo assistente Comprador.
+            Tokens e requests da API Gemini consumidos pelo EGP.
           </p>
         </div>
         <button
@@ -222,7 +222,7 @@ export default function AiUsagePage() {
             {recent.length === 0 ? (
               <CardBody>
                 <p className="text-sm text-slate-600">
-                  Nenhuma chamada registrada ainda. Use o assistente Comprador pra começar.
+                  Nenhuma chamada registrada ainda. Use o EGP pra começar.
                 </p>
               </CardBody>
             ) : (

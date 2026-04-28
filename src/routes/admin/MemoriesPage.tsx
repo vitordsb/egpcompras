@@ -81,7 +81,7 @@ export default function MemoriesPage() {
   return (
     <div className="p-8">
       <div className="mb-6">
-        <h1 className="text-2xl font-semibold text-slate-900">Memórias do Comprador</h1>
+        <h1 className="text-2xl font-semibold text-slate-900">Memórias do EGP</h1>
         <p className="text-sm text-slate-500">
           Fatos que o assistente lembra entre conversas. São injetados em toda nova conversa,
           em qualquer provider (Gemini ou Ollama).
