@@ -918,7 +918,7 @@ export default function BuyerAgentPage() {
                       send();
                     }
                   }}
-                  placeholder={(pendingFiles.length > 0 || pendingParseds.length > 0) ? 'Instruções extras (opcional) — Enter envia' : 'Diga o que você quer fazer… (Enter envia, Shift+Enter quebra linha)'}
+                  placeholder={(pendingFiles.length > 0 || pendingParseds.length > 0) ? 'Ex: "saída pra 15/06, financeira Bradesco" — Enter envia' : 'Diga o que você quer fazer… (Enter envia, Shift+Enter quebra linha)'}
                   rows={2}
                   disabled={running || !provider.isConfigured()}
                   className="block w-full resize-none rounded-md bg-transparent px-3 py-2 text-sm leading-6 outline-none disabled:bg-slate-50"
