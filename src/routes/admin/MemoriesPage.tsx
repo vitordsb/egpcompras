@@ -83,10 +83,46 @@ export default function MemoriesPage() {
       <div className="mb-6">
         <h1 className="text-2xl font-semibold text-slate-900">Memórias do EGP</h1>
         <p className="text-sm text-slate-500">
-          Fatos que o assistente lembra entre conversas. São injetados em toda nova conversa,
-          em qualquer provider (Gemini ou Ollama).
+          Fatos que o assistente lembra entre conversas. São injetados em toda nova conversa.
         </p>
       </div>
+
+      {/* Indicador de saúde da arquitetura de memória */}
+      {!loading && list.length > 0 && (() => {
+        const n = list.length;
+        const estTokens = Math.round(n * 75); // ~75 tokens por memória em média
+        if (n >= 80) return (
+          <div className="mb-6 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+            <strong>⚠ Hora de migrar a arquitetura de memória</strong>
+            <p className="mt-1">
+              Você tem <strong>{n} memórias</strong> (~{estTokens.toLocaleString('pt-BR')} tokens extras por chamada).
+              Com esse volume, o modelo começa a perder foco e o custo por conversa aumenta significativamente.
+            </p>
+            <p className="mt-1.5 text-red-700">
+              Próximo passo: ativar <strong>busca vetorial (pgvector)</strong> no Supabase e migrar as memórias
+              para um sistema RAG — a IA passará a buscar só as memórias relevantes para cada pergunta,
+              em vez de carregar todas. Me peça pra implementar quando quiser.
+            </p>
+          </div>
+        );
+        if (n >= 50) return (
+          <div className="mb-6 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+            <strong>Atenção: memórias estão crescendo</strong>
+            <p className="mt-1">
+              <strong>{n} memórias</strong> (~{estTokens.toLocaleString('pt-BR')} tokens por chamada).
+              Ainda funciona bem, mas vale considerar arquitetura de busca vetorial em breve.
+              Acima de 80 entradas, a qualidade das respostas pode cair.
+            </p>
+          </div>
+        );
+        if (n >= 30) return (
+          <div className="mb-6 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-700">
+            <strong>{n} memórias</strong> (~{estTokens.toLocaleString('pt-BR')} tokens por chamada) —
+            arquitetura atual aguenta bem até ~80. Tudo certo por enquanto.
+          </div>
+        );
+        return null;
+      })()}
 
       {error && (
         <div className="mb-4 rounded-md border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">

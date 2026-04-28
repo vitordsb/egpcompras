@@ -23,6 +23,11 @@ interface LateShipment {
   valor_total: number | null;
 }
 
+interface MemoryHealth {
+  count: number;
+  level: 'ok' | 'warning' | 'critical';
+}
+
 interface OverdueTitle {
   id: string;
   client_name: string;
@@ -62,6 +67,7 @@ export default function BriefingPage() {
   const [runs, setRuns] = useState<TaskRun[]>([]);
   const [lateShipments, setLateShipments] = useState<LateShipment[]>([]);
   const [overdueTitles, setOverdueTitles] = useState<OverdueTitle[]>([]);
+  const [memoryHealth, setMemoryHealth] = useState<MemoryHealth | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -69,7 +75,7 @@ export default function BriefingPage() {
       const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
       const today = new Date().toISOString().slice(0, 10);
 
-      const [runsRes, shipmentsRes, titlesRes] = await Promise.all([
+      const [runsRes, shipmentsRes, titlesRes, memoriesRes] = await Promise.all([
         supabase
           .from('scheduled_task_runs')
           .select('id, started_at, completed_at, status, result, task:scheduled_tasks(name)')
@@ -94,11 +100,18 @@ export default function BriefingPage() {
           .not('vencimento', 'is', null)
           .order('vencimento', { ascending: true })
           .limit(20),
+
+        supabase.from('agent_memories').select('id', { count: 'exact', head: true }),
       ]);
 
       setRuns((runsRes.data ?? []) as unknown as TaskRun[]);
       setLateShipments((shipmentsRes.data ?? []).filter((s: any) => isLate(s)) as LateShipment[]);
       setOverdueTitles((titlesRes.data ?? []) as unknown as OverdueTitle[]);
+      const memCount = memoriesRes.count ?? 0;
+      setMemoryHealth({
+        count: memCount,
+        level: memCount >= 80 ? 'critical' : memCount >= 50 ? 'warning' : 'ok',
+      });
       setLoading(false);
     }
     load();
@@ -296,6 +309,29 @@ export default function BriefingPage() {
               </div>
             )}
           </section>
+
+          {/* Saúde do sistema — só aparece quando há algo a dizer */}
+          {memoryHealth && memoryHealth.level !== 'ok' && (
+            <section>
+              <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-slate-500">
+                Saúde do sistema
+              </h2>
+              {memoryHealth.level === 'critical' ? (
+                <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+                  <strong>⚠ Memórias: hora de migrar para busca vetorial</strong>
+                  <p className="mt-1 text-red-700">
+                    {memoryHealth.count} memórias (~{Math.round(memoryHealth.count * 75).toLocaleString('pt-BR')} tokens por chamada).
+                    Acima de 80 entradas a qualidade começa a cair. Peça ao Vex para implementar RAG com pgvector.
+                  </p>
+                </div>
+              ) : (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                  <strong>Memórias crescendo</strong> — {memoryHealth.count} entradas (~{Math.round(memoryHealth.count * 75).toLocaleString('pt-BR')} tokens/chamada).
+                  Ainda OK, mas fique de olho. Acima de 80 vale migrar para busca vetorial.
+                </div>
+              )}
+            </section>
+          )}
 
         </div>
       )}
