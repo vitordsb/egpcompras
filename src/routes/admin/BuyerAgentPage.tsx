@@ -1,35 +1,19 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   runAgent,
-  PROVIDERS,
-  getProvider,
   parseAgentError,
   type ChatTurn,
   type FriendlyError,
   type RetryStatus,
 } from '@/lib/agent';
+import { geminiProvider } from '@/lib/providers/gemini';
 import { describeToolCall } from '@/lib/tool-labels';
-import type { AgentProvider } from '@/lib/providers/types';
 import { supabase } from '@/lib/supabase';
 import { useInternalAuth } from '@/lib/auth-context';
 import { processXmlFile, processZipFile, type ParsedAttachment } from '@/lib/nfe-parser';
 import { Button } from '@/components/ui/Button';
 import MarkdownText from '@/components/MarkdownText';
 import { cn } from '@/lib/utils';
-
-const PROVIDER_STORAGE_KEY = 'appCompras.aiProvider';
-
-const isProd = import.meta.env.PROD;
-const PROVIDER_DEFAULT_IN_PROD = 'groq';
-
-function loadInitialProviderId(): string {
-  if (typeof window === 'undefined') return PROVIDERS[0]?.id ?? 'gemini';
-  const saved = window.localStorage.getItem(PROVIDER_STORAGE_KEY);
-  if (saved && PROVIDERS.some((p) => p.id === saved)) return saved;
-  if (isProd) return PROVIDER_DEFAULT_IN_PROD;
-  const firstConfigured = PROVIDERS.find((p) => p.isConfigured());
-  return firstConfigured?.id ?? 'gemini';
-}
 
 const QUICK_SUGGESTIONS = [
   'Qual o custo do produto X?',
@@ -60,6 +44,8 @@ function formatRelativeDate(iso: string): string {
 
 export default function BuyerAgentPage() {
   const { userLabel } = useInternalAuth();
+  const provider = geminiProvider;
+  const [providerStatus, setProviderStatus] = useState<{ ok: boolean; message?: string } | null>(null);
   const [chats, setChats] = useState<ChatSummary[]>([]);
   const [currentChatId, setCurrentChatId] = useState<string | null>(null);
   const [history, setHistory] = useState<ChatTurn[]>([]);
@@ -76,21 +62,10 @@ export default function BuyerAgentPage() {
   const [retryStatus, setRetryStatus] = useState<RetryStatus | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
-  const [providerId, setProviderId] = useState<string>(() => loadInitialProviderId());
-  const provider: AgentProvider = getProvider(providerId) ?? PROVIDERS[0];
-  const [providerStatus, setProviderStatus] = useState<{
-    ok: boolean;
-    message?: string;
-  } | null>(null);
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-
-  // Persiste escolha
-  useEffect(() => {
-    window.localStorage.setItem(PROVIDER_STORAGE_KEY, providerId);
-  }, [providerId]);
 
   // Fecha drawer mobile ao trocar de conversa
   useEffect(() => {
@@ -543,18 +518,9 @@ export default function BuyerAgentPage() {
                       : providerStatus.message ?? 'offline'
                 }
               />
-              <select
-                value={providerId}
-                onChange={(e) => setProviderId(e.target.value)}
-                disabled={running}
-                className="h-9 rounded-md border border-slate-300 bg-white px-2 text-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
-              >
-                {PROVIDERS.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name} · {p.modelLabel}
-                  </option>
-                ))}
-              </select>
+              <span className="rounded-md border border-slate-200 bg-slate-50 px-3 py-1.5 text-sm text-slate-600">
+                Gemini · gemini-2.5-flash
+              </span>
             </div>
           </div>
         </header>
@@ -681,12 +647,7 @@ export default function BuyerAgentPage() {
                   );
                 }
                 if (t.role === 'model' && t.text) {
-                  const providerColor =
-                    t.provider?.id === 'gemini'
-                      ? 'text-brand-600'
-                      : t.provider?.id === 'groq'
-                        ? 'text-cyan-600'
-                        : 'text-slate-400';
+                  const providerColor = 'text-brand-600';
                   return (
                     <div key={idx} className="flex flex-col items-start">
                       <div className="max-w-[85%] rounded-lg bg-white border border-slate-200 px-4 py-3 text-sm text-slate-800 shadow-sm">

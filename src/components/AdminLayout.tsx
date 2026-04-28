@@ -191,6 +191,16 @@ const configLinks: NavItem[] = [
     ),
   },
   {
+    to: '/admin/tarefas',
+    label: 'Tarefas',
+    description: 'Agendamentos automáticos',
+    icon: (
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-4 w-4">
+        <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+      </svg>
+    ),
+  },
+  {
     to: '/admin/consumo-ia',
     label: 'Consumo IA',
     description: 'Tokens e chamadas Gemini',
@@ -342,6 +352,29 @@ export default function AdminLayout() {
   const [configOpen, setConfigOpen] = useState(false);
   const [quickChatOpen, setQuickChatOpen] = useState(false);
   const configRef = useRef<HTMLDivElement>(null);
+
+  // Título dinâmico da aba por rota
+  useEffect(() => {
+    const PAGE_TITLES: Record<string, string> = {
+      '/admin/produtos':                 'Produtos',
+      '/admin/componentes':              'Componentes',
+      '/admin/cotacoes':                 'Cotações',
+      '/admin/custos':                   'Custos',
+      '/admin/fornecedores':             'Fornecedores',
+      '/admin/expedicao/pedidos':        'Pedidos',
+      '/admin/expedicao/saidas':         'Saídas',
+      '/admin/expedicao/observacoes':    'Observações',
+      '/admin/financeira/com-nota':      'Com Nota',
+      '/admin/financeira/sem-nota':      'Sem Nota',
+      '/admin/financeira/relatorio':     'Rel. Financeira',
+      '/admin/memorias':                 'Memórias',
+      '/admin/procedimentos':            'Procedimentos',
+      '/admin/consumo-ia':               'Consumo IA',
+      '/admin/acessos':                  'Acessos',
+    };
+    const label = PAGE_TITLES[location.pathname] ?? 'EGP Compras';
+    document.title = `${label} — EGP Compras`;
+  }, [location.pathname]);
 
   // Garante que o localStorage reflete modo manual + memoriza a última rota admin
   useEffect(() => {

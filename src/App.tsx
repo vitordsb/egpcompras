@@ -16,6 +16,7 @@ import AiUsagePage from '@/routes/admin/AiUsagePage';
 import MemoriesPage from '@/routes/admin/MemoriesPage';
 import ProceduresPage from '@/routes/admin/ProceduresPage';
 import AccessUsersPage from '@/routes/admin/AccessUsersPage';
+import TarefasPage from '@/routes/admin/TarefasPage';
 import ComNotaPage from '@/routes/admin/financeira/ComNotaPage';
 import SemNotaPage from '@/routes/admin/financeira/SemNotaPage';
 import RelatorioFinanceiraPage from '@/routes/admin/financeira/RelatorioFinanceiraPage';
@@ -236,6 +237,7 @@ function AuthenticatedApp() {
         <Route path="custos" element={<CostsPage />} />
         <Route path="fornecedores" element={<SuppliersPage />} />
         <Route path="consumo-ia" element={<AiUsagePage />} />
+        <Route path="tarefas" element={<TarefasPage />} />
         <Route path="memorias" element={<MemoriesPage />} />
         <Route path="procedimentos" element={<ProceduresPage />} />
         <Route path="financeira" element={<Navigate to="/admin/financeira/com-nota" replace />} />

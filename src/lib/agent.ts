@@ -5,7 +5,6 @@
 import { toolDeclarations, executeTool } from '@/lib/agent-tools';
 import { supabase } from '@/lib/supabase';
 import { geminiProvider } from '@/lib/providers/gemini';
-import { groqProvider } from '@/lib/providers/groq';
 import type { AgentProvider, ProviderResponse, ProviderRunArgs } from '@/lib/providers/types';
 import type { ChatTurn } from '@/lib/agent-types';
 
@@ -37,7 +36,7 @@ export function parseAgentError(err: unknown): FriendlyError {
       description:
         'O modelo está com alta demanda no momento. Já tentei automaticamente 3 vezes mas ainda não respondeu.',
       hint:
-        'Espere uns 30 segundos e tente novamente, ou troque pra Ollama (local) no seletor do topo.',
+        'Espere uns 30 segundos e tente novamente.',
       technical: msg,
     };
   }
@@ -47,16 +46,13 @@ export function parseAgentError(err: unknown): FriendlyError {
     /RESOURCE_EXHAUSTED|quota|rate_limit_exceeded|Rate limit reached/i.test(msg)
   ) {
     const retryS = extractRetryDelaySeconds(msg);
-    const isGroq = /groq/i.test(msg);
     return {
       title: 'Limite por minuto atingido',
       description:
         retryS != null
           ? `O modelo bateu o limite de tokens/minuto. Já tentei automaticamente respeitando ${retryS}s de espera, mas ainda não passou.`
           : 'Você bateu um dos limites de uso (tokens ou requests por minuto/dia).',
-      hint: isGroq
-        ? 'Aguarde ~30s e tente de novo. Pra contornar: divida em mensagens menores, troque pro Gemini no select, ou ative o Dev Tier do Groq pra subir limites.'
-        : 'Aguarde ~60s pro limite resetar. Veja detalhes na aba Consumo IA.',
+      hint: 'Aguarde ~60s pro limite resetar. Veja detalhes na aba Consumo IA.',
       technical: msg,
     };
   }
@@ -84,7 +80,7 @@ export function parseAgentError(err: unknown): FriendlyError {
     return {
       title: 'Sem conexão',
       description: 'Não consegui falar com o provider de IA.',
-      hint: 'Verifique sua internet. Se estiver no Ollama, confirme que ele está rodando com CORS liberado (OLLAMA_ORIGINS=*).',
+      hint: 'Verifique sua internet.',
       technical: msg,
     };
   }
@@ -195,7 +191,7 @@ async function generateWithRetry(
 
 export type { ChatTurn } from '@/lib/agent-types';
 
-export const PROVIDERS: AgentProvider[] = [geminiProvider, groqProvider];
+export const PROVIDERS: AgentProvider[] = [geminiProvider];
 
 export function getProvider(id: string): AgentProvider | undefined {
   return PROVIDERS.find((p) => p.id === id);
@@ -278,6 +274,25 @@ Aguarde a resposta antes de continuar. Não crie nada sem essa confirmação.
 - Para NF-e com duplicatas: chame register_titulo para CADA duplicata, com o vencimento e valor individuais
   Ex: NF 5556 tem 3 duplicatas → 3 chamadas register_titulo (001 R$1440,08 venc 15/05, 002..., 003...)
 - Confirme: "Pedido criado. 3 títulos registrados na Financeira XYZ: R$1.440,08 (15/05), R$1.440,08 (15/06), R$1.440,07 (15/07)."
+
+## Tarefas agendadas
+Quando o usuário disser "todo dia às X", "toda segunda às Y", "marque pra...":
+1. Use create_scheduled_task com name, instruction (o que executar no horário) e schedule_time (HH:MM)
+2. Para dias específicos, passe days_of_week: [1,2,3,4,5] = seg a sex, [1] = só segunda, etc.
+3. Confirme: "Tarefa criada: 'Análise de cotações' — todo dia às 09:00 BRT."
+- Listar: list_scheduled_tasks
+- Pausar/ativar: toggle_scheduled_task
+- Remover: delete_scheduled_task
+
+## Tools extras de análise
+- "resumo financeiro / quanto saiu esse mês" → financial_summary
+- "histórico do cliente X" → client_history
+- "títulos vencidos / em atraso" → list_overdue_titles
+- "cria um pedido igual ao de X" → duplicate_shipment
+- "marca como saído os pedidos 1, 2 e 3" → bulk_mark_shipped
+- "busca X em tudo" → search_all
+- "componentes fora do target" → component_cost_alert
+- "gera relatório de saídas de abril" → generate_shipment_report
 
 ## Financeira
 Use as tools de financeira para os comandos:

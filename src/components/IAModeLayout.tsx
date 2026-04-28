@@ -12,6 +12,8 @@ export default function IAModeLayout() {
   const mode = useUIMode();
   const navigate = useNavigate();
 
+  useEffect(() => { document.title = 'EGP — EGP Compras'; }, []);
+
   // Garante que o localStorage reflete o modo atual ao montar
   useEffect(() => {
     writeUIMode('ai');

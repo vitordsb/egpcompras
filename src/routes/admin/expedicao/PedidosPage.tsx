@@ -309,6 +309,8 @@ export default function PedidosPage() {
   // ---- Status mutation --------------------------------------------
 
   async function changeStatus(s: ShipmentRow, newStatus: ShipmentStatus) {
+    const label = newStatus === 'shipped' ? 'saiu' : 'voltou';
+    if (!window.confirm(`Confirma que o pedido de ${s.client_name} ${label}?`)) return;
     const payload: any = { status: newStatus, updated_at: new Date().toISOString() };
     if (newStatus === 'shipped') payload.data_saida = new Date().toISOString();
     if (newStatus === 'returned') payload.data_retorno = new Date().toISOString();

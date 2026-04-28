@@ -649,6 +649,141 @@ export const toolDeclarations = [
     },
   },
 
+  // ---------- TAREFAS AGENDADAS ----------
+  {
+    name: 'create_scheduled_task',
+    description:
+      'Cria uma tarefa agendada que o EGP executará automaticamente no horário definido. Use quando o usuário disser "todo dia às X" ou "toda segunda às Y".',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        name:          { type: 'STRING' as Type, description: 'Nome curto da tarefa. Ex: "Análise de cotações".' },
+        instruction:   { type: 'STRING' as Type, description: 'O que a IA deve fazer/responder nesse horário.' },
+        schedule_time: { type: 'STRING' as Type, description: 'Horário no formato HH:MM (horário de Brasília). Ex: "09:00".' },
+        days_of_week:  {
+          type: 'ARRAY' as Type,
+          items: { type: 'NUMBER' as Type },
+          description: 'Dias da semana: 0=dom, 1=seg, 2=ter, 3=qua, 4=qui, 5=sex, 6=sáb. Omitir = todo dia.',
+        },
+      },
+      required: ['name', 'instruction', 'schedule_time'],
+    },
+  },
+  {
+    name: 'list_scheduled_tasks',
+    description: 'Lista todas as tarefas agendadas (ativas e inativas).',
+    parameters: { type: 'OBJECT' as Type, properties: {} },
+  },
+  {
+    name: 'toggle_scheduled_task',
+    description: 'Ativa ou desativa uma tarefa agendada.',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        task_id: { type: 'STRING' as Type },
+        name:    { type: 'STRING' as Type, description: 'Identificar por nome (fuzzy) se não tiver id.' },
+        enabled: { type: 'BOOLEAN' as Type, description: 'true = ativa, false = pausa.' },
+      },
+      required: ['enabled'],
+    },
+  },
+  {
+    name: 'delete_scheduled_task',
+    description: 'Remove uma tarefa agendada permanentemente.',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        task_id: { type: 'STRING' as Type },
+        name:    { type: 'STRING' as Type },
+      },
+    },
+  },
+
+  // ---------- TOOLS EXTRAS ----------
+  {
+    name: 'financial_summary',
+    description:
+      'Resumo financeiro: total em saídas no período, valor em aberto nas financeiras, títulos vencidos. Use quando pedirem visão geral financeira.',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        period: { type: 'STRING' as Type, description: 'Ex: "this_week", "this_month", "last_30_days", "today". Default: this_month.' },
+      },
+    },
+  },
+  {
+    name: 'client_history',
+    description: 'Histórico completo de um cliente: todos os pedidos de saída, títulos em aberto e pagos, total faturado.',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        client_name: { type: 'STRING' as Type, description: 'Nome ou parte do nome do cliente (fuzzy).' },
+      },
+      required: ['client_name'],
+    },
+  },
+  {
+    name: 'list_overdue_titles',
+    description: 'Lista títulos que já venceram e ainda estão em aberto. Use quando pedirem "títulos vencidos" ou "em atraso".',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        financeira_name: { type: 'STRING' as Type, description: 'Filtrar por financeira (opcional).' },
+      },
+    },
+  },
+  {
+    name: 'duplicate_shipment',
+    description: 'Clona um pedido de saída existente (mesmo cliente, mesmos itens) com nova data prevista. Útil para pedidos recorrentes.',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        shipment_id:   { type: 'STRING' as Type },
+        client_name:   { type: 'STRING' as Type, description: 'Identificar por client_name se não tiver id.' },
+        data_prevista: { type: 'STRING' as Type, description: 'Data de saída do novo pedido YYYY-MM-DD.' },
+      },
+    },
+  },
+  {
+    name: 'bulk_mark_shipped',
+    description: 'Marca vários pedidos como "saiu" de uma vez. Recebe lista de ids, nfes ou client_names.',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        shipment_ids:   { type: 'ARRAY' as Type, items: { type: 'STRING' as Type }, description: 'Lista de UUIDs.' },
+        client_names:   { type: 'ARRAY' as Type, items: { type: 'STRING' as Type }, description: 'Lista de nomes (fuzzy match).' },
+        numero_nfes:    { type: 'ARRAY' as Type, items: { type: 'STRING' as Type }, description: 'Lista de números de NF.' },
+      },
+    },
+  },
+  {
+    name: 'search_all',
+    description: 'Busca global por texto em pedidos, cotações, componentes e fornecedores de uma vez. Use quando o usuário não especificar onde buscar.',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        query: { type: 'STRING' as Type, description: 'Texto a buscar.' },
+      },
+      required: ['query'],
+    },
+  },
+  {
+    name: 'component_cost_alert',
+    description: 'Lista componentes onde o custo atual está acima do target_price_brl definido na BOM. Use quando pedirem "componentes fora do target" ou "alertas de custo".',
+    parameters: { type: 'OBJECT' as Type, properties: {} },
+  },
+  {
+    name: 'generate_shipment_report',
+    description: 'Gera um relatório em texto formatado das saídas de um período. Útil para copiar/colar em e-mail ou reunião.',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        period:  { type: 'STRING' as Type, description: 'Ex: "this_week", "this_month", "today".' },
+        status:  { type: 'STRING' as Type, description: 'pending | shipped | all. Default: all.' },
+      },
+    },
+  },
+
   // ---------- FINANCEIRA ----------
   {
     name: 'find_financeira_by_name',
@@ -2120,6 +2255,255 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
         else added.push({ action: 'created', product_id: productId, item_name: it.item_name ?? it.product_name, quantity: qty });
       }
       return { items_processed: added, items_failed: failed };
+    }
+
+    // -------- TAREFAS AGENDADAS --------
+
+    case 'create_scheduled_task': {
+      const name        = String(args.name ?? '').trim();
+      const instruction = String(args.instruction ?? '').trim();
+      const schedTime   = String(args.schedule_time ?? '').trim();
+      if (!name || !instruction || !schedTime) throw new Error('name, instruction e schedule_time são obrigatórios');
+      if (!/^\d{2}:\d{2}$/.test(schedTime)) throw new Error('schedule_time deve ser HH:MM');
+      const days = Array.isArray(args.days_of_week) ? args.days_of_week.map(Number) : null;
+      const { data, error } = await supabase
+        .from('scheduled_tasks')
+        .insert({ name, instruction, schedule_time: schedTime, days_of_week: days })
+        .select('id, name, schedule_time, days_of_week, enabled')
+        .single();
+      if (error) throw new Error(error.message);
+      const DAYS = ['dom','seg','ter','qua','qui','sex','sáb'];
+      const daysLabel = days ? days.map((d: number) => DAYS[d]).join(', ') : 'todo dia';
+      return { created: data, schedule: `${schedTime} BRT — ${daysLabel}` };
+    }
+
+    case 'list_scheduled_tasks': {
+      const { data, error } = await supabase
+        .from('scheduled_tasks')
+        .select('id, name, instruction, schedule_time, days_of_week, enabled, last_run_at, last_status')
+        .order('schedule_time');
+      if (error) throw new Error(error.message);
+      return { tasks: data ?? [] };
+    }
+
+    case 'toggle_scheduled_task': {
+      const enabled = Boolean(args.enabled);
+      let id = args.task_id ? String(args.task_id) : null;
+      if (!id && args.name) {
+        const { data: rows } = await supabase.from('scheduled_tasks').select('id').ilike('name', `%${String(args.name)}%`).limit(1);
+        id = (rows?.[0] as any)?.id ?? null;
+      }
+      if (!id) throw new Error('Tarefa não encontrada. Informe task_id ou name.');
+      const { error } = await supabase.from('scheduled_tasks').update({ enabled, updated_at: new Date().toISOString() }).eq('id', id);
+      if (error) throw new Error(error.message);
+      return { updated: true, task_id: id, enabled };
+    }
+
+    case 'delete_scheduled_task': {
+      let id = args.task_id ? String(args.task_id) : null;
+      if (!id && args.name) {
+        const { data: rows } = await supabase.from('scheduled_tasks').select('id').ilike('name', `%${String(args.name)}%`).limit(1);
+        id = (rows?.[0] as any)?.id ?? null;
+      }
+      if (!id) throw new Error('Tarefa não encontrada.');
+      const { error } = await supabase.from('scheduled_tasks').delete().eq('id', id);
+      if (error) throw new Error(error.message);
+      return { deleted: true, task_id: id };
+    }
+
+    // -------- TOOLS EXTRAS --------
+
+    case 'financial_summary': {
+      const period = String(args.period ?? 'this_month');
+      const now = new Date();
+      let since: string;
+      if (period === 'today') since = now.toISOString().slice(0, 10);
+      else if (period === 'this_week') {
+        const d = new Date(now); d.setDate(d.getDate() - d.getDay()); since = d.toISOString().slice(0, 10);
+      } else if (period === 'last_30_days') {
+        const d = new Date(now); d.setDate(d.getDate() - 30); since = d.toISOString().slice(0, 10);
+      } else {
+        since = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+      }
+      const [shipmentsRes, titulosRes] = await Promise.all([
+        supabase.from('shipments').select('id, client_name, valor_total, status, created_at').gte('created_at', since),
+        supabase.from('titulos').select('valor, status, vencimento'),
+      ]);
+      const shipments = (shipmentsRes.data ?? []) as any[];
+      const titulos = (titulosRes.data ?? []) as any[];
+      const today = now.toISOString().slice(0, 10);
+      const totalSaidas = shipments.reduce((s, x) => s + (Number(x.valor_total) || 0), 0);
+      const emAberto = titulos.filter((t: any) => t.status === 'aberto').reduce((s: number, t: any) => s + Number(t.valor), 0);
+      const vencidos  = titulos.filter((t: any) => t.status === 'aberto' && t.vencimento && t.vencimento < today).reduce((s: number, t: any) => s + Number(t.valor), 0);
+      return {
+        period: `desde ${since}`,
+        pedidos_criados: shipments.length,
+        total_saidas: totalSaidas,
+        titulos_em_aberto: emAberto,
+        titulos_vencidos: vencidos,
+        pedidos_pendentes: shipments.filter((s: any) => s.status === 'pending').length,
+        pedidos_saidos: shipments.filter((s: any) => s.status === 'shipped').length,
+      };
+    }
+
+    case 'client_history': {
+      const q = String(args.client_name ?? '').trim();
+      if (!q) throw new Error('client_name é obrigatório');
+      const [shipmentsRes, titulosRes] = await Promise.all([
+        supabase.from('shipments').select('id, client_name, numero_nfe, numero_venda, status, valor_total, data_prevista, data_saida, created_at')
+          .ilike('client_name', `%${q}%`).order('created_at', { ascending: false }).limit(50),
+        supabase.from('titulos').select('client_name, valor, status, vencimento, financeira:financeiras(nome)')
+          .ilike('client_name', `%${q}%`).order('created_at', { ascending: false }).limit(50),
+      ]);
+      const shipments = (shipmentsRes.data ?? []) as any[];
+      const titulos = (titulosRes.data ?? []) as any[];
+      const totalFaturado = shipments.reduce((s, x) => s + (Number(x.valor_total) || 0), 0);
+      const emAberto = titulos.filter((t: any) => t.status === 'aberto').reduce((s: number, t: any) => s + Number(t.valor), 0);
+      return { shipments, titulos, total_faturado: totalFaturado, total_em_aberto: emAberto };
+    }
+
+    case 'list_overdue_titles': {
+      const today = new Date().toISOString().slice(0, 10);
+      let q = supabase.from('titulos')
+        .select('id, client_name, valor, vencimento, numero_titulo, financeira:financeiras(nome)')
+        .eq('status', 'aberto').lt('vencimento', today).order('vencimento');
+      if (args.financeira_name) {
+        const { data: fr } = await supabase.from('financeiras').select('id').ilike('nome', `%${String(args.financeira_name)}%`).limit(1);
+        const fid = (fr?.[0] as any)?.id;
+        if (fid) q = q.eq('financeira_id', fid);
+      }
+      const { data, error } = await q;
+      if (error) throw new Error(error.message);
+      const titulos = (data ?? []) as any[];
+      const total = titulos.reduce((s, t) => s + Number(t.valor), 0);
+      return { overdue_titles: titulos, total_vencido: total, count: titulos.length };
+    }
+
+    case 'duplicate_shipment': {
+      let srcId = args.shipment_id ? String(args.shipment_id) : null;
+      if (!srcId && args.client_name) {
+        const { data: rows } = await supabase.from('shipments').select('id').ilike('client_name', `%${String(args.client_name)}%`).order('created_at', { ascending: false }).limit(1);
+        srcId = (rows?.[0] as any)?.id ?? null;
+      }
+      if (!srcId) throw new Error('Pedido não encontrado. Informe shipment_id ou client_name.');
+      const [shipRes, itemsRes] = await Promise.all([
+        supabase.from('shipments').select('*').eq('id', srcId).single(),
+        supabase.from('shipment_items').select('product_id, item_code, item_name, unit_price, quantity').eq('shipment_id', srcId),
+      ]);
+      if (shipRes.error || !shipRes.data) throw new Error('Pedido não encontrado');
+      const src = shipRes.data as any;
+      const { data: newShip, error: insErr } = await supabase.from('shipments')
+        .insert({
+          client_name: src.client_name, client_cnpj: src.client_cnpj, client_phone: src.client_phone,
+          client_email: src.client_email, client_address: src.client_address,
+          frete_tipo: src.frete_tipo, frete_valor: src.frete_valor, total_produtos: src.total_produtos,
+          valor_total: src.valor_total, forma_pagamento: src.forma_pagamento, condicao_pagamento: src.condicao_pagamento,
+          data_prevista: args.data_prevista ? String(args.data_prevista) : null,
+          notes: src.notes,
+        })
+        .select('id, client_name, status').single();
+      if (insErr || !newShip) throw new Error(insErr?.message ?? 'Falha ao clonar pedido');
+      if (itemsRes.data?.length) {
+        await supabase.from('shipment_items').insert(
+          (itemsRes.data as any[]).map((it) => ({ ...it, shipment_id: (newShip as any).id }))
+        );
+      }
+      return { cloned: newShip, items_copied: itemsRes.data?.length ?? 0, source_id: srcId };
+    }
+
+    case 'bulk_mark_shipped': {
+      const ids: string[] = [];
+      if (Array.isArray(args.shipment_ids)) ids.push(...args.shipment_ids.map(String));
+      if (Array.isArray(args.numero_nfes)) {
+        for (const nfe of args.numero_nfes) {
+          const { data } = await supabase.from('shipments').select('id').ilike('numero_nfe', `%${nfe}%`).limit(1);
+          if ((data?.[0] as any)?.id) ids.push((data![0] as any).id);
+        }
+      }
+      if (Array.isArray(args.client_names)) {
+        for (const cn of args.client_names) {
+          const { data } = await supabase.from('shipments').select('id').ilike('client_name', `%${cn}%`).eq('status', 'pending').limit(1);
+          if ((data?.[0] as any)?.id) ids.push((data![0] as any).id);
+        }
+      }
+      if (!ids.length) throw new Error('Nenhum pedido identificado.');
+      const now = new Date().toISOString();
+      const { error } = await supabase.from('shipments').update({ status: 'shipped', data_saida: now, updated_at: now }).in('id', ids);
+      if (error) throw new Error(error.message);
+      return { marked_shipped: ids.length, shipment_ids: ids };
+    }
+
+    case 'search_all': {
+      const q = String(args.query ?? '').trim();
+      if (!q) throw new Error('query é obrigatório');
+      const pattern = `%${q}%`;
+      const [ships, comps, suppls, quots] = await Promise.all([
+        supabase.from('shipments').select('id, client_name, numero_nfe, numero_venda, status').ilike('client_name', pattern).limit(5),
+        supabase.from('components').select('id, name').ilike('name', pattern).limit(5),
+        supabase.from('suppliers').select('id, name').ilike('name', pattern).limit(5),
+        supabase.from('quotations').select('id, title, status').ilike('title', pattern).limit(5),
+      ]);
+      return {
+        pedidos:      (ships.data ?? []),
+        componentes:  (comps.data ?? []),
+        fornecedores: (suppls.data ?? []),
+        cotacoes:     (quots.data ?? []),
+        total_results: (ships.data?.length ?? 0) + (comps.data?.length ?? 0) + (suppls.data?.length ?? 0) + (quots.data?.length ?? 0),
+      };
+    }
+
+    case 'component_cost_alert': {
+      const { data, error } = await supabase
+        .from('bom_items')
+        .select('target_price_brl, quantity, component:components(id, name), product:products(id, name)')
+        .not('target_price_brl', 'is', null);
+      if (error) throw new Error(error.message);
+      const alerts: any[] = [];
+      for (const row of (data ?? []) as any[]) {
+        const comp = row.component;
+        if (!comp) continue;
+        // Busca custo atual do componente via quotation_responses (último preço pago)
+        const { data: respItems } = await supabase
+          .from('quotation_response_items')
+          .select('unit_price, response:quotation_responses(submitted_at)')
+          .eq('quotation_item_id', comp.id)
+          .order('created_at', { ascending: false })
+          .limit(1);
+        const lastPrice = (respItems?.[0] as any)?.unit_price;
+        if (lastPrice && Number(lastPrice) > Number(row.target_price_brl)) {
+          alerts.push({
+            component: comp.name, product: row.product?.name,
+            target: Number(row.target_price_brl), last_price: Number(lastPrice),
+            overage_pct: Math.round(((Number(lastPrice) - Number(row.target_price_brl)) / Number(row.target_price_brl)) * 100),
+          });
+        }
+      }
+      return { alerts, count: alerts.length };
+    }
+
+    case 'generate_shipment_report': {
+      const period = String(args.period ?? 'this_month');
+      const status = String(args.status ?? 'all');
+      const now = new Date();
+      let since: string;
+      if (period === 'today') since = now.toISOString().slice(0, 10);
+      else if (period === 'this_week') { const d = new Date(now); d.setDate(d.getDate() - d.getDay()); since = d.toISOString().slice(0, 10); }
+      else { since = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`; }
+      let q = supabase.from('shipments').select('client_name, numero_nfe, numero_venda, status, valor_total, data_prevista, data_saida').gte('created_at', since).order('created_at', { ascending: false });
+      if (status !== 'all') q = q.eq('status', status);
+      const { data, error } = await q;
+      if (error) throw new Error(error.message);
+      const rows = (data ?? []) as any[];
+      const STATUS_PT: Record<string, string> = { pending: 'Pendente', shipped: 'Saiu', returned: 'Voltou', cancelled: 'Cancelado' };
+      const lines = rows.map((r) => {
+        const nf = r.numero_nfe ? `NF ${r.numero_nfe}` : r.numero_venda ? `Venda #${r.numero_venda}` : '—';
+        const val = r.valor_total ? `R$${Number(r.valor_total).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` : '';
+        return `• ${r.client_name} | ${nf} | ${STATUS_PT[r.status] ?? r.status} ${val}`;
+      }).join('\n');
+      const total = rows.reduce((s, r) => s + (Number(r.valor_total) || 0), 0);
+      return {
+        report: `Relatório de pedidos — ${since} até hoje\n\n${lines || '(nenhum pedido no período)'}\n\nTotal: R$${total.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} | ${rows.length} pedido(s)`,
+      };
     }
 
     // -------- FINANCEIRA --------

@@ -133,7 +133,14 @@ export default function RelatorioFinanceiraPage() {
       {loading ? (
         <p className="text-sm text-slate-500">Carregando…</p>
       ) : displayed.length === 0 ? (
-        <Card><CardBody><p className="text-sm text-slate-500">Nenhum título.</p></CardBody></Card>
+        <Card><CardBody>
+          <p className="text-sm text-slate-500">Nenhum título {tab !== 'todos' ? `com status "${tab}"` : ''}.</p>
+          {tab === 'aberto' && titulos.length === 0 && (
+            <p className="mt-2 text-xs text-slate-400">
+              Use o chat EGP para registrar: <em>"pedido X ficou na financeira Y"</em>
+            </p>
+          )}
+        </CardBody></Card>
       ) : (
         <Card>
           <div className="overflow-x-auto">
