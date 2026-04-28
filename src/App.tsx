@@ -16,6 +16,9 @@ import AiUsagePage from '@/routes/admin/AiUsagePage';
 import MemoriesPage from '@/routes/admin/MemoriesPage';
 import ProceduresPage from '@/routes/admin/ProceduresPage';
 import AccessUsersPage from '@/routes/admin/AccessUsersPage';
+import ComNotaPage from '@/routes/admin/financeira/ComNotaPage';
+import SemNotaPage from '@/routes/admin/financeira/SemNotaPage';
+import RelatorioFinanceiraPage from '@/routes/admin/financeira/RelatorioFinanceiraPage';
 import SupplierQuotePage from '@/routes/public/SupplierQuotePage';
 import { readUIMode, readLastAdminRoute } from '@/lib/ui-mode';
 import { supabase } from '@/lib/supabase';
@@ -235,6 +238,10 @@ function AuthenticatedApp() {
         <Route path="consumo-ia" element={<AiUsagePage />} />
         <Route path="memorias" element={<MemoriesPage />} />
         <Route path="procedimentos" element={<ProceduresPage />} />
+        <Route path="financeira" element={<Navigate to="/admin/financeira/com-nota" replace />} />
+        <Route path="financeira/com-nota" element={<ComNotaPage />} />
+        <Route path="financeira/sem-nota" element={<SemNotaPage />} />
+        <Route path="financeira/relatorio" element={<RelatorioFinanceiraPage />} />
         <Route
           path="acessos"
           element={isAccessAdmin ? <AccessUsersPage /> : <Navigate to="/admin/produtos" replace />}

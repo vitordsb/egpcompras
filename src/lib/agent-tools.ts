@@ -648,6 +648,106 @@ export const toolDeclarations = [
     },
   },
 
+  // ---------- FINANCEIRA ----------
+  {
+    name: 'find_financeira_by_name',
+    description:
+      'Busca financeira por nome aproximado. Se não encontrar, instrua o usuário a cadastrar via create_financeira.',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: { name: { type: 'STRING' as Type } },
+      required: ['name'],
+    },
+  },
+  {
+    name: 'list_financeiras',
+    description: 'Lista todas as financeiras cadastradas.',
+    parameters: { type: 'OBJECT' as Type, properties: {} },
+  },
+  {
+    name: 'create_financeira',
+    description: 'Cadastra uma nova financeira.',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        nome:    { type: 'STRING' as Type, description: 'Nome da financeira.' },
+        contato: { type: 'STRING' as Type, description: 'Telefone ou email (opcional).' },
+        notes:   { type: 'STRING' as Type, description: 'Observação (opcional).' },
+      },
+      required: ['nome'],
+    },
+  },
+  {
+    name: 'register_titulo',
+    description:
+      'Registra um título (duplicata mercantil) em uma financeira. Identifica a financeira por nome (fuzzy). Pode vincular ao pedido de saída pelo client_name, numero_nfe ou numero_venda.',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        financeira_name: { type: 'STRING' as Type, description: 'Nome da financeira (fuzzy match).' },
+        client_name:     { type: 'STRING' as Type, description: 'Nome do cliente do título.' },
+        valor:           { type: 'NUMBER' as Type, description: 'Valor do título em R$.' },
+        vencimento:      { type: 'STRING' as Type, description: 'Data de vencimento YYYY-MM-DD (opcional).' },
+        numero_titulo:   { type: 'STRING' as Type, description: 'Número do título/duplicata (opcional).' },
+        numero_nfe:      { type: 'STRING' as Type, description: 'Número da NF (opcional).' },
+        numero_venda:    { type: 'STRING' as Type, description: 'Número da venda no Conta Azul (opcional).' },
+        shipment_id:     { type: 'STRING' as Type, description: 'UUID do pedido de saída (opcional).' },
+        data_entrada:    { type: 'STRING' as Type, description: 'Data de entrada na financeira YYYY-MM-DD (opcional, default hoje).' },
+        notes:           { type: 'STRING' as Type, description: 'Observação (opcional).' },
+      },
+      required: ['financeira_name', 'client_name', 'valor'],
+    },
+  },
+  {
+    name: 'list_titulos',
+    description: 'Lista títulos com filtros opcionais. Default: apenas em aberto, últimos 100.',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        financeira_name: { type: 'STRING' as Type, description: 'Filtrar por financeira (fuzzy).' },
+        status:          { type: 'STRING' as Type, description: 'aberto | pago | devolvido | protestado. Omitir = todos.' },
+        client_name:     { type: 'STRING' as Type, description: 'Filtrar por cliente (fuzzy).' },
+        vencimento_ate:  { type: 'STRING' as Type, description: 'Listar títulos com vencimento até esta data YYYY-MM-DD.' },
+        limit:           { type: 'NUMBER' as Type },
+      },
+    },
+  },
+  {
+    name: 'mark_titulo_status',
+    description: 'Altera o status de um título (pago, devolvido, protestado). Identifica por id ou numero_titulo + financeira.',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        titulo_id:       { type: 'STRING' as Type },
+        numero_titulo:   { type: 'STRING' as Type },
+        financeira_name: { type: 'STRING' as Type },
+        new_status:      { type: 'STRING' as Type, description: 'pago | devolvido | protestado | aberto' },
+        data_pagamento:  { type: 'STRING' as Type, description: 'Data do pagamento YYYY-MM-DD (obrigatório se new_status=pago).' },
+      },
+      required: ['new_status'],
+    },
+  },
+  {
+    name: 'get_financeira_summary',
+    description:
+      'Retorna resumo por financeira: total em aberto, quantidade de títulos, próximos vencimentos. Útil para "quanto está em aberto na financeira X?".',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        financeira_name: { type: 'STRING' as Type, description: 'Filtrar por financeira específica (omitir = todas).' },
+      },
+    },
+  },
+  {
+    name: 'delete_titulo',
+    description: 'Remove um título. Confirmar com o usuário antes.',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: { titulo_id: { type: 'STRING' as Type } },
+      required: ['titulo_id'],
+    },
+  },
+
   // ---------- ESCRITAS — COTAÇÕES ----------
   {
     name: 'create_quotation',
@@ -2018,6 +2118,189 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
         else added.push({ action: 'created', product_id: productId, item_name: it.item_name ?? it.product_name, quantity: qty });
       }
       return { items_processed: added, items_failed: failed };
+    }
+
+    // -------- FINANCEIRA --------
+
+    case 'find_financeira_by_name': {
+      const q = String(args.name ?? '').trim();
+      if (!q) throw new Error('name é obrigatório');
+      const { data, error } = await supabase
+        .from('financeiras')
+        .select('id, nome, contato, notes')
+        .ilike('nome', `%${q}%`)
+        .limit(5);
+      if (error) throw new Error(error.message);
+      const results = data ?? [];
+      if (results.length === 0) {
+        return { found: false, message: `Nenhuma financeira com nome parecido com "${q}". Use create_financeira para cadastrar.` };
+      }
+      return { found: true, financeiras: results };
+    }
+
+    case 'list_financeiras': {
+      const { data, error } = await supabase
+        .from('financeiras')
+        .select('id, nome, contato')
+        .order('nome');
+      if (error) throw new Error(error.message);
+      return { financeiras: data ?? [] };
+    }
+
+    case 'create_financeira': {
+      const nome = String(args.nome ?? '').trim();
+      if (!nome) throw new Error('nome é obrigatório');
+      const { data, error } = await supabase
+        .from('financeiras')
+        .insert({
+          nome,
+          contato: args.contato ? String(args.contato).trim() : null,
+          notes:   args.notes   ? String(args.notes).trim()   : null,
+        })
+        .select('id, nome, contato')
+        .single();
+      if (error) throw new Error(error.message);
+      return { created: data };
+    }
+
+    case 'register_titulo': {
+      const clientName     = String(args.client_name ?? '').trim();
+      const valor          = Number(args.valor ?? 0);
+      if (!clientName) throw new Error('client_name é obrigatório');
+      if (!(valor > 0))  throw new Error('valor deve ser > 0');
+
+      // Resolve financeira por nome fuzzy
+      const finName = String(args.financeira_name ?? '').trim();
+      if (!finName) throw new Error('financeira_name é obrigatório');
+      const { data: finRows } = await supabase
+        .from('financeiras')
+        .select('id, nome')
+        .ilike('nome', `%${finName}%`)
+        .limit(1);
+      const financeira = finRows?.[0] as any;
+      if (!financeira) {
+        return {
+          registered: false,
+          message: `Financeira "${finName}" não encontrada. Cadastre com create_financeira primeiro.`,
+        };
+      }
+
+      // Resolve shipment_id opcional por numero_nfe / numero_venda
+      let shipmentId: string | null = args.shipment_id ? String(args.shipment_id) : null;
+      if (!shipmentId && (args.numero_nfe || args.numero_venda)) {
+        let sq = supabase.from('shipments').select('id').limit(1);
+        if (args.numero_nfe)   sq = sq.ilike('numero_nfe',   `%${args.numero_nfe}%`);
+        if (args.numero_venda) sq = sq.ilike('numero_venda', `%${args.numero_venda}%`);
+        const { data: shipRows } = await sq;
+        shipmentId = (shipRows?.[0] as any)?.id ?? null;
+      }
+
+      const payload: Record<string, unknown> = {
+        financeira_id:  financeira.id,
+        client_name:    clientName,
+        valor,
+        shipment_id:    shipmentId,
+        numero_titulo:  args.numero_titulo  ? String(args.numero_titulo).trim()  : null,
+        numero_nfe:     args.numero_nfe     ? String(args.numero_nfe).trim()     : null,
+        numero_venda:   args.numero_venda   ? String(args.numero_venda).trim()   : null,
+        vencimento:     args.vencimento     ? String(args.vencimento)            : null,
+        data_entrada:   args.data_entrada   ? String(args.data_entrada)          : null,
+        notes:          args.notes          ? String(args.notes).trim()          : null,
+      };
+      const { data, error } = await supabase
+        .from('titulos')
+        .insert(payload)
+        .select('id, financeira_id, client_name, valor, vencimento, status')
+        .single();
+      if (error) throw new Error(error.message);
+      return { registered: true, titulo: data, financeira: financeira.nome };
+    }
+
+    case 'list_titulos': {
+      const limit = Number(args.limit ?? 100);
+      let q = supabase
+        .from('titulos')
+        .select('id, client_name, valor, vencimento, status, data_entrada, data_pagamento, numero_titulo, numero_nfe, numero_venda, financeira:financeiras(id,nome)')
+        .order('created_at', { ascending: false })
+        .limit(limit);
+      if (args.status)        q = q.eq('status', String(args.status));
+      if (args.client_name)   q = q.ilike('client_name', `%${String(args.client_name)}%`);
+      if (args.vencimento_ate) q = q.lte('vencimento', String(args.vencimento_ate));
+      if (args.financeira_name) {
+        const { data: finRows } = await supabase
+          .from('financeiras').select('id').ilike('nome', `%${String(args.financeira_name)}%`).limit(1);
+        const finId = (finRows?.[0] as any)?.id;
+        if (finId) q = q.eq('financeira_id', finId);
+        else return { titulos: [], message: `Financeira "${args.financeira_name}" não encontrada.` };
+      }
+      const { data, error } = await q;
+      if (error) throw new Error(error.message);
+      return { titulos: data ?? [] };
+    }
+
+    case 'mark_titulo_status': {
+      const newStatus = String(args.new_status ?? '');
+      const allowed = ['aberto', 'pago', 'devolvido', 'protestado'];
+      if (!allowed.includes(newStatus)) throw new Error(`new_status inválido (${allowed.join(', ')})`);
+
+      let id = args.titulo_id ? String(args.titulo_id) : null;
+      if (!id && args.numero_titulo) {
+        let sq = supabase.from('titulos').select('id').eq('numero_titulo', String(args.numero_titulo));
+        if (args.financeira_name) {
+          const { data: fr } = await supabase.from('financeiras').select('id')
+            .ilike('nome', `%${String(args.financeira_name)}%`).limit(1);
+          if ((fr?.[0] as any)?.id) sq = sq.eq('financeira_id', (fr![0] as any).id);
+        }
+        const { data: rows } = await sq.limit(1);
+        id = (rows?.[0] as any)?.id ?? null;
+      }
+      if (!id) throw new Error('Título não encontrado. Informe titulo_id ou numero_titulo.');
+
+      const patch: Record<string, unknown> = { status: newStatus, updated_at: new Date().toISOString() };
+      if (newStatus === 'pago') {
+        patch.data_pagamento = args.data_pagamento ? String(args.data_pagamento) : new Date().toISOString().slice(0, 10);
+      }
+      const { error } = await supabase.from('titulos').update(patch).eq('id', id);
+      if (error) throw new Error(error.message);
+      return { updated: true, titulo_id: id, new_status: newStatus };
+    }
+
+    case 'get_financeira_summary': {
+      let q = supabase
+        .from('titulos')
+        .select('financeira_id, valor, status, vencimento, financeira:financeiras(nome)');
+      if (args.financeira_name) {
+        const { data: fr } = await supabase.from('financeiras').select('id')
+          .ilike('nome', `%${String(args.financeira_name)}%`).limit(1);
+        const fid = (fr?.[0] as any)?.id;
+        if (!fid) return { summary: [], message: `Financeira "${args.financeira_name}" não encontrada.` };
+        q = q.eq('financeira_id', fid);
+      }
+      const { data, error } = await q;
+      if (error) throw new Error(error.message);
+
+      const map = new Map<string, { financeira: string; em_aberto: number; total_aberto: number; vencidos: number; total_geral: number }>();
+      const hoje = new Date().toISOString().slice(0, 10);
+      for (const row of (data ?? []) as any[]) {
+        const fname = row.financeira?.nome ?? row.financeira_id;
+        if (!map.has(fname)) map.set(fname, { financeira: fname, em_aberto: 0, total_aberto: 0, vencidos: 0, total_geral: 0 });
+        const entry = map.get(fname)!;
+        entry.total_geral += Number(row.valor);
+        if (row.status === 'aberto') {
+          entry.em_aberto++;
+          entry.total_aberto += Number(row.valor);
+          if (row.vencimento && row.vencimento < hoje) entry.vencidos++;
+        }
+      }
+      return { summary: Array.from(map.values()) };
+    }
+
+    case 'delete_titulo': {
+      const id = String(args.titulo_id ?? '');
+      if (!id) throw new Error('titulo_id é obrigatório');
+      const { error } = await supabase.from('titulos').delete().eq('id', id);
+      if (error) throw new Error(error.message);
+      return { deleted: true, titulo_id: id };
     }
 
     default:

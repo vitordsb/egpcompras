@@ -149,5 +149,34 @@ export interface ShipmentObservation {
   created_at: string;
 }
 
+export interface Financeira {
+  id: string;
+  nome: string;
+  contato: string | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export type TituloStatus = 'aberto' | 'pago' | 'devolvido' | 'protestado';
+
+export interface Titulo {
+  id: string;
+  financeira_id: string;
+  shipment_id: string | null;
+  numero_titulo: string | null;
+  numero_nfe: string | null;
+  numero_venda: string | null;
+  client_name: string;
+  valor: number;
+  vencimento: string | null;
+  status: TituloStatus;
+  data_entrada: string;
+  data_pagamento: string | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 // Quando o schema estabilizar, gerar tipos via:
 //   pnpm dlx supabase gen types typescript --project-id <ref> > src/types/db.generated.ts
