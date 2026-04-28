@@ -11,6 +11,7 @@ import {
 import { describeToolCall } from '@/lib/tool-labels';
 import type { AgentProvider } from '@/lib/providers/types';
 import { supabase } from '@/lib/supabase';
+import { useInternalAuth } from '@/lib/auth-context';
 import { Button } from '@/components/ui/Button';
 import MarkdownText from '@/components/MarkdownText';
 import { cn } from '@/lib/utils';
@@ -57,6 +58,7 @@ function formatRelativeDate(iso: string): string {
 }
 
 export default function BuyerAgentPage() {
+  const { userLabel } = useInternalAuth();
   const [chats, setChats] = useState<ChatSummary[]>([]);
   const [currentChatId, setCurrentChatId] = useState<string | null>(null);
   const [history, setHistory] = useState<ChatTurn[]>([]);
@@ -587,6 +589,9 @@ export default function BuyerAgentPage() {
                 if (t.role === 'user' && (t.text || t.inlineData)) {
                   return (
                     <div key={idx} className="flex flex-col items-end gap-1">
+                      <span className="px-1 text-[11px] font-medium text-slate-400">
+                        {userLabel}
+                      </span>
                       {t.inlineData && (
                         <div className="flex items-center gap-1.5 rounded-md border border-brand-200 bg-brand-50 px-2.5 py-1 text-xs text-brand-700">
                           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-3.5 w-3.5 shrink-0">

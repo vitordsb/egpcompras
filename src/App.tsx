@@ -205,9 +205,10 @@ function AuthenticatedApp() {
   const initialMode = readUIMode();
   const homeTarget = initialMode === 'ai' ? '/ia' : readLastAdminRoute();
   const isAccessAdmin = masterAuthenticated || isAccessAdminSession(session);
+  const userEmail = session?.user?.email ?? null;
 
   return (
-    <InternalAuthProvider isMaster={isAccessAdmin}>
+    <InternalAuthProvider isMaster={isAccessAdmin} userEmail={userEmail}>
     <Routes>
       <Route path="/" element={<Navigate to={homeTarget} replace />} />
       <Route path="/login" element={<Navigate to={homeTarget} replace />} />
