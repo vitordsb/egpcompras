@@ -5,7 +5,8 @@ import { Button } from '@/components/ui/Button';
 import { Card, CardBody, CardHeader, CardTitle } from '@/components/ui/Card';
 import { Input, Label, Textarea } from '@/components/ui/Input';
 import { cn } from '@/lib/utils';
-import { STATUS_LABEL, STATUS_PILL, formatDate, formatDateTime } from './shared';
+import { STATUS_LABEL, STATUS_PILL, formatDate, formatDateTime, effectiveStatus, isLate } from './shared';
+import type { DisplayStatus } from './shared';
 import { friendlyDbError } from '@/lib/db-error';
 
 interface ShipmentRow extends Shipment {
@@ -68,7 +69,7 @@ export default function PedidosPage() {
   const [list, setList] = useState<ShipmentRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [listError, setListError] = useState<string | null>(null);
-  const [statusFilter, setStatusFilter] = useState<ShipmentStatus | 'all'>('all');
+  const [statusFilter, setStatusFilter] = useState<DisplayStatus | 'all'>('all');
   const [search, setSearch] = useState('');
 
   const [form, setForm] = useState<FormState | null>(null);
@@ -130,7 +131,13 @@ export default function PedidosPage() {
 
   const filtered = useMemo(() => {
     return list.filter((s) => {
-      if (statusFilter !== 'all' && s.status !== statusFilter) return false;
+      if (statusFilter !== 'all') {
+        if (statusFilter === 'late') {
+          if (!isLate(s)) return false;
+        } else {
+          if (s.status !== statusFilter || isLate(s)) return false;
+        }
+      }
       if (search.trim()) {
         const q = search.toLowerCase();
         const hay = `${s.client_name} ${s.numero_nfe ?? ''} ${s.numero_venda ?? ''}`.toLowerCase();
@@ -404,8 +411,11 @@ export default function PedidosPage() {
   // ---- Stats por status -------------------------------------------
 
   const stats = useMemo(() => {
-    const byStatus = { pending: 0, shipped: 0, returned: 0, cancelled: 0 };
-    for (const s of list) byStatus[s.status]++;
+    const byStatus = { pending: 0, shipped: 0, returned: 0, cancelled: 0, late: 0 };
+    for (const s of list) {
+      if (isLate(s)) byStatus.late++;
+      else byStatus[s.status]++;
+    }
     const withObs = list.filter((s) => (s.observations_count ?? 0) > 0).length;
     return { ...byStatus, withObs };
   }, [list]);
@@ -432,14 +442,15 @@ export default function PedidosPage() {
       )}
 
       {/* Cards de stats */}
-      <div className="mb-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+      <div className="mb-6 grid gap-3 sm:grid-cols-3 lg:grid-cols-6">
         {(
           [
-            { key: 'all', label: 'Total', value: list.length, color: 'text-slate-900' },
-            { key: 'pending', label: 'Pendentes', value: stats.pending, color: 'text-amber-700' },
-            { key: 'shipped', label: 'Saíram', value: stats.shipped, color: 'text-emerald-700' },
-            { key: 'returned', label: 'Voltaram', value: stats.returned, color: 'text-sky-700' },
-            { key: 'with-obs', label: 'Com observações', value: stats.withObs, color: 'text-purple-700' },
+            { key: 'all',      label: 'Total',            value: list.length,   color: 'text-slate-900' },
+            { key: 'late',     label: 'Atrasados',        value: stats.late,    color: 'text-red-700' },
+            { key: 'pending',  label: 'Pendentes',        value: stats.pending, color: 'text-amber-700' },
+            { key: 'shipped',  label: 'Saíram',           value: stats.shipped, color: 'text-emerald-700' },
+            { key: 'returned', label: 'Voltaram',         value: stats.returned, color: 'text-sky-700' },
+            { key: 'with-obs', label: 'Com observações',  value: stats.withObs, color: 'text-purple-700' },
           ] as const
         ).map((s) => (
           <button
@@ -449,15 +460,16 @@ export default function PedidosPage() {
               if (s.key === 'all' || s.key === 'with-obs') {
                 setStatusFilter('all');
               } else {
-                setStatusFilter(s.key as ShipmentStatus);
+                setStatusFilter(s.key as DisplayStatus);
               }
             }}
             className={cn(
               'rounded-lg border p-3 text-left transition-colors',
-              statusFilter === s.key ||
-                (s.key === 'all' && statusFilter === 'all')
+              statusFilter === s.key || (s.key === 'all' && statusFilter === 'all')
                 ? 'border-brand-300 bg-brand-50'
-                : 'border-slate-200 bg-white hover:bg-slate-50'
+                : s.key === 'late' && stats.late > 0
+                  ? 'border-red-200 bg-red-50 hover:bg-red-100'
+                  : 'border-slate-200 bg-white hover:bg-slate-50'
             )}
           >
             <div className="text-xs uppercase tracking-wide text-slate-500">{s.label}</div>
@@ -532,10 +544,10 @@ export default function PedidosPage() {
                       <span
                         className={cn(
                           'inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium',
-                          STATUS_PILL[s.status]
+                          STATUS_PILL[effectiveStatus(s)]
                         )}
                       >
-                        {STATUS_LABEL[s.status]}
+                        {STATUS_LABEL[effectiveStatus(s)]}
                       </span>
                     </td>
                     <td className="px-5 py-3 text-slate-600">{formatDate(s.data_prevista)}</td>
@@ -925,10 +937,10 @@ export default function PedidosPage() {
                 <span
                   className={cn(
                     'inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium',
-                    STATUS_PILL[detailShipment.status]
+                    STATUS_PILL[effectiveStatus(detailShipment)]
                   )}
                 >
-                  {STATUS_LABEL[detailShipment.status]}
+                  {STATUS_LABEL[effectiveStatus(detailShipment)]}
                 </span>
               </div>
               <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-slate-500">

@@ -289,6 +289,8 @@ Quando o usuário disser "todo dia às X", "toda segunda às Y", "marque pra..."
 - "resumo financeiro / quanto saiu esse mês" → financial_summary
 - "histórico do cliente X" → client_history
 - "títulos vencidos / em atraso" → list_overdue_titles
+- "pedidos atrasados / o que está em atraso" → list_late_shipments
+- "itens nos pedidos atrasados / quais produtos estão atrasados" → list_late_shipments(include_items=true)
 - "cria um pedido igual ao de X" → duplicate_shipment
 - "marca como saído os pedidos 1, 2 e 3" → bulk_mark_shipped
 - "busca X em tudo" → search_all

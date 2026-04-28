@@ -608,6 +608,20 @@ export const toolDeclarations = [
     },
   },
   {
+    name: 'list_late_shipments',
+    description:
+      'Lista pedidos pendentes que estão atrasados (data_prevista < hoje). Retorna os pedidos e, se include_items=true, também os itens de cada pedido. Use para "quais pedidos estão atrasados?", "quais itens estão nos pedidos atrasados?".',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        include_items: {
+          type: 'BOOLEAN' as Type,
+          description: 'Se true, inclui a lista de itens de cada pedido atrasado.',
+        },
+      },
+    },
+  },
+  {
     name: 'find_shipments_with_observations',
     description:
       'Lista pedidos que têm pelo menos uma observação — útil pra "quais pedidos tiveram faltas", "lista pedidos com problemas". Retorna pedido + cliente + observações.',
@@ -2165,6 +2179,41 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
         .update({ updated_at: new Date().toISOString() })
         .eq('id', id);
       return { observation: data, shipment_id: id };
+    }
+
+    case 'list_late_shipments': {
+      const today = new Date().toISOString().slice(0, 10);
+      const { data: lateShips, error: lateErr } = await supabase
+        .from('shipments')
+        .select('id, client_name, numero_nfe, numero_venda, data_prevista, valor_total, status')
+        .eq('status', 'pending')
+        .lt('data_prevista', today)
+        .not('data_prevista', 'is', null)
+        .order('data_prevista', { ascending: true });
+      if (lateErr) throw new Error(lateErr.message);
+      const ships = (lateShips ?? []) as any[];
+      if (!args.include_items || ships.length === 0) {
+        return { late_count: ships.length, shipments: ships };
+      }
+      // Carrega itens de todos os pedidos atrasados em paralelo
+      const withItems = await Promise.all(
+        ships.map(async (s: any) => {
+          const { data: items } = await supabase
+            .from('shipment_items')
+            .select('item_code, item_name, quantity, unit_price, product:products(name)')
+            .eq('shipment_id', s.id);
+          return {
+            ...s,
+            items: (items ?? []).map((it: any) => ({
+              item_code: it.item_code,
+              item_name: it.item_name ?? it.product?.name,
+              quantity: Number(it.quantity),
+              unit_price: it.unit_price != null ? Number(it.unit_price) : null,
+            })),
+          };
+        })
+      );
+      return { late_count: ships.length, shipments: withItems };
     }
 
     case 'find_shipments_with_observations': {
