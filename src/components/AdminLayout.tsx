@@ -4,6 +4,7 @@ import type { ReactNode } from 'react';
 import { cn } from '@/lib/utils';
 import Header from '@/components/Header';
 import QuickChatDrawer from '@/components/QuickChatDrawer';
+import { useInternalAuth } from '@/lib/auth-context';
 import {
   writeUIMode,
   writeLastAdminRoute,
@@ -160,6 +161,17 @@ const configLinks: NavItem[] = [
   },
 ];
 
+const accessLink: NavItem = {
+  to: '/admin/acessos',
+  label: 'Acessos',
+  description: 'Usuários e senhas',
+  icon: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-4 w-4">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 6a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0ZM4.5 20.25a8.25 8.25 0 1 1 15 0M18 12.75h3m-1.5-1.5v3" />
+    </svg>
+  ),
+};
+
 function NavItemRow({
   item,
   onNavigate,
@@ -284,6 +296,7 @@ export default function AdminLayout() {
   const location = useLocation();
   const navigate = useNavigate();
   const mode = useUIMode();
+  const { isMaster } = useInternalAuth();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [configOpen, setConfigOpen] = useState(false);
   const [quickChatOpen, setQuickChatOpen] = useState(false);
@@ -346,7 +359,8 @@ export default function AdminLayout() {
   }, [mobileOpen]);
 
   // Verifica se alguma rota de config está ativa pra destacar o botão
-  const configActive = configLinks.some(
+  const configNavLinks = isMaster ? [...configLinks, accessLink] : configLinks;
+  const configActive = configNavLinks.some(
     (l) => l.to && location.pathname.startsWith(l.to)
   );
 
@@ -409,7 +423,7 @@ export default function AdminLayout() {
         <div ref={configRef} className="relative border-t border-slate-100 p-3">
           {configOpen && (
             <div className="absolute bottom-full left-3 right-3 mb-2 space-y-1 rounded-md border border-slate-200 bg-white p-2 shadow-lg">
-              {configLinks.map((l) => (
+              {configNavLinks.map((l) => (
                 <NavItemRow key={l.to} item={l} onNavigate={() => setConfigOpen(false)} />
               ))}
             </div>

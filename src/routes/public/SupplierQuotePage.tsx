@@ -23,6 +23,7 @@ interface ResolvedQuotation {
   title: string;
   productName: string;
   paymentTerms: string | null;
+  deadline: string | null;
   inviteId: string | null;          // null quando vem do public_token
   prefill: {
     supplierName: string;
@@ -69,6 +70,7 @@ export default function SupplierQuotePage() {
           `id, status, supplier_id,
            quotation:quotations(
              id, title, payment_terms, public_token,
+             deadline,
              product:products(name)
            ),
            supplier:suppliers(name, email, default_currency)`
@@ -81,6 +83,7 @@ export default function SupplierQuotePage() {
       let title = '';
       let productName = '';
       let paymentTerms: string | null = null;
+      let deadline: string | null = null;
       let prefill: ResolvedQuotation['prefill'] = null;
       let alreadyResponded = false;
 
@@ -93,6 +96,7 @@ export default function SupplierQuotePage() {
             id: string;
             title: string;
             payment_terms: string | null;
+            deadline: string | null;
             product: { name: string } | null;
           } | null;
           supplier: { name: string; email: string; default_currency: Currency } | null;
@@ -107,6 +111,15 @@ export default function SupplierQuotePage() {
         title = inv.quotation.title;
         productName = inv.quotation.product?.name ?? '';
         paymentTerms = inv.quotation.payment_terms;
+        deadline = inv.quotation.deadline;
+        if (inv.status === 'responded') alreadyResponded = true;
+        if (!alreadyResponded && deadline && new Date(deadline).getTime() < Date.now()) {
+          if (!cancelled) {
+            setLoadError('Este link de cotação expirou. Peça um novo link ao comprador.');
+            setLoading(false);
+          }
+          return;
+        }
         if (inv.supplier) {
           prefill = {
             supplierName: inv.supplier.name,
@@ -114,13 +127,12 @@ export default function SupplierQuotePage() {
             supplierCurrency: inv.supplier.default_currency,
           };
         }
-        if (inv.status === 'responded') alreadyResponded = true;
       } else {
         // 2) Tenta como public_token
         const qRes = await supabase
           .from('quotations')
           .select(
-            'id, title, payment_terms, public_token, product:products(name)'
+            'id, title, payment_terms, deadline, public_token, product:products(name)'
           )
           .eq('public_token', token)
           .maybeSingle();
@@ -129,12 +141,21 @@ export default function SupplierQuotePage() {
             id: string;
             title: string;
             payment_terms: string | null;
+            deadline: string | null;
             product: { name: string } | null;
           };
           quotationId = q.id;
           title = q.title;
           productName = q.product?.name ?? '';
           paymentTerms = q.payment_terms;
+          deadline = q.deadline;
+          if (deadline && new Date(deadline).getTime() < Date.now()) {
+            if (!cancelled) {
+              setLoadError('Este link de cotação expirou. Peça um novo link ao comprador.');
+              setLoading(false);
+            }
+            return;
+          }
         }
       }
 
@@ -200,6 +221,7 @@ export default function SupplierQuotePage() {
           title,
           productName,
           paymentTerms,
+          deadline,
           inviteId,
           prefill,
         });
@@ -244,6 +266,9 @@ export default function SupplierQuotePage() {
     if (!resolved) return;
     setSubmitError(null);
 
+    if (resolved.deadline && new Date(resolved.deadline).getTime() < Date.now()) {
+      return setSubmitError('Este link expirou. Peça um novo link ao comprador.');
+    }
     if (!supplierName.trim()) return setSubmitError('Informe o nome da empresa.');
     if (!sellerName.trim()) return setSubmitError('Informe o nome do vendedor.');
     if (!supplierEmail.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(supplierEmail.trim())) {
@@ -388,6 +413,11 @@ export default function SupplierQuotePage() {
         <p className="text-sm text-slate-500">
           Produto: <strong>{resolved.productName}</strong>
         </p>
+        {resolved.deadline && (
+          <p className="mt-1 text-xs text-slate-500">
+            Link válido até {new Date(resolved.deadline).toLocaleString('pt-BR')}
+          </p>
+        )}
       </div>
 
       <form onSubmit={submit} className="space-y-6">

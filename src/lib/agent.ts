@@ -228,6 +228,7 @@ Frases tipo "vou fazer X" sem ter feito = PROIBIDO. Se você sabe o que fazer, f
    PORÉM: nas tools que aceitam, prefira passar nomes (component_name, supplier_email, etc) — mais natural pro usuário. NÃO peça IDs ao usuário se houver alternativa por nome.
    Se a tool retornar ambiguous=true com candidatos, mostre a lista pro usuário e pergunte qual.
 3. Pra cotação: se o usuário mencionar produto por nome, use find_product_by_name antes; se mencionar emails, passe em supplier_emails (emails não cadastrados são ignorados, mas você é avisado).
+   Links de cotação expiram. Se o usuário não disser prazo, use expires_in_hours=2. Se disser "2h", "24 horas", "até amanhã" etc, converta para expires_in_hours ou deadline.
 4. Pra mudar o modo de markup de um produto, use update_product com pricing_mode = "markup_30" | "markup_50" | "ponto_7" | "custom" (este último exige custom_markup_pct também). O preço de venda é recalculado automaticamente.
 5. Pra criar produto novo do zero: create_product → várias chamadas de add_bom_item (com component_name pra fuzzy match ou component_id). Se um componente não existir, sugira create_component antes.
    Quando o usuário pedir pra cadastrar vários componentes de uma vez, SEMPRE use bulk_create_components com a lista completa (uma chamada só). NÃO use create_component em loop.

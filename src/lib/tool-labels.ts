@@ -83,6 +83,7 @@ const TOOL_LABELS: Record<string, LabelFn> = {
     if (a.status) return `Listando pedidos com status "${a.status}"`;
     if (a.client_name) return `Buscando pedidos do cliente "${a.client_name}"`;
     if (a.nfe) return `Buscando pedidos da NFe "${a.nfe}"`;
+    if (a.numero_venda) return `Buscando pedido da venda "${a.numero_venda}"`;
     return 'Listando pedidos de saída';
   },
   get_shipment_details: () => 'Lendo detalhes do pedido',

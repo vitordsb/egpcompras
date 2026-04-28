@@ -515,6 +515,7 @@ export const toolDeclarations = [
         },
         client_name: { type: 'STRING' as Type, description: 'Match aproximado por cliente.' },
         nfe: { type: 'STRING' as Type, description: 'Match aproximado por NFe.' },
+        numero_venda: { type: 'STRING' as Type, description: 'Match aproximado pelo número da venda.' },
         limit: { type: 'NUMBER' as Type },
       },
     },
@@ -528,6 +529,7 @@ export const toolDeclarations = [
       properties: {
         shipment_id: { type: 'STRING' as Type },
         numero_nfe: { type: 'STRING' as Type },
+        numero_venda: { type: 'STRING' as Type },
         client_name: { type: 'STRING' as Type },
       },
     },
@@ -541,6 +543,7 @@ export const toolDeclarations = [
       properties: {
         shipment_id: { type: 'STRING' as Type },
         numero_nfe: { type: 'STRING' as Type },
+        numero_venda: { type: 'STRING' as Type },
         client_name: { type: 'STRING' as Type },
         new_status: {
           type: 'STRING' as Type,
@@ -596,6 +599,7 @@ export const toolDeclarations = [
       properties: {
         shipment_id: { type: 'STRING' as Type },
         numero_nfe: { type: 'STRING' as Type },
+        numero_venda: { type: 'STRING' as Type },
         client_name: { type: 'STRING' as Type },
         content: { type: 'STRING' as Type },
       },
@@ -660,6 +664,14 @@ export const toolDeclarations = [
           items: { type: 'STRING' as Type },
         },
         payment_terms: { type: 'STRING' as Type },
+        expires_in_hours: {
+          type: 'NUMBER' as Type,
+          description: 'Validade do link em horas a partir de agora. Default 2.',
+        },
+        deadline: {
+          type: 'STRING' as Type,
+          description: 'Alternativa a expires_in_hours: data/hora ISO em que o link expira.',
+        },
         supplier_emails: {
           type: 'ARRAY' as Type,
           items: { type: 'STRING' as Type },
@@ -677,6 +689,14 @@ export const toolDeclarations = [
         quotation_id: { type: 'STRING' as Type },
         title: { type: 'STRING' as Type },
         payment_terms: { type: 'STRING' as Type },
+        expires_in_hours: {
+          type: 'NUMBER' as Type,
+          description: 'Nova validade do link em horas a partir de agora.',
+        },
+        deadline: {
+          type: 'STRING' as Type,
+          description: 'Nova data/hora ISO em que o link expira. Use null para remover expiração.',
+        },
       },
       required: ['quotation_id'],
     },
@@ -701,6 +721,23 @@ interface BomItemFull {
   quantity: number;
   target_price_brl: number | null;
   component_name: string;
+}
+
+const DEFAULT_QUOTE_EXPIRATION_HOURS = 2;
+
+function addHoursFromNow(hours: number): string {
+  if (!Number.isFinite(hours) || hours <= 0) {
+    throw new Error('expires_in_hours precisa ser maior que 0');
+  }
+  return new Date(Date.now() + hours * 60 * 60 * 1000).toISOString();
+}
+
+function resolveQuotationDeadline(args: any): string {
+  if (args.deadline) return String(args.deadline);
+  if (args.expires_in_hours !== undefined) {
+    return addHoursFromNow(Number(args.expires_in_hours));
+  }
+  return addHoursFromNow(DEFAULT_QUOTE_EXPIRATION_HOURS);
 }
 
 async function getProductWithBom(productId: string) {
@@ -745,7 +782,7 @@ async function findProductByName(name: string): Promise<{ id: string; name: stri
 }
 
 /**
- * Resolve um shipment_id a partir dos args (id direto, nfe ou client_name fuzzy).
+ * Resolve um shipment_id a partir dos args (id direto, venda, nfe ou client_name fuzzy).
  * Retorna string com o id quando há resolução única, ou objeto ambiguous com candidatos.
  */
 async function resolveShipmentId(
@@ -755,20 +792,27 @@ async function resolveShipmentId(
   | {
       ambiguous: true;
       message: string;
-      candidates: { shipment_id: string; client_name: string; numero_nfe: string | null; status: string }[];
+      candidates: {
+        shipment_id: string;
+        client_name: string;
+        numero_nfe: string | null;
+        numero_venda: string | null;
+        status: string;
+      }[];
     }
 > {
   if (args.shipment_id) return String(args.shipment_id);
 
   let query = supabase
     .from('shipments')
-    .select('id, client_name, numero_nfe, status')
+    .select('id, client_name, numero_nfe, numero_venda, status')
     .order('created_at', { ascending: false })
     .limit(20);
   if (args.numero_nfe) query = query.ilike('numero_nfe', `%${String(args.numero_nfe)}%`);
+  if (args.numero_venda) query = query.ilike('numero_venda', `%${String(args.numero_venda)}%`);
   if (args.client_name) query = query.ilike('client_name', `%${String(args.client_name)}%`);
-  if (!args.numero_nfe && !args.client_name) {
-    throw new Error('Forneça shipment_id OU numero_nfe OU client_name');
+  if (!args.numero_nfe && !args.numero_venda && !args.client_name) {
+    throw new Error('Forneça shipment_id OU numero_nfe OU numero_venda OU client_name');
   }
   const { data, error } = await query;
   if (error) throw new Error(error.message);
@@ -776,6 +820,8 @@ async function resolveShipmentId(
   if (matches.length === 0) {
     throw new Error(
       `Nenhum pedido encontrado com${args.numero_nfe ? ` NFe "${args.numero_nfe}"` : ''}${
+        args.numero_venda ? ` venda "${args.numero_venda}"` : ''
+      }${
         args.client_name ? ` cliente "${args.client_name}"` : ''
       }.`
     );
@@ -788,6 +834,7 @@ async function resolveShipmentId(
       shipment_id: m.id,
       client_name: m.client_name,
       numero_nfe: m.numero_nfe,
+      numero_venda: m.numero_venda,
       status: m.status,
     })),
   };
@@ -940,7 +987,7 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
       let q = supabase
         .from('quotations')
         .select(
-          'id, title, status, created_at, product:products(name), invites:quotation_invites(id, status)'
+          'id, title, status, deadline, created_at, product:products(name), invites:quotation_invites(id, status)'
         )
         .order('created_at', { ascending: false })
         .limit(limit);
@@ -952,6 +999,8 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
           id: row.id,
           title: row.title,
           status: row.status,
+          deadline: row.deadline,
+          expired: row.deadline ? new Date(row.deadline).getTime() < Date.now() : false,
           created_at: row.created_at,
           product_name: row.product?.name ?? null,
           invites_count: row.invites?.length ?? 0,
@@ -967,7 +1016,7 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
         supabase
           .from('quotations')
           .select(
-            'id, title, status, payment_terms, public_token, created_at, usd_brl_rate, product:products(name)'
+            'id, title, status, payment_terms, deadline, public_token, created_at, usd_brl_rate, product:products(name)'
           )
           .eq('id', id)
           .single(),
@@ -988,6 +1037,8 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
         title: q.title,
         status: q.status,
         payment_terms: q.payment_terms,
+        deadline: q.deadline,
+        expired: q.deadline ? new Date(q.deadline).getTime() < Date.now() : false,
         product_name: q.product?.name ?? null,
         created_at: q.created_at,
         public_url: buildPublicQuoteUrl(q.public_token),
@@ -1257,6 +1308,7 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
         ? args.exclude_component_names.map((s: any) => String(s).toLowerCase())
         : [];
       const paymentTerms = args.payment_terms ? String(args.payment_terms) : null;
+      const deadline = resolveQuotationDeadline(args);
       const supplierEmails: string[] = Array.isArray(args.supplier_emails)
         ? args.supplier_emails.map((s: any) => String(s).toLowerCase().trim()).filter(Boolean)
         : [];
@@ -1287,6 +1339,7 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
           status: 'sent',
           usd_brl_rate: usdRate,
           payment_terms: paymentTerms,
+          deadline,
         })
         .select('id, public_token')
         .single();
@@ -1344,6 +1397,7 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
         excluded_components: excludedComponents,
         items_count: filtered.length,
         public_url: buildPublicQuoteUrl(publicToken),
+        expires_at: deadline,
         nominal_invites: invites,
         emails_not_in_supplier_list: unmatchedEmails,
       };
@@ -1356,6 +1410,11 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
       if (args.title) payload.title = String(args.title).trim();
       if (args.payment_terms !== undefined)
         payload.payment_terms = args.payment_terms ? String(args.payment_terms) : null;
+      if (args.expires_in_hours !== undefined) {
+        payload.deadline = addHoursFromNow(Number(args.expires_in_hours));
+      } else if (args.deadline !== undefined) {
+        payload.deadline = args.deadline ? String(args.deadline) : null;
+      }
       if (Object.keys(payload).length === 0) throw new Error('Nada a atualizar');
       const { error } = await supabase.from('quotations').update(payload).eq('id', id);
       if (error) throw new Error(error.message);
@@ -1751,12 +1810,16 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
       const limit = Number(args.limit ?? 50);
       let q = supabase
         .from('shipments')
-        .select('id, client_name, numero_nfe, status, data_prevista, data_saida, data_retorno, created_at')
+        .select(
+          `id, client_name, numero_nfe, numero_venda, data_venda, status, data_prevista, data_saida, data_retorno,
+           valor_total, forma_pagamento, condicao_pagamento, created_at`
+        )
         .order('created_at', { ascending: false })
         .limit(limit);
       if (args.status) q = q.eq('status', String(args.status));
       if (args.client_name) q = q.ilike('client_name', `%${String(args.client_name)}%`);
       if (args.nfe) q = q.ilike('numero_nfe', `%${String(args.nfe)}%`);
+      if (args.numero_venda) q = q.ilike('numero_venda', `%${String(args.numero_venda)}%`);
       const { data, error } = await q;
       if (error) throw new Error(error.message);
       return { shipments: data ?? [] };
@@ -1770,7 +1833,7 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
         supabase.from('shipments').select('*').eq('id', id).single(),
         supabase
           .from('shipment_items')
-          .select('id, quantity, product:products(id, name)')
+          .select('id, quantity, item_code, item_name, unit_price, product:products(id, name)')
           .eq('shipment_id', id),
         supabase
           .from('shipment_observations')
@@ -1786,6 +1849,9 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
           item_id: it.id,
           product_id: it.product?.id,
           product_name: it.product?.name,
+          item_code: it.item_code,
+          item_name: it.item_name,
+          unit_price: it.unit_price != null ? Number(it.unit_price) : null,
           quantity: Number(it.quantity),
         })),
         observations: obsRes.data ?? [],

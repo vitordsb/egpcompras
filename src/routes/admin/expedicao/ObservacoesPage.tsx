@@ -15,6 +15,7 @@ interface ObservationRow {
     id: string;
     client_name: string;
     numero_nfe: string | null;
+    numero_venda: string | null;
     status: ShipmentStatus;
   } | null;
 }
@@ -30,7 +31,7 @@ export default function ObservacoesPage() {
     setError(null);
     const { data, error } = await supabase
       .from('shipment_observations')
-      .select('id, content, created_at, shipment:shipments(id, client_name, numero_nfe, status)')
+      .select('id, content, created_at, shipment:shipments(id, client_name, numero_nfe, numero_venda, status)')
       .order('created_at', { ascending: false })
       .limit(500);
     if (error) setError(error.message);
@@ -45,7 +46,7 @@ export default function ObservacoesPage() {
   const filtered = search.trim()
     ? list.filter((o) => {
         const q = search.toLowerCase();
-        const hay = `${o.content} ${o.shipment?.client_name ?? ''} ${o.shipment?.numero_nfe ?? ''}`.toLowerCase();
+        const hay = `${o.content} ${o.shipment?.client_name ?? ''} ${o.shipment?.numero_nfe ?? ''} ${o.shipment?.numero_venda ?? ''}`.toLowerCase();
         return hay.includes(q);
       })
     : list;
@@ -89,7 +90,7 @@ export default function ObservacoesPage() {
         <Input
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          placeholder="Buscar por conteúdo, cliente ou NFe…"
+          placeholder="Buscar por conteúdo, cliente, venda ou NFe…"
         />
       </div>
 
@@ -127,6 +128,12 @@ export default function ObservacoesPage() {
                 {o.shipment && (
                   <div className="flex flex-wrap items-center gap-2 border-t border-slate-100 pt-2 text-xs text-slate-500">
                     <span className="font-medium text-slate-700">{o.shipment.client_name}</span>
+                    {o.shipment.numero_venda && (
+                      <>
+                        <span>·</span>
+                        <span>Venda #{o.shipment.numero_venda}</span>
+                      </>
+                    )}
                     {o.shipment.numero_nfe && (
                       <>
                         <span>·</span>

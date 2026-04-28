@@ -14,6 +14,7 @@ interface QuotationListItem {
   created_at: string;
   closed_at: string | null;
   usd_brl_rate: number | null;
+  deadline: string | null;
   product: { name: string } | null;
   invites: { id: string; status: string }[];
 }
@@ -43,6 +44,7 @@ interface QuotationDetail {
   created_at: string;
   usd_brl_rate: number | null;
   payment_terms: string | null;
+  deadline: string | null;
   public_token: string;
   product: { name: string } | null;
 }
@@ -52,6 +54,7 @@ interface NewQuotationForm {
   unitsToManufacture: number | null;
   title: string;
   paymentTerms: string;
+  validityHours: number | null;
   selectedSuppliers: Set<string>;
 }
 
@@ -60,6 +63,7 @@ const emptyNewForm: NewQuotationForm = {
   unitsToManufacture: null,
   title: '',
   paymentTerms: '',
+  validityHours: 2,
   selectedSuppliers: new Set(),
 };
 
@@ -107,7 +111,7 @@ export default function QuotationsPage() {
     const { data, error } = await supabase
       .from('quotations')
       .select(
-        `id, title, status, created_at, closed_at, usd_brl_rate,
+        `id, title, status, deadline, created_at, closed_at, usd_brl_rate,
          product:products(name),
          invites:quotation_invites(id, status)`
       )
@@ -244,6 +248,9 @@ export default function QuotationsPage() {
     if (newForm.unitsToManufacture == null || newForm.unitsToManufacture <= 0) {
       return setNewError('Informe a quantidade a fabricar (> 0).');
     }
+    if (newForm.validityHours == null || newForm.validityHours <= 0) {
+      return setNewError('Informe a validade do link em horas (> 0).');
+    }
     if (!newForm.title.trim()) return setNewError('Informe um título para a cotação.');
     if (productBom.length === 0) return setNewError('A cotação precisa ter ao menos 1 item.');
 
@@ -266,6 +273,7 @@ export default function QuotationsPage() {
         status: 'sent',
         usd_brl_rate: usdRate,
         payment_terms: newForm.paymentTerms.trim() || null,
+        deadline: new Date(Date.now() + newForm.validityHours * 60 * 60 * 1000).toISOString(),
       })
       .select('id')
       .single();
@@ -332,7 +340,7 @@ export default function QuotationsPage() {
         supabase
           .from('quotations')
           .select(
-            'id, title, status, created_at, usd_brl_rate, payment_terms, public_token, product:products(name)'
+            'id, title, status, created_at, usd_brl_rate, payment_terms, deadline, public_token, product:products(name)'
           )
           .eq('id', detailId)
           .single(),
@@ -409,6 +417,7 @@ export default function QuotationsPage() {
                 <th className="px-5 py-3 text-right">Convidados</th>
                 <th className="px-5 py-3 text-right">Respondidos</th>
                 <th className="px-5 py-3">Criada em</th>
+                <th className="px-5 py-3">Expira</th>
                 <th className="px-5 py-3"></th>
               </tr>
             </thead>
@@ -416,6 +425,7 @@ export default function QuotationsPage() {
               {list.map((q) => {
                 const total = q.invites.length;
                 const responded = q.invites.filter((i) => i.status === 'responded').length;
+                const expired = q.deadline ? new Date(q.deadline).getTime() < Date.now() : false;
                 return (
                   <tr key={q.id} className="border-b border-slate-100 last:border-0">
                     <td className="px-5 py-3 font-medium text-slate-900">{q.title}</td>
@@ -428,6 +438,15 @@ export default function QuotationsPage() {
                     </td>
                     <td className="px-5 py-3 text-slate-500">
                       {new Date(q.created_at).toLocaleDateString('pt-BR')}
+                    </td>
+                    <td className="px-5 py-3">
+                      {q.deadline ? (
+                        <span className={expired ? 'text-red-600' : 'text-slate-500'}>
+                          {expired ? 'Expirada' : new Date(q.deadline).toLocaleString('pt-BR')}
+                        </span>
+                      ) : (
+                        <span className="text-slate-400">—</span>
+                      )}
                     </td>
                     <td className="px-5 py-3 text-right">
                       <div className="inline-flex items-center gap-3">
@@ -484,7 +503,7 @@ export default function QuotationsPage() {
                   </div>
                 )}
 
-                <div className="grid grid-cols-1 gap-4 md:grid-cols-[2fr_1fr]">
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-[2fr_1fr_1fr]">
                   <div>
                     <Label htmlFor="q-product">Produto *</Label>
                     <select
@@ -517,6 +536,23 @@ export default function QuotationsPage() {
                         })
                       }
                       placeholder="1"
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor="q-validity">Validade do link (h)</Label>
+                    <Input
+                      id="q-validity"
+                      type="number"
+                      min={0.25}
+                      step="0.25"
+                      value={newForm.validityHours ?? ''}
+                      onChange={(e) =>
+                        setNewForm({
+                          ...newForm,
+                          validityHours: e.target.value === '' ? null : Number(e.target.value),
+                        })
+                      }
+                      placeholder="2"
                     />
                   </div>
                 </div>
@@ -704,6 +740,17 @@ export default function QuotationsPage() {
                 {detail?.usd_brl_rate &&
                   ` · USD/BRL na criação: ${Number(detail.usd_brl_rate).toFixed(4)}`}
               </p>
+              {detail?.deadline && (
+                <p
+                  className={
+                    new Date(detail.deadline).getTime() < Date.now()
+                      ? 'mt-1 text-xs text-red-600'
+                      : 'mt-1 text-xs text-slate-500'
+                  }
+                >
+                  Link válido até {new Date(detail.deadline).toLocaleString('pt-BR')}
+                </p>
+              )}
               {detail?.payment_terms && (
                 <div className="mt-2 rounded border border-slate-200 bg-slate-50 px-3 py-2 text-xs">
                   <span className="font-medium uppercase tracking-wide text-slate-500">

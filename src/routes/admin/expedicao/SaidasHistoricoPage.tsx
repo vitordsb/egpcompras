@@ -37,7 +37,7 @@ export default function SaidasHistoricoPage() {
       if (statusFilter !== 'all' && s.status !== statusFilter) return false;
       if (search.trim()) {
         const q = search.toLowerCase();
-        if (!`${s.client_name} ${s.numero_nfe ?? ''}`.toLowerCase().includes(q)) return false;
+        if (!`${s.client_name} ${s.numero_nfe ?? ''} ${s.numero_venda ?? ''}`.toLowerCase().includes(q)) return false;
       }
       return true;
     });
@@ -94,7 +94,7 @@ export default function SaidasHistoricoPage() {
         <Input
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          placeholder="Buscar por cliente ou NFe…"
+          placeholder="Buscar por cliente, venda ou NFe…"
         />
       </div>
 
@@ -117,10 +117,11 @@ export default function SaidasHistoricoPage() {
               <thead className="border-b border-slate-200 bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
                 <tr>
                   <th className="px-5 py-3">Cliente</th>
-                  <th className="px-5 py-3">NFe</th>
+                  <th className="px-5 py-3">Venda / NFe</th>
                   <th className="px-5 py-3">Status</th>
                   <th className="px-5 py-3">Saiu em</th>
                   <th className="px-5 py-3">Voltou em</th>
+                  <th className="px-5 py-3 text-right">Total</th>
                   <th className="px-5 py-3">Atualizado</th>
                 </tr>
               </thead>
@@ -128,7 +129,12 @@ export default function SaidasHistoricoPage() {
                 {filtered.map((s) => (
                   <tr key={s.id} className="border-b border-slate-100 last:border-0">
                     <td className="px-5 py-3 font-medium text-slate-900">{s.client_name}</td>
-                    <td className="px-5 py-3 text-slate-600">{s.numero_nfe ?? '—'}</td>
+                    <td className="px-5 py-3 text-slate-600">
+                      {s.numero_venda ? <span className="font-medium">#{s.numero_venda}</span> : null}
+                      {s.numero_venda && s.numero_nfe ? <span className="text-slate-300"> · </span> : null}
+                      {s.numero_nfe ? <span className="text-xs">NFe {s.numero_nfe}</span> : null}
+                      {!s.numero_venda && !s.numero_nfe ? '—' : null}
+                    </td>
                     <td className="px-5 py-3">
                       <span
                         className={cn(
@@ -141,6 +147,11 @@ export default function SaidasHistoricoPage() {
                     </td>
                     <td className="px-5 py-3 text-slate-600">{formatDate(s.data_saida)}</td>
                     <td className="px-5 py-3 text-slate-600">{formatDate(s.data_retorno)}</td>
+                    <td className="px-5 py-3 text-right text-slate-600">
+                      {s.valor_total != null
+                        ? `R$ ${Number(s.valor_total).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`
+                        : '—'}
+                    </td>
                     <td className="px-5 py-3 text-slate-500">{formatDate(s.updated_at)}</td>
                   </tr>
                 ))}

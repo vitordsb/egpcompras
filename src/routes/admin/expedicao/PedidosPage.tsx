@@ -13,8 +13,11 @@ interface ShipmentRow extends Shipment {
 
 interface ItemRow {
   id?: string;
-  product_id: string;
+  product_id: string | null;
   product_name: string;
+  item_code: string;
+  item_name: string;
+  unit_price: number | null;
   quantity: number | null;
 }
 
@@ -22,7 +25,19 @@ interface FormState {
   id: string | null;
   client_name: string;
   numero_nfe: string;
+  numero_venda: string;
+  data_venda: string;
   data_prevista: string;
+  client_cnpj: string;
+  client_phone: string;
+  client_email: string;
+  client_address: string;
+  frete_tipo: string;
+  frete_valor: number | null;
+  total_produtos: number | null;
+  valor_total: number | null;
+  forma_pagamento: string;
+  condicao_pagamento: string;
   notes: string;
   items: ItemRow[];
 }
@@ -31,7 +46,19 @@ const emptyForm: FormState = {
   id: null,
   client_name: '',
   numero_nfe: '',
+  numero_venda: '',
+  data_venda: '',
   data_prevista: '',
+  client_cnpj: '',
+  client_phone: '',
+  client_email: '',
+  client_address: '',
+  frete_tipo: '',
+  frete_valor: null,
+  total_produtos: null,
+  valor_total: null,
+  forma_pagamento: '',
+  condicao_pagamento: '',
   notes: '',
   items: [],
 };
@@ -51,7 +78,14 @@ export default function PedidosPage() {
   const [detailId, setDetailId] = useState<string | null>(null);
   const [detailObservations, setDetailObservations] = useState<ShipmentObservation[]>([]);
   const [detailItems, setDetailItems] = useState<
-    Array<{ id: string; quantity: number; product: { id: string; name: string } | null }>
+    Array<{
+      id: string;
+      quantity: number;
+      item_code: string | null;
+      item_name: string | null;
+      unit_price: number | null;
+      product: { id: string; name: string } | null;
+    }>
   >([]);
   const [newObservation, setNewObservation] = useState('');
   const [savingObs, setSavingObs] = useState(false);
@@ -116,18 +150,33 @@ export default function PedidosPage() {
     setFormError(null);
     const { data: items } = await supabase
       .from('shipment_items')
-      .select('id, quantity, product:products(id, name)')
+      .select('id, quantity, item_code, item_name, unit_price, product:products(id, name)')
       .eq('shipment_id', s.id);
     setForm({
       id: s.id,
       client_name: s.client_name,
       numero_nfe: s.numero_nfe ?? '',
+      numero_venda: s.numero_venda ?? '',
+      data_venda: s.data_venda ?? '',
       data_prevista: s.data_prevista ?? '',
+      client_cnpj: s.client_cnpj ?? '',
+      client_phone: s.client_phone ?? '',
+      client_email: s.client_email ?? '',
+      client_address: s.client_address ?? '',
+      frete_tipo: s.frete_tipo ?? '',
+      frete_valor: s.frete_valor,
+      total_produtos: s.total_produtos,
+      valor_total: s.valor_total,
+      forma_pagamento: s.forma_pagamento ?? '',
+      condicao_pagamento: s.condicao_pagamento ?? '',
       notes: s.notes ?? '',
       items: ((items ?? []) as any[]).map((it) => ({
         id: it.id,
         product_id: it.product?.id ?? '',
         product_name: it.product?.name ?? '',
+        item_code: it.item_code ?? '',
+        item_name: it.item_name ?? '',
+        unit_price: it.unit_price != null ? Number(it.unit_price) : null,
         quantity: Number(it.quantity),
       })),
     });
@@ -145,7 +194,17 @@ export default function PedidosPage() {
   function addItemRow() {
     if (!form) return;
     patchForm({
-      items: [...form.items, { product_id: '', product_name: '', quantity: null }],
+      items: [
+        ...form.items,
+        {
+          product_id: '',
+          product_name: '',
+          item_code: '',
+          item_name: '',
+          unit_price: null,
+          quantity: null,
+        },
+      ],
     });
   }
 
@@ -161,23 +220,42 @@ export default function PedidosPage() {
     patchForm({ items: form.items.filter((_, i) => i !== idx) });
   }
 
+  function readNumber(value: string): number | null {
+    return value === '' ? null : Number(value);
+  }
+
   async function save(e: FormEvent) {
     e.preventDefault();
     if (!form) return;
     setFormError(null);
     if (!form.client_name.trim()) return setFormError('Cliente é obrigatório.');
     const invalid = form.items.find(
-      (r) => !r.product_id || r.quantity == null || r.quantity <= 0
+      (r) =>
+        (!r.product_id && !r.item_name.trim() && !r.item_code.trim()) ||
+        r.quantity == null ||
+        r.quantity <= 0
     );
     if (invalid) {
-      return setFormError('Cada item precisa ter produto selecionado e qtd > 0.');
+      return setFormError('Cada item precisa ter produto ou descrição/código, e qtd > 0.');
     }
     setSaving(true);
 
     const payload: any = {
       client_name: form.client_name.trim(),
       numero_nfe: form.numero_nfe.trim() || null,
+      numero_venda: form.numero_venda.trim() || null,
+      data_venda: form.data_venda || null,
       data_prevista: form.data_prevista || null,
+      client_cnpj: form.client_cnpj.trim() || null,
+      client_phone: form.client_phone.trim() || null,
+      client_email: form.client_email.trim() || null,
+      client_address: form.client_address.trim() || null,
+      frete_tipo: form.frete_tipo.trim() || null,
+      frete_valor: form.frete_valor,
+      total_produtos: form.total_produtos,
+      valor_total: form.valor_total,
+      forma_pagamento: form.forma_pagamento.trim() || null,
+      condicao_pagamento: form.condicao_pagamento.trim() || null,
       notes: form.notes.trim() || null,
       updated_at: new Date().toISOString(),
     };
@@ -209,7 +287,10 @@ export default function PedidosPage() {
     if (form.items.length > 0) {
       const itemsPayload = form.items.map((it) => ({
         shipment_id: shipmentId,
-        product_id: it.product_id,
+        product_id: it.product_id || null,
+        item_code: it.item_code.trim() || null,
+        item_name: it.item_name.trim() || it.product_name || null,
+        unit_price: it.unit_price,
         quantity: it.quantity,
       }));
       const { error: itemsErr } = await supabase.from('shipment_items').insert(itemsPayload);
@@ -525,7 +606,7 @@ export default function PedidosPage() {
           onClick={closeForm}
         >
           <div
-            className="flex h-[min(760px,92vh)] w-full max-w-2xl flex-col overflow-hidden rounded-lg bg-white shadow-lg"
+            className="flex h-[min(820px,92vh)] w-full max-w-5xl flex-col overflow-hidden rounded-lg bg-white shadow-lg"
             onClick={(e) => e.stopPropagation()}
           >
             <form onSubmit={save} className="flex flex-1 flex-col overflow-hidden">
@@ -541,8 +622,8 @@ export default function PedidosPage() {
                   </div>
                 )}
 
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <div className="sm:col-span-2">
+                <div className="grid gap-3 sm:grid-cols-4">
+                  <div className="sm:col-span-4">
                     <Label htmlFor="ship-client">Cliente *</Label>
                     <Input
                       id="ship-client"
@@ -550,6 +631,15 @@ export default function PedidosPage() {
                       onChange={(e) => patchForm({ client_name: e.target.value })}
                       placeholder="Nome do cliente"
                       autoFocus
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor="ship-venda">Venda</Label>
+                    <Input
+                      id="ship-venda"
+                      value={form.numero_venda}
+                      onChange={(e) => patchForm({ numero_venda: e.target.value })}
+                      placeholder="ex: 5785"
                     />
                   </div>
                   <div>
@@ -562,12 +652,119 @@ export default function PedidosPage() {
                     />
                   </div>
                   <div>
+                    <Label htmlFor="ship-data-venda">Data venda</Label>
+                    <Input
+                      id="ship-data-venda"
+                      type="date"
+                      value={form.data_venda}
+                      onChange={(e) => patchForm({ data_venda: e.target.value })}
+                    />
+                  </div>
+                  <div>
                     <Label htmlFor="ship-prevista">Data prevista</Label>
                     <Input
                       id="ship-prevista"
                       type="date"
                       value={form.data_prevista}
                       onChange={(e) => patchForm({ data_prevista: e.target.value })}
+                    />
+                  </div>
+                </div>
+
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div>
+                    <Label htmlFor="ship-cnpj">CNPJ / CPF</Label>
+                    <Input
+                      id="ship-cnpj"
+                      value={form.client_cnpj}
+                      onChange={(e) => patchForm({ client_cnpj: e.target.value })}
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor="ship-phone">Telefone</Label>
+                    <Input
+                      id="ship-phone"
+                      value={form.client_phone}
+                      onChange={(e) => patchForm({ client_phone: e.target.value })}
+                    />
+                  </div>
+                  <div className="sm:col-span-2">
+                    <Label htmlFor="ship-email">Email</Label>
+                    <Input
+                      id="ship-email"
+                      type="email"
+                      value={form.client_email}
+                      onChange={(e) => patchForm({ client_email: e.target.value })}
+                    />
+                  </div>
+                  <div className="sm:col-span-2">
+                    <Label htmlFor="ship-address">Endereço</Label>
+                    <Textarea
+                      id="ship-address"
+                      value={form.client_address}
+                      onChange={(e) => patchForm({ client_address: e.target.value })}
+                      rows={2}
+                    />
+                  </div>
+                </div>
+
+                <div className="grid gap-3 sm:grid-cols-3">
+                  <div>
+                    <Label htmlFor="ship-total-products">Total produtos</Label>
+                    <Input
+                      id="ship-total-products"
+                      type="number"
+                      min={0}
+                      step="0.01"
+                      value={form.total_produtos ?? ''}
+                      onChange={(e) => patchForm({ total_produtos: readNumber(e.target.value) })}
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor="ship-frete">Frete</Label>
+                    <Input
+                      id="ship-frete"
+                      type="number"
+                      min={0}
+                      step="0.01"
+                      value={form.frete_valor ?? ''}
+                      onChange={(e) => patchForm({ frete_valor: readNumber(e.target.value) })}
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor="ship-total">Valor total</Label>
+                    <Input
+                      id="ship-total"
+                      type="number"
+                      min={0}
+                      step="0.01"
+                      value={form.valor_total ?? ''}
+                      onChange={(e) => patchForm({ valor_total: readNumber(e.target.value) })}
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor="ship-frete-tipo">Tipo de frete</Label>
+                    <Input
+                      id="ship-frete-tipo"
+                      value={form.frete_tipo}
+                      onChange={(e) => patchForm({ frete_tipo: e.target.value })}
+                      placeholder="SEDEX, PAC, retirada..."
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor="ship-forma-pag">Forma pagamento</Label>
+                    <Input
+                      id="ship-forma-pag"
+                      value={form.forma_pagamento}
+                      onChange={(e) => patchForm({ forma_pagamento: e.target.value })}
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor="ship-cond-pag">Condição</Label>
+                    <Input
+                      id="ship-cond-pag"
+                      value={form.condicao_pagamento}
+                      onChange={(e) => patchForm({ condicao_pagamento: e.target.value })}
                     />
                   </div>
                 </div>
@@ -586,8 +783,11 @@ export default function PedidosPage() {
                       <table className="w-full text-sm">
                         <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
                           <tr>
-                            <th className="py-2 px-3">Produto</th>
+                            <th className="py-2 px-3 w-28">Código</th>
+                            <th className="py-2 px-3">Item</th>
+                            <th className="py-2 px-3 w-56">Produto vinculado</th>
                             <th className="py-2 px-3 w-24">Qtd</th>
+                            <th className="py-2 px-3 w-32">Unit.</th>
                             <th className="py-2 px-3 w-10"></th>
                           </tr>
                         </thead>
@@ -595,14 +795,31 @@ export default function PedidosPage() {
                           {form.items.map((row, idx) => (
                             <tr key={idx} className="border-t border-slate-100">
                               <td className="py-2 px-3">
+                                <Input
+                                  value={row.item_code}
+                                  onChange={(e) => updateItemRow(idx, { item_code: e.target.value })}
+                                  placeholder="cod"
+                                  className="h-9"
+                                />
+                              </td>
+                              <td className="py-2 px-3">
+                                <Input
+                                  value={row.item_name}
+                                  onChange={(e) => updateItemRow(idx, { item_name: e.target.value })}
+                                  placeholder="Descrição do item"
+                                  className="h-9"
+                                />
+                              </td>
+                              <td className="py-2 px-3">
                                 <select
-                                  value={row.product_id}
+                                  value={row.product_id ?? ''}
                                   onChange={(e) => {
                                     const id = e.target.value;
                                     const p = products.find((p) => p.id === id);
                                     updateItemRow(idx, {
-                                      product_id: id,
+                                      product_id: id || null,
                                       product_name: p?.name ?? '',
+                                      item_name: row.item_name || p?.name || '',
                                     });
                                   }}
                                   className="h-9 w-full rounded-md border border-slate-300 bg-white px-2 text-sm"
@@ -628,6 +845,21 @@ export default function PedidosPage() {
                                     })
                                   }
                                   placeholder="0"
+                                  className="h-9"
+                                />
+                              </td>
+                              <td className="py-2 px-3">
+                                <Input
+                                  type="number"
+                                  min={0}
+                                  step="0.01"
+                                  value={row.unit_price ?? ''}
+                                  onChange={(e) =>
+                                    updateItemRow(idx, {
+                                      unit_price: readNumber(e.target.value),
+                                    })
+                                  }
+                                  placeholder="0,00"
                                   className="h-9"
                                 />
                               </td>

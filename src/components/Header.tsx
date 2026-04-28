@@ -1,5 +1,6 @@
 import { useNavigate } from 'react-router-dom';
 import { cn } from '@/lib/utils';
+import { supabase } from '@/lib/supabase';
 import {
   type UIMode,
   readLastAdminRoute,
@@ -23,6 +24,15 @@ export default function Header({ mode, onMenuClick }: HeaderProps) {
     } else {
       navigate(readLastAdminRoute());
     }
+  }
+
+  async function signOut() {
+    window.localStorage.removeItem('appCompras.internalSessionExpiresAt');
+    await Promise.allSettled([
+      supabase.auth.signOut(),
+      fetch('/api/master-logout', { method: 'POST' }),
+    ]);
+    window.location.href = '/';
   }
 
   return (
@@ -72,7 +82,16 @@ export default function Header({ mode, onMenuClick }: HeaderProps) {
         />
       </div>
 
-      <div className="w-7 sm:w-24" />
+      <div className="flex w-7 justify-end sm:w-24">
+        <button
+          type="button"
+          onClick={signOut}
+          className="hidden rounded px-2 py-1 text-xs font-medium text-slate-500 hover:bg-slate-100 hover:text-slate-900 sm:inline-flex"
+          title="Sair"
+        >
+          Sair
+        </button>
+      </div>
     </header>
   );
 }

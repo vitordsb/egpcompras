@@ -1,6 +1,9 @@
+import { useEffect, useState } from 'react';
 import { Navigate, Route, Routes } from 'react-router-dom';
+import type { Session } from '@supabase/supabase-js';
 import AdminLayout from '@/components/AdminLayout';
 import IAModeLayout from '@/components/IAModeLayout';
+import LoginPage from '@/routes/LoginPage';
 import ProductsPage from '@/routes/admin/ProductsPage';
 import ComponentsPage from '@/routes/admin/ComponentsPage';
 import SuppliersPage from '@/routes/admin/SuppliersPage';
@@ -12,8 +15,31 @@ import CostsPage from '@/routes/admin/CostsPage';
 import AiUsagePage from '@/routes/admin/AiUsagePage';
 import MemoriesPage from '@/routes/admin/MemoriesPage';
 import ProceduresPage from '@/routes/admin/ProceduresPage';
+import AccessUsersPage from '@/routes/admin/AccessUsersPage';
 import SupplierQuotePage from '@/routes/public/SupplierQuotePage';
 import { readUIMode, readLastAdminRoute } from '@/lib/ui-mode';
+import { supabase } from '@/lib/supabase';
+import { InternalAuthProvider } from '@/lib/auth-context';
+
+const INTERNAL_SESSION_TTL_MS = 12 * 60 * 60 * 1000;
+const INTERNAL_SESSION_EXPIRES_AT_KEY = 'appCompras.internalSessionExpiresAt';
+
+function setInternalSessionDeadline() {
+  window.localStorage.setItem(
+    INTERNAL_SESSION_EXPIRES_AT_KEY,
+    String(Date.now() + INTERNAL_SESSION_TTL_MS)
+  );
+}
+
+function clearInternalSessionDeadline() {
+  window.localStorage.removeItem(INTERNAL_SESSION_EXPIRES_AT_KEY);
+}
+
+function internalSessionExpired() {
+  const raw = window.localStorage.getItem(INTERNAL_SESSION_EXPIRES_AT_KEY);
+  if (!raw) return false;
+  return Number(raw) <= Date.now();
+}
 
 /**
  * Detecta se a app está rodando como portal público de cotação
@@ -42,13 +68,114 @@ export default function App() {
     );
   }
 
+  // Fallback público em dev/produção com uma única URL da Vercel.
+  // Mantém o portal do fornecedor fora do login, mas só quando há token na rota.
+  if (typeof window !== 'undefined' && window.location.pathname.startsWith('/cotacao/')) {
+    return (
+      <Routes>
+        <Route path="/cotacao/:token" element={<SupplierQuotePage />} />
+        <Route path="*" element={<div className="p-6">404</div>} />
+      </Routes>
+    );
+  }
+
+  return <AuthenticatedApp />;
+}
+
+function AuthenticatedApp() {
+  const [session, setSession] = useState<Session | null>(null);
+  const [masterAuthenticated, setMasterAuthenticated] = useState(false);
+  const [loading, setLoading] = useState(true);
+
+  async function expireInternalSession() {
+    clearInternalSessionDeadline();
+    setMasterAuthenticated(false);
+    setSession(null);
+    await Promise.allSettled([
+      supabase.auth.signOut(),
+      fetch('/api/master-logout', { method: 'POST' }),
+    ]);
+  }
+
+  useEffect(() => {
+    let mounted = true;
+    Promise.all([
+      supabase.auth.getSession(),
+      fetch('/api/master-session')
+        .then((res) => (res.ok ? res.json() : null))
+        .catch(() => null),
+    ]).then(([{ data }, master]) => {
+      if (!mounted) return;
+      if ((data.session || master?.authenticated) && internalSessionExpired()) {
+        expireInternalSession().finally(() => {
+          if (mounted) setLoading(false);
+        });
+        return;
+      }
+      if ((data.session || master?.authenticated) && !window.localStorage.getItem(INTERNAL_SESSION_EXPIRES_AT_KEY)) {
+        setInternalSessionDeadline();
+      }
+      setSession(data.session);
+      setMasterAuthenticated(Boolean(master?.authenticated && master?.master));
+      setLoading(false);
+    });
+    const { data: authListener } = supabase.auth.onAuthStateChange((event, nextSession) => {
+      if (event === 'SIGNED_IN') setInternalSessionDeadline();
+      if (event === 'SIGNED_OUT') clearInternalSessionDeadline();
+      setSession(nextSession);
+      setLoading(false);
+    });
+    return () => {
+      mounted = false;
+      authListener.subscription.unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!session && !masterAuthenticated) return;
+    const id = window.setInterval(() => {
+      if (internalSessionExpired()) {
+        expireInternalSession();
+      }
+    }, 60 * 1000);
+    return () => window.clearInterval(id);
+  }, [session, masterAuthenticated]);
+
+  if (loading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-50 text-sm text-slate-500">
+        Carregando...
+      </div>
+    );
+  }
+
+  if (!session && !masterAuthenticated) {
+    return (
+      <Routes>
+        <Route
+          path="*"
+          element={
+            <LoginPage
+              onMasterLogin={() => {
+                setInternalSessionDeadline();
+                setMasterAuthenticated(true);
+              }}
+            />
+          }
+        />
+      </Routes>
+    );
+  }
+
   // Home redireciona pro último modo escolhido (default Manual → última rota admin)
   const initialMode = readUIMode();
   const homeTarget = initialMode === 'ai' ? '/ia' : readLastAdminRoute();
 
   return (
+    <InternalAuthProvider isMaster={masterAuthenticated}>
     <Routes>
       <Route path="/" element={<Navigate to={homeTarget} replace />} />
+      <Route path="/login" element={<Navigate to={homeTarget} replace />} />
 
       {/* Modo IA — chat full-screen com header global */}
       <Route path="/ia" element={<IAModeLayout />} />
@@ -72,11 +199,16 @@ export default function App() {
         <Route path="consumo-ia" element={<AiUsagePage />} />
         <Route path="memorias" element={<MemoriesPage />} />
         <Route path="procedimentos" element={<ProceduresPage />} />
+        <Route
+          path="acessos"
+          element={masterAuthenticated ? <AccessUsersPage /> : <Navigate to="/admin/produtos" replace />}
+        />
       </Route>
 
       {/* Fallback pra desenvolvimento local: /cotacao/:token continua funcionando */}
       <Route path="/cotacao/:token" element={<SupplierQuotePage />} />
       <Route path="*" element={<div className="p-6">404</div>} />
     </Routes>
+    </InternalAuthProvider>
   );
 }
