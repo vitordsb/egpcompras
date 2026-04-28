@@ -13,7 +13,14 @@ interface AccessUser {
 
 async function readJson(res: Response) {
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error ?? 'Falha na operação.');
+  if (!res.ok) {
+    const msg = data.error ?? 'Falha na operação.';
+    // Traduz erros comuns da API
+    if (/already.*registered|email.*use|duplicate/i.test(msg)) throw new Error('Esse e-mail já está cadastrado.');
+    if (/password.*6|senha.*curta/i.test(msg)) throw new Error('A senha deve ter pelo menos 6 caracteres.');
+    if (/not.*found|não.*encontrado/i.test(msg)) throw new Error('Usuário não encontrado.');
+    throw new Error(msg);
+  }
   return data;
 }
 

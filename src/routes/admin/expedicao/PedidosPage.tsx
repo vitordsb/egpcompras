@@ -6,6 +6,7 @@ import { Card, CardBody, CardHeader, CardTitle } from '@/components/ui/Card';
 import { Input, Label, Textarea } from '@/components/ui/Input';
 import { cn } from '@/lib/utils';
 import { STATUS_LABEL, STATUS_PILL, formatDate, formatDateTime } from './shared';
+import { friendlyDbError } from '@/lib/db-error';
 
 interface ShipmentRow extends Shipment {
   observations_count?: number;
@@ -104,7 +105,7 @@ export default function PedidosPage() {
       )
       .order('created_at', { ascending: false })
       .limit(200);
-    if (error) setListError(error.message);
+    if (error) setListError(friendlyDbError(error));
     else
       setList(
         (data ?? []).map((row: any) => ({
@@ -264,7 +265,7 @@ export default function PedidosPage() {
     if (shipmentId) {
       const { error } = await supabase.from('shipments').update(payload).eq('id', shipmentId);
       if (error) {
-        setFormError(error.message);
+        setFormError(friendlyDbError(error));
         setSaving(false);
         return;
       }
@@ -275,7 +276,7 @@ export default function PedidosPage() {
         .select('id')
         .single();
       if (error || !data) {
-        setFormError(error?.message ?? 'Falha ao criar pedido');
+        setFormError(friendlyDbError(error ?? new Error('Falha ao criar pedido')));
         setSaving(false);
         return;
       }
@@ -295,7 +296,7 @@ export default function PedidosPage() {
       }));
       const { error: itemsErr } = await supabase.from('shipment_items').insert(itemsPayload);
       if (itemsErr) {
-        setFormError(itemsErr.message);
+        setFormError(friendlyDbError(itemsErr));
         setSaving(false);
         return;
       }
@@ -316,7 +317,7 @@ export default function PedidosPage() {
     if (newStatus === 'returned') payload.data_retorno = new Date().toISOString();
     const { error } = await supabase.from('shipments').update(payload).eq('id', s.id);
     if (error) {
-      alert(`Erro: ${error.message}`);
+      alert(friendlyDbError(error));
       return;
     }
     await loadList();
@@ -359,7 +360,7 @@ export default function PedidosPage() {
       .from('shipment_observations')
       .insert({ shipment_id: detailId, content: newObservation.trim() });
     if (error) {
-      alert(`Erro: ${error.message}`);
+      alert(friendlyDbError(error));
       setSavingObs(false);
       return;
     }
@@ -380,7 +381,7 @@ export default function PedidosPage() {
     if (!confirm('Apagar essa observação?')) return;
     const { error } = await supabase.from('shipment_observations').delete().eq('id', obsId);
     if (error) {
-      alert(`Erro: ${error.message}`);
+      alert(friendlyDbError(error));
       return;
     }
     setDetailObservations((prev) => prev.filter((o) => o.id !== obsId));
@@ -391,7 +392,7 @@ export default function PedidosPage() {
     if (!confirmDelete) return;
     const { error } = await supabase.from('shipments').delete().eq('id', confirmDelete.id);
     if (error) {
-      alert(`Erro: ${error.message}`);
+      alert(friendlyDbError(error));
       return;
     }
     setConfirmDelete(null);
