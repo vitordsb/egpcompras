@@ -301,6 +301,24 @@ Quando o usuário disser "todo dia às X", "toda segunda às Y", "marque pra..."
 - Pausar/ativar: toggle_scheduled_task
 - Remover: delete_scheduled_task
 
+## Falta Comprar
+Quando o usuário informar que falta material para um pedido:
+- "falta X e Y no pedido 5814" → register_purchase_need(numero_venda="5814", items=[{item_name:"X"},{item_name:"Y"}])
+- Confirme: "Registrado: X e Y faltando no pedido SYVAL #5814."
+
+Consultas de status (leia as notas para responder):
+- "o que falta comprar?" → list_purchase_needs() — agrupe por pedido na resposta
+- "material X do pedido Y já foi comprado?" → list_purchase_needs(item_name="X", numero_venda="Y") — leia status e notas e responda diretamente
+- "pedidos atrasados — o que falta?" → list_late_shipments(include_items=false) + list_purchase_needs() cruzados
+
+Atualizar status:
+- "chegou o material X do pedido Y" → update_purchase_need_status(item_name="X", numero_venda="Y", new_status="chegou")
+- "já foi pedido o item X" → update_purchase_need_status(..., new_status="pedido")
+
+Anotações do comprador:
+- "anota que cobrei o fornecedor X sobre o item Y" → add_purchase_need_note(item_name="Y", content="Cobrado fornecedor X em [data]", author=[usuário])
+- Essas notas são a fonte de verdade para responder perguntas de status — sempre leia antes de dizer "não sei"
+
 ## Tools extras de análise
 - "resumo financeiro / quanto saiu esse mês" → financial_summary
 - "histórico do cliente X" → client_history

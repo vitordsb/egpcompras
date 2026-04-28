@@ -63,6 +63,16 @@ const mainLinks: NavItem[] = [
         ),
       },
       {
+        to: '/admin/falta-comprar',
+        label: 'Falta Comprar',
+        description: 'Itens faltantes nos pedidos',
+        icon: (
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-3.5 w-3.5">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />
+          </svg>
+        ),
+      },
+      {
         to: '/admin/fornecedores',
         label: 'Fornecedores',
         description: 'Cadastro e itens preferidos',
@@ -369,6 +379,7 @@ export default function AdminLayout() {
       '/admin/financeira/com-nota':      'Com Nota',
       '/admin/financeira/sem-nota':      'Sem Nota',
       '/admin/financeira/relatorio':     'Rel. Financeira',
+      '/admin/falta-comprar':            'Falta Comprar',
       '/admin/memorias':                 'Memórias',
       '/admin/procedimentos':            'Procedimentos',
       '/admin/consumo-ia':               'Consumo IA',

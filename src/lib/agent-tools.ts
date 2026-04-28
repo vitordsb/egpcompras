@@ -635,6 +635,84 @@ export const toolDeclarations = [
       },
     },
   },
+  // ── Falta Comprar ────────────────────────────────────────────────────────────
+  {
+    name: 'register_purchase_need',
+    description:
+      'Registra itens que faltam para dar saída em um pedido. Use quando o usuário informar que falta X no pedido Y. Identifica o pedido por shipment_id, numero_venda ou client_name (fuzzy).',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        shipment_id:   { type: 'STRING' as Type },
+        numero_venda:  { type: 'STRING' as Type },
+        client_name:   { type: 'STRING' as Type },
+        items: {
+          type: 'ARRAY' as Type,
+          description: 'Lista de itens faltantes.',
+          items: {
+            type: 'OBJECT' as Type,
+            properties: {
+              item_name: { type: 'STRING' as Type, description: 'Nome do item.' },
+              item_code: { type: 'STRING' as Type, description: 'Código (opcional).' },
+              quantity:  { type: 'NUMBER' as Type, description: 'Quantidade (opcional).' },
+              unit:      { type: 'STRING' as Type, description: 'Unidade: un, m, kg, etc. (opcional).' },
+            },
+            required: ['item_name'],
+          },
+        },
+        note: { type: 'STRING' as Type, description: 'Observação inicial opcional (ex: "cobrado do fornecedor X").' },
+      },
+      required: ['items'],
+    },
+  },
+  {
+    name: 'list_purchase_needs',
+    description:
+      'Lista itens que precisam ser comprados. Filtros opcionais por status e pedido. Retorna itens + últimas notas — use para responder "o que falta comprar?", "material X já foi pedido?".',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        status:       { type: 'STRING' as Type, description: 'pendente | pedido | chegou | cancelado. Omitir = pendente+pedido.' },
+        shipment_id:  { type: 'STRING' as Type },
+        numero_venda: { type: 'STRING' as Type },
+        client_name:  { type: 'STRING' as Type, description: 'Fuzzy match pelo cliente do pedido.' },
+        item_name:    { type: 'STRING' as Type, description: 'Fuzzy match pelo nome do item.' },
+      },
+    },
+  },
+  {
+    name: 'update_purchase_need_status',
+    description:
+      'Atualiza o status de um item faltante. Use para "chegou o material X", "já foi pedido o item Y".',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        need_id:      { type: 'STRING' as Type, description: 'ID do item (preferido).' },
+        item_name:    { type: 'STRING' as Type, description: 'Fuzzy match pelo nome.' },
+        numero_venda: { type: 'STRING' as Type, description: 'Filtrar pelo pedido.' },
+        client_name:  { type: 'STRING' as Type },
+        new_status:   { type: 'STRING' as Type, description: 'pendente | pedido | chegou | cancelado.' },
+      },
+      required: ['new_status'],
+    },
+  },
+  {
+    name: 'add_purchase_need_note',
+    description:
+      'Adiciona uma anotação a um item faltante. Use quando o comprador quiser registrar: "cobrei o fornecedor", "prazo X", "chegou parcialmente". Essas notas são usadas pela IA para responder perguntas sobre o status.',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        need_id:      { type: 'STRING' as Type, description: 'ID do item (preferido).' },
+        item_name:    { type: 'STRING' as Type, description: 'Fuzzy match pelo nome.' },
+        numero_venda: { type: 'STRING' as Type, description: 'Filtrar pelo pedido.' },
+        client_name:  { type: 'STRING' as Type },
+        content:      { type: 'STRING' as Type, description: 'Texto da nota.' },
+        author:       { type: 'STRING' as Type, description: 'Quem anotou (opcional).' },
+      },
+      required: ['content'],
+    },
+  },
   {
     name: 'add_shipment_items',
     description:
@@ -2250,6 +2328,110 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
         });
       }
       return { shipments: Array.from(map.values()) };
+    }
+
+    // ── Falta Comprar ────────────────────────────────────────────────────────
+    case 'register_purchase_need': {
+      const shipId = await resolveShipmentId(args);
+      const resolvedId = typeof shipId === 'string' ? shipId : null;
+      const items = (args.items ?? []) as Array<{ item_name: string; item_code?: string; quantity?: number; unit?: string }>;
+      if (!items.length) throw new Error('Informe pelo menos um item.');
+      const inserted: any[] = [];
+      for (const it of items) {
+        const payload: Record<string, unknown> = {
+          item_name:   it.item_name.trim(),
+          item_code:   it.item_code?.trim() ?? null,
+          quantity:    it.quantity ?? null,
+          unit:        it.unit?.trim() ?? null,
+          shipment_id: resolvedId,
+        };
+        const { data, error } = await supabase.from('purchase_needs').insert(payload).select('id, item_name').single();
+        if (error) throw new Error(error.message);
+        inserted.push(data);
+        if (args.note && data?.id) {
+          await supabase.from('purchase_need_notes').insert({
+            need_id: data.id,
+            content: String(args.note).trim(),
+            author:  null,
+          });
+        }
+      }
+      return { registered: inserted.length, items: inserted };
+    }
+
+    case 'list_purchase_needs': {
+      // Resolve shipment_id opcional
+      let shipId: string | null = null;
+      if (args.shipment_id || args.numero_venda || args.client_name) {
+        const r = await resolveShipmentId(args);
+        if (typeof r === 'string') shipId = r;
+      }
+      const statusFilter = args.status ? String(args.status) : null;
+      let q = supabase
+        .from('purchase_needs')
+        .select(`id, item_name, item_code, quantity, unit, status, updated_at,
+                 shipment:shipments(id, client_name, numero_venda, numero_nfe),
+                 notes:purchase_need_notes(id, content, author, created_at)`)
+        .order('updated_at', { ascending: false })
+        .limit(100);
+      if (shipId) q = q.eq('shipment_id', shipId);
+      if (args.item_name) q = q.ilike('item_name', `%${String(args.item_name)}%`);
+      if (statusFilter) {
+        q = q.eq('status', statusFilter);
+      } else {
+        q = q.in('status', ['pendente', 'pedido']);
+      }
+      const { data, error } = await q;
+      if (error) throw new Error(error.message);
+      return { count: (data ?? []).length, needs: data ?? [] };
+    }
+
+    case 'update_purchase_need_status': {
+      const newStatus = String(args.new_status ?? '').trim();
+      if (!newStatus) throw new Error('new_status é obrigatório.');
+      let needId = args.need_id ? String(args.need_id) : null;
+      if (!needId) {
+        // Resolve por item_name + pedido
+        let q = supabase.from('purchase_needs').select('id').limit(1);
+        if (args.item_name) q = q.ilike('item_name', `%${String(args.item_name)}%`);
+        if (args.shipment_id) q = q.eq('shipment_id', String(args.shipment_id));
+        else if (args.numero_venda || args.client_name) {
+          const r = await resolveShipmentId(args);
+          if (typeof r === 'string') q = q.eq('shipment_id', r);
+        }
+        const { data } = await q;
+        needId = (data?.[0] as any)?.id ?? null;
+      }
+      if (!needId) return { updated: false, message: 'Item não encontrado.' };
+      const { error } = await supabase
+        .from('purchase_needs')
+        .update({ status: newStatus, updated_at: new Date().toISOString() })
+        .eq('id', needId);
+      if (error) throw new Error(error.message);
+      return { updated: true, need_id: needId, new_status: newStatus };
+    }
+
+    case 'add_purchase_need_note': {
+      let needId = args.need_id ? String(args.need_id) : null;
+      if (!needId) {
+        let q = supabase.from('purchase_needs').select('id').limit(1);
+        if (args.item_name) q = q.ilike('item_name', `%${String(args.item_name)}%`);
+        if (args.shipment_id) q = q.eq('shipment_id', String(args.shipment_id));
+        else if (args.numero_venda || args.client_name) {
+          const r = await resolveShipmentId(args);
+          if (typeof r === 'string') q = q.eq('shipment_id', r);
+        }
+        const { data } = await q;
+        needId = (data?.[0] as any)?.id ?? null;
+      }
+      if (!needId) return { added: false, message: 'Item não encontrado.' };
+      const { data, error } = await supabase
+        .from('purchase_need_notes')
+        .insert({ need_id: needId, content: String(args.content).trim(), author: args.author ? String(args.author) : null })
+        .select('id')
+        .single();
+      if (error) throw new Error(error.message);
+      return { added: true, note_id: data?.id };
     }
 
     case 'add_shipment_items': {
