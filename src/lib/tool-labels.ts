@@ -77,6 +77,35 @@ const TOOL_LABELS: Record<string, LabelFn> = {
   update_memory: () => 'Atualizando memória',
   forget_memory: () => 'Esquecendo memória',
 
+  // ---------- SAÍDAS / PEDIDOS ----------
+  create_shipment: (a) => `Cadastrando pedido de "${a.client_name ?? '…'}"`,
+  list_shipments: (a) => {
+    if (a.status) return `Listando pedidos com status "${a.status}"`;
+    if (a.client_name) return `Buscando pedidos do cliente "${a.client_name}"`;
+    if (a.nfe) return `Buscando pedidos da NFe "${a.nfe}"`;
+    return 'Listando pedidos de saída';
+  },
+  get_shipment_details: () => 'Lendo detalhes do pedido',
+  mark_shipment_status: (a) => {
+    const map: Record<string, string> = {
+      pending: 'pendente',
+      shipped: 'saiu',
+      returned: 'voltou',
+      cancelled: 'cancelado',
+    };
+    const status = map[a.new_status] ?? a.new_status;
+    return `Marcando pedido como "${status}"`;
+  },
+  update_shipment: () => 'Atualizando pedido',
+  delete_shipment: () => 'Removendo pedido',
+  add_shipment_observation: () => 'Anotando observação no pedido',
+  find_shipments_with_observations: (a) =>
+    a.contains ? `Buscando pedidos com observação "${a.contains}"` : 'Listando pedidos com observações',
+  add_shipment_items: (a) => {
+    const n = Array.isArray(a.items) ? a.items.length : 0;
+    return n > 0 ? `Adicionando ${n} item(ns) ao pedido` : 'Adicionando itens ao pedido';
+  },
+
   // ---------- PROCEDURES ----------
   define_procedure: (a) => `Aprendendo "${a.name ?? '…'}"`,
   list_procedures: () => 'Listando procedimentos',

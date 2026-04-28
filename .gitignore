@@ -14,3 +14,9 @@ AVISOS_arquivados.md
 ARCHITECTURE.md
 .claude/
 _sessions/
+
+# Artefatos de teste local (Playwright, screenshots, etc)
+.playwright-mcp/
+*.png
+!public/**/*.png
+!src/**/*.png

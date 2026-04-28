@@ -1,37 +1,118 @@
 import { useEffect, useRef, useState } from 'react';
-import { NavLink, Outlet, useLocation } from 'react-router-dom';
+import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import type { ReactNode } from 'react';
 import { cn } from '@/lib/utils';
+import Header from '@/components/Header';
+import QuickChatDrawer from '@/components/QuickChatDrawer';
+import {
+  writeUIMode,
+  writeLastAdminRoute,
+  useUIMode,
+} from '@/lib/ui-mode';
 
 interface NavItem {
-  to: string;
+  to?: string;            // se não tiver, é grupo expandível
   label: string;
   description: string;
   icon: ReactNode;
   optional?: boolean;
+  children?: NavItem[];   // sub-itens (sem suporte recursivo, só 1 nível)
 }
 
 // Itens operacionais — uso diário/semanal. Ordem reflete fluxo natural do dia.
+// Comprador (IA) saiu da sidebar — agora é o "Modo IA" no header global.
 const mainLinks: NavItem[] = [
   {
-    to: '/admin/comprador',
-    label: 'Comprador',
-    description: 'Assistente IA',
+    label: 'Compras',
+    description: 'Cotações, custos e fornecedores',
     icon: (
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-4 w-4">
-        <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09ZM18.259 8.715 18 9.75l-.259-1.035a3.375 3.375 0 0 0-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 0 0 2.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 0 0 2.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 0 0-2.456 2.456Z" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 10.5V6a3.75 3.75 0 1 0-7.5 0v4.5m11.356-1.993 1.263 12c.07.665-.45 1.243-1.119 1.243H4.25a1.125 1.125 0 0 1-1.12-1.243l1.264-12A1.125 1.125 0 0 1 5.513 7.5h12.974c.576 0 1.059.435 1.119 1.007ZM8.625 10.5a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm7.5 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Z" />
       </svg>
     ),
+    children: [
+      {
+        to: '/admin/cotacoes',
+        label: 'Cotações',
+        description: 'Enviadas e recebidas',
+        icon: (
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-3.5 w-3.5">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75 6 9l3.75 3.75L16.5 6l5.25 5.25M21.75 6h-3.75M21.75 6v3.75" />
+          </svg>
+        ),
+      },
+      {
+        to: '/admin/custos',
+        label: 'Custos',
+        description: 'Resumo por produto',
+        icon: (
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-3.5 w-3.5">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 18 9 11.25l3.75 3.75L22.5 5.25M16.5 5.25h6v6" />
+          </svg>
+        ),
+      },
+      {
+        to: '/admin/componentes',
+        label: 'Componentes',
+        description: 'Catálogo de matérias-primas',
+        icon: (
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-3.5 w-3.5">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M6 6.878V6a2.25 2.25 0 0 1 2.25-2.25h7.5A2.25 2.25 0 0 1 18 6v.878m-12 0c.235-.083.487-.128.75-.128h10.5c.263 0 .515.045.75.128m-12 0A2.25 2.25 0 0 0 4.5 9v.878m13.5-3A2.25 2.25 0 0 1 19.5 9v.878m0 0a2.246 2.246 0 0 0-.75-.128H5.25c-.263 0-.515.045-.75.128m15 0A2.25 2.25 0 0 1 21 12v6a2.25 2.25 0 0 1-2.25 2.25H5.25A2.25 2.25 0 0 1 3 18v-6c0-.98.626-1.813 1.5-2.122" />
+          </svg>
+        ),
+      },
+      {
+        to: '/admin/fornecedores',
+        label: 'Fornecedores',
+        description: 'Cadastro e itens preferidos',
+        icon: (
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-3.5 w-3.5">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M15 19.128a9.38 9.38 0 0 0 2.625.372 9.337 9.337 0 0 0 4.121-.952 4.125 4.125 0 0 0-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 0 1 8.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0 1 11.964-3.07M12 6.375a3.375 3.375 0 1 1-6.75 0 3.375 3.375 0 0 1 6.75 0Zm8.25 2.25a2.625 2.625 0 1 1-5.25 0 2.625 2.625 0 0 1 5.25 0Z" />
+          </svg>
+        ),
+      },
+    ],
   },
   {
-    to: '/admin/cotacoes',
-    label: 'Cotações',
-    description: 'Enviadas e recebidas',
+    label: 'Expedição',
+    description: 'Pedidos, saídas e observações',
     icon: (
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-4 w-4">
-        <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12.75 6 9l3.75 3.75L16.5 6l5.25 5.25M21.75 6h-3.75M21.75 6v3.75" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 18.75a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 0 0-3 0m3 0h6m-9 0H3.375a1.125 1.125 0 0 1-1.125-1.125V14.25m17.25 4.5a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 0 0-3 0m3 0h1.125c.621 0 1.129-.504 1.09-1.124a17.902 17.902 0 0 0-3.213-9.193 2.056 2.056 0 0 0-1.58-.86H14.25M16.5 18.75h-2.25m0-11.177v-.958c0-.568-.422-1.048-.987-1.106a48.554 48.554 0 0 0-10.026 0 1.106 1.106 0 0 0-.987 1.106v7.635m12-6.677v6.677m0 4.5v-4.5m0 0h-12" />
       </svg>
     ),
+    children: [
+      {
+        to: '/admin/expedicao/pedidos',
+        label: 'Pedidos',
+        description: 'Em aberto e em rota',
+        icon: (
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-3.5 w-3.5">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h3.75M9 15h3.75M9 18h3.75m3 .75H18a2.25 2.25 0 0 0 2.25-2.25V6.108c0-1.135-.845-2.098-1.976-2.192a48.424 48.424 0 0 0-1.123-.08m-5.801 0c-.065.21-.1.433-.1.664 0 .414.336.75.75.75h4.5a.75.75 0 0 0 .75-.75 2.25 2.25 0 0 0-.1-.664m-5.8 0A2.251 2.251 0 0 1 13.5 2.25H15c1.012 0 1.867.668 2.15 1.586m-5.8 0c-.376.023-.75.05-1.124.08C9.095 4.01 8.25 4.973 8.25 6.108V8.25m0 0H4.875c-.621 0-1.125.504-1.125 1.125v11.25c0 .621.504 1.125 1.125 1.125h9.75c.621 0 1.125-.504 1.125-1.125V9.375c0-.621-.504-1.125-1.125-1.125H8.25ZM6.75 12h.008v.008H6.75V12Zm0 3h.008v.008H6.75V15Zm0 3h.008v.008H6.75V18Z" />
+          </svg>
+        ),
+      },
+      {
+        to: '/admin/expedicao/saidas',
+        label: 'Saídas',
+        description: 'Histórico (saíram, voltaram)',
+        icon: (
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-3.5 w-3.5">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 12 12 16.5m0 0L7.5 12m4.5 4.5V3" />
+          </svg>
+        ),
+      },
+      {
+        to: '/admin/expedicao/observacoes',
+        label: 'Observações',
+        description: 'Anotações e faltas',
+        icon: (
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-3.5 w-3.5">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 12h16.5m-16.5 3.75h16.5M3.75 19.5h16.5M5.625 4.5h12.75a1.875 1.875 0 0 1 0 3.75H5.625a1.875 1.875 0 0 1 0-3.75Z" />
+          </svg>
+        ),
+      },
+    ],
   },
   {
     to: '/admin/produtos',
@@ -40,37 +121,6 @@ const mainLinks: NavItem[] = [
     icon: (
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-4 w-4">
         <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6.75 12 3l8.25 3.75M3.75 6.75v10.5L12 21m-8.25-14.25L12 10.5m0 0v10.5m0-10.5 8.25-3.75M12 10.5l-4.125-1.875" />
-      </svg>
-    ),
-  },
-  {
-    to: '/admin/custos',
-    label: 'Custos',
-    description: 'Resumo por produto',
-    icon: (
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-4 w-4">
-        <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 18 9 11.25l3.75 3.75L22.5 5.25M16.5 5.25h6v6" />
-      </svg>
-    ),
-  },
-  {
-    to: '/admin/componentes',
-    label: 'Componentes',
-    description: 'Catálogo de matérias-primas',
-    icon: (
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-4 w-4">
-        <path strokeLinecap="round" strokeLinejoin="round" d="M6 6.878V6a2.25 2.25 0 0 1 2.25-2.25h7.5A2.25 2.25 0 0 1 18 6v.878m-12 0c.235-.083.487-.128.75-.128h10.5c.263 0 .515.045.75.128m-12 0A2.25 2.25 0 0 0 4.5 9v.878m13.5-3A2.25 2.25 0 0 1 19.5 9v.878m0 0a2.246 2.246 0 0 0-.75-.128H5.25c-.263 0-.515.045-.75.128m15 0A2.25 2.25 0 0 1 21 12v6a2.25 2.25 0 0 1-2.25 2.25H5.25A2.25 2.25 0 0 1 3 18v-6c0-.98.626-1.813 1.5-2.122" />
-      </svg>
-    ),
-  },
-  {
-    to: '/admin/fornecedores',
-    label: 'Fornecedores',
-    description: 'Cadastro e itens preferidos',
-    optional: true,
-    icon: (
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-4 w-4">
-        <path strokeLinecap="round" strokeLinejoin="round" d="M15 19.128a9.38 9.38 0 0 0 2.625.372 9.337 9.337 0 0 0 4.121-.952 4.125 4.125 0 0 0-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 0 1 8.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0 1 11.964-3.07M12 6.375a3.375 3.375 0 1 1-6.75 0 3.375 3.375 0 0 1 6.75 0Zm8.25 2.25a2.625 2.625 0 1 1-5.25 0 2.625 2.625 0 0 1 5.25 0Z" />
       </svg>
     ),
   },
@@ -110,14 +160,24 @@ const configLinks: NavItem[] = [
   },
 ];
 
-function NavItemRow({ item, onNavigate }: { item: NavItem; onNavigate?: () => void }) {
+function NavItemRow({
+  item,
+  onNavigate,
+  compact = false,
+}: {
+  item: NavItem;
+  onNavigate?: () => void;
+  compact?: boolean;
+}) {
+  if (!item.to) return null; // grupo (com children) é tratado separadamente
   return (
     <NavLink
       to={item.to}
       onClick={onNavigate}
       className={({ isActive }) =>
         cn(
-          'group flex items-start gap-3 rounded-md px-3 py-2.5 transition-colors',
+          'group flex items-start gap-3 rounded-md transition-colors',
+          compact ? 'px-3 py-1.5' : 'px-3 py-2.5',
           isActive
             ? 'bg-brand-50 text-brand-700'
             : 'text-slate-700 hover:bg-slate-100'
@@ -136,14 +196,18 @@ function NavItemRow({ item, onNavigate }: { item: NavItem; onNavigate?: () => vo
           </span>
           <span className="flex-1 min-w-0">
             <span className="flex items-center gap-2">
-              <span className="text-sm font-medium">{item.label}</span>
+              <span className={cn('font-medium', compact ? 'text-[13px]' : 'text-sm')}>
+                {item.label}
+              </span>
               {item.optional && (
                 <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-slate-500">
                   opcional
                 </span>
               )}
             </span>
-            <span className="block text-xs text-slate-500">{item.description}</span>
+            {!compact && (
+              <span className="block text-xs text-slate-500">{item.description}</span>
+            )}
           </span>
         </>
       )}
@@ -151,17 +215,113 @@ function NavItemRow({ item, onNavigate }: { item: NavItem; onNavigate?: () => vo
   );
 }
 
+function NavGroup({
+  item,
+  onNavigate,
+}: {
+  item: NavItem;
+  onNavigate?: () => void;
+}) {
+  const location = useLocation();
+  // Mantém aberto quando alguma rota filha estiver ativa
+  const childActive = (item.children ?? []).some(
+    (c) => c.to && location.pathname.startsWith(c.to)
+  );
+  const [open, setOpen] = useState(childActive);
+
+  // Reabre se uma rota filha for ativada externamente
+  useEffect(() => {
+    if (childActive) setOpen(true);
+  }, [childActive]);
+
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className={cn(
+          'group flex w-full items-start gap-3 rounded-md px-3 py-2.5 text-left transition-colors',
+          childActive ? 'text-brand-700' : 'text-slate-700 hover:bg-slate-100'
+        )}
+      >
+        <span
+          className={cn(
+            'mt-0.5 transition-colors',
+            childActive ? 'text-brand-600' : 'text-slate-400 group-hover:text-slate-600'
+          )}
+        >
+          {item.icon}
+        </span>
+        <span className="flex-1 min-w-0">
+          <span className="text-sm font-medium">{item.label}</span>
+          <span className="block text-xs text-slate-500">{item.description}</span>
+        </span>
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          className={cn(
+            'mt-1 h-4 w-4 shrink-0 text-slate-400 transition-transform',
+            open && 'rotate-180'
+          )}
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
+        </svg>
+      </button>
+      {open && item.children && (
+        <div className="mt-0.5 ml-4 space-y-0.5 border-l border-slate-200 pl-2">
+          {item.children.map((c) => (
+            <NavItemRow key={c.to ?? c.label} item={c} onNavigate={onNavigate} compact />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function AdminLayout() {
   const location = useLocation();
+  const navigate = useNavigate();
+  const mode = useUIMode();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [configOpen, setConfigOpen] = useState(false);
+  const [quickChatOpen, setQuickChatOpen] = useState(false);
   const configRef = useRef<HTMLDivElement>(null);
+
+  // Garante que o localStorage reflete modo manual + memoriza a última rota admin
+  useEffect(() => {
+    writeUIMode('manual');
+  }, []);
+  useEffect(() => {
+    writeLastAdminRoute(location.pathname);
+  }, [location.pathname]);
 
   // Fecha drawer mobile ao mudar de rota
   useEffect(() => {
     setMobileOpen(false);
     setConfigOpen(false);
   }, [location.pathname]);
+
+  // Atalhos globais:
+  //   Cmd+M / Alt+M  → alterna pra Modo IA
+  //   Cmd+K / Alt+K  → abre quick chat sem trocar modo (chat overlay)
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      const meta = e.metaKey || e.altKey;
+      if (!meta) return;
+      if (e.key === 'm' || e.key === 'M') {
+        e.preventDefault();
+        writeUIMode('ai');
+        navigate('/ia');
+      } else if (e.key === 'k' || e.key === 'K') {
+        e.preventDefault();
+        setQuickChatOpen((o) => !o);
+      }
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [navigate]);
 
   // Fecha popover de config ao clicar fora
   useEffect(() => {
@@ -186,63 +346,48 @@ export default function AdminLayout() {
   }, [mobileOpen]);
 
   // Verifica se alguma rota de config está ativa pra destacar o botão
-  const configActive = configLinks.some((l) => location.pathname.startsWith(l.to));
+  const configActive = configLinks.some(
+    (l) => l.to && location.pathname.startsWith(l.to)
+  );
 
   return (
-    <div className="flex h-screen flex-col bg-slate-50 md:flex-row">
-      {/* Topbar mobile (visível só em <md, ocupa espaço no flow) */}
-      <header className="flex h-12 shrink-0 items-center justify-between border-b border-slate-200 bg-white px-3 md:hidden">
-        <button
-          type="button"
-          onClick={() => setMobileOpen(true)}
-          aria-label="Abrir menu"
-          className="flex h-9 w-9 items-center justify-center rounded-md hover:bg-slate-100"
-        >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-5 w-5">
-            <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" />
-          </svg>
-        </button>
-        <div className="flex items-center gap-2">
-          <div className="flex h-7 w-7 items-center justify-center rounded-md bg-brand-600 text-[11px] font-bold text-white">
-            EG
-          </div>
-          <span className="text-sm font-semibold text-slate-900">EGP Compras</span>
-        </div>
-        <div className="w-9" />
-      </header>
+    <div className="flex h-screen flex-col bg-slate-50">
+      {/* Header global com toggle IA/Manual + hamburguer mobile */}
+      <Header mode={mode} onMenuClick={() => setMobileOpen(true)} />
 
-      {/* Backdrop mobile (cobre o conteúdo quando drawer aberto) */}
-      {mobileOpen && (
-        <div
-          className="fixed inset-0 z-40 bg-slate-900/40 md:hidden"
-          onClick={() => setMobileOpen(false)}
-          aria-hidden="true"
-        />
-      )}
-
-      {/* Sidebar */}
-      <aside
-        className={cn(
-          'fixed inset-y-0 left-0 z-50 flex h-screen w-64 shrink-0 flex-col border-r border-slate-200 bg-white transition-transform duration-200',
-          'md:relative md:translate-x-0',
-          mobileOpen ? 'translate-x-0 shadow-xl' : '-translate-x-full md:shadow-none'
+      <div className="flex flex-1 overflow-hidden">
+        {/* Backdrop mobile (cobre o conteúdo quando drawer aberto) */}
+        {mobileOpen && (
+          <div
+            className="fixed inset-0 z-40 bg-slate-900/40 md:hidden"
+            onClick={() => setMobileOpen(false)}
+            aria-hidden="true"
+          />
         )}
-      >
-        <div className="flex items-center justify-between gap-2 px-5 py-5 border-b border-slate-100">
-          <div className="flex items-center gap-2">
-            <div className="flex h-9 w-9 items-center justify-center rounded-md bg-brand-600 text-white font-bold text-sm">
-              EG
-            </div>
-            <div>
-              <div className="text-sm font-semibold text-slate-900">EGP Compras</div>
-              <div className="text-[11px] text-slate-500">painel interno</div>
-            </div>
+
+        {/* Sidebar
+            Mobile: fixed overlay (top-12 pra ficar abaixo do header global)
+            Desktop: flex item normal (static, ocupa 256px à esquerda) */}
+        <aside
+          className={cn(
+            'flex w-64 shrink-0 flex-col border-r border-slate-200 bg-white transition-transform duration-200',
+            'fixed top-12 bottom-0 left-0 z-50 md:static',
+            mobileOpen
+              ? 'translate-x-0 shadow-xl md:shadow-none'
+              : '-translate-x-full md:translate-x-0 md:shadow-none'
+          )}
+        >
+        <div className="hidden items-center justify-between gap-2 px-5 py-3 border-b border-slate-100 md:flex">
+          <div className="text-[11px] font-medium uppercase tracking-wider text-slate-500">
+            painel interno
           </div>
+        </div>
+        <div className="flex items-center justify-end gap-2 px-3 py-2 border-b border-slate-100 md:hidden">
           <button
             type="button"
             onClick={() => setMobileOpen(false)}
             aria-label="Fechar menu"
-            className="-mr-2 flex h-8 w-8 items-center justify-center rounded-md text-slate-400 hover:bg-slate-100 hover:text-slate-700 md:hidden"
+            className="flex h-8 w-8 items-center justify-center rounded-md text-slate-400 hover:bg-slate-100 hover:text-slate-700"
           >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4">
               <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
@@ -251,9 +396,13 @@ export default function AdminLayout() {
         </div>
 
         <nav className="flex-1 space-y-1 overflow-y-auto p-3">
-          {mainLinks.map((l) => (
-            <NavItemRow key={l.to} item={l} />
-          ))}
+          {mainLinks.map((l) =>
+            l.children ? (
+              <NavGroup key={l.label} item={l} />
+            ) : (
+              <NavItemRow key={l.to ?? l.label} item={l} />
+            )
+          )}
         </nav>
 
         {/* Rodapé com popover de configurações */}
@@ -296,9 +445,28 @@ export default function AdminLayout() {
         </div>
       </aside>
 
-      <main className="flex-1 min-h-0 overflow-auto">
-        <Outlet />
-      </main>
+        <main className="flex-1 min-h-0 overflow-auto">
+          <Outlet />
+        </main>
+      </div>
+
+      {/* Botão flutuante de chat IA (modo Manual) */}
+      {!quickChatOpen && (
+        <button
+          type="button"
+          onClick={() => setQuickChatOpen(true)}
+          aria-label="Abrir chat IA (Cmd+K)"
+          title="Abrir chat IA (Cmd+K)"
+          className="fixed bottom-5 right-5 z-30 flex h-12 w-12 items-center justify-center rounded-full bg-brand-600 text-white shadow-lg transition-all hover:bg-brand-700 hover:shadow-xl"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-5 w-5">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09Z" />
+          </svg>
+        </button>
+      )}
+
+      {/* Drawer do chat IA — overlay sobre o conteúdo, sem sair da página */}
+      {quickChatOpen && <QuickChatDrawer onClose={() => setQuickChatOpen(false)} />}
     </div>
   );
 }

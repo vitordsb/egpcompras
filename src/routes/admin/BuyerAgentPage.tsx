@@ -122,6 +122,22 @@ export default function BuyerAgentPage() {
     el.style.height = `${next}px`;
   }, [input]);
 
+  // Devolve o foco ao input quando a IA termina de responder.
+  // Aguarda o React aplicar o `disabled=false` antes de focar.
+  // Se o usuário tiver clicado em outro input/textarea, NÃO rouba o foco.
+  useEffect(() => {
+    if (running) return;
+    if (!provider.isConfigured()) return;
+    const active = document.activeElement;
+    const focusedElsewhere =
+      active &&
+      active !== inputRef.current &&
+      (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA');
+    if (focusedElsewhere) return;
+    const t = window.setTimeout(() => inputRef.current?.focus(), 50);
+    return () => window.clearTimeout(t);
+  }, [running, provider]);
+
   // Ping no provider quando muda
   useEffect(() => {
     let cancelled = false;
@@ -311,7 +327,7 @@ export default function BuyerAgentPage() {
       setRunning(false);
       setRunStartedAt(null);
       setRetryStatus(null);
-      inputRef.current?.focus();
+      // foco do input é devolvido pelo useEffect que escuta `running`
     }
   }
 

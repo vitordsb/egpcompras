@@ -105,5 +105,34 @@ export interface QuotationResponseItem {
   st_pct: number;
 }
 
+export type ShipmentStatus = 'pending' | 'shipped' | 'returned' | 'cancelled';
+
+export interface Shipment {
+  id: string;
+  numero_nfe: string | null;
+  client_name: string;
+  status: ShipmentStatus;
+  data_prevista: string | null;
+  data_saida: string | null;
+  data_retorno: string | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ShipmentItem {
+  id: string;
+  shipment_id: string;
+  product_id: string;
+  quantity: number;
+}
+
+export interface ShipmentObservation {
+  id: string;
+  shipment_id: string;
+  content: string;
+  created_at: string;
+}
+
 // Quando o schema estabilizar, gerar tipos via:
 //   pnpm dlx supabase gen types typescript --project-id <ref> > src/types/db.generated.ts

@@ -458,6 +458,165 @@ export const toolDeclarations = [
     },
   },
 
+  // ---------- SAÍDAS / PEDIDOS ----------
+  {
+    name: 'create_shipment',
+    description:
+      'Cria um pedido de saída (controle paralelo ao Conta Azul). Use quando o usuário disser "adiciona pedido X pra sair", "registra a saída de X", "cadastra pedido Y do cliente Z". Pode incluir produtos com qtd e número da NFe.',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        client_name: { type: 'STRING' as Type, description: 'Nome do cliente.' },
+        numero_nfe: { type: 'STRING' as Type, description: 'Número da NFe (opcional).' },
+        data_prevista: {
+          type: 'STRING' as Type,
+          description: 'Data prevista pra sair, formato ISO YYYY-MM-DD (opcional).',
+        },
+        notes: { type: 'STRING' as Type, description: 'Observação geral (opcional).' },
+        items: {
+          type: 'ARRAY' as Type,
+          description: 'Itens do pedido. Cada item tem product_name (fuzzy match) ou product_id, e quantity.',
+          items: {
+            type: 'OBJECT' as Type,
+            properties: {
+              product_name: { type: 'STRING' as Type },
+              product_id: { type: 'STRING' as Type },
+              quantity: { type: 'NUMBER' as Type },
+            },
+            required: ['quantity'],
+          },
+        },
+      },
+      required: ['client_name'],
+    },
+  },
+  {
+    name: 'list_shipments',
+    description:
+      'Lista pedidos de saída. Filtros opcionais: status, client_name (fuzzy), nfe (fuzzy). Default: últimos 50.',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        status: {
+          type: 'STRING' as Type,
+          description: 'pending | shipped | returned | cancelled',
+        },
+        client_name: { type: 'STRING' as Type, description: 'Match aproximado por cliente.' },
+        nfe: { type: 'STRING' as Type, description: 'Match aproximado por NFe.' },
+        limit: { type: 'NUMBER' as Type },
+      },
+    },
+  },
+  {
+    name: 'get_shipment_details',
+    description:
+      'Retorna detalhes completos de um pedido pelo id (ou nfe, ou client_name fuzzy): itens, observações, datas.',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        shipment_id: { type: 'STRING' as Type },
+        numero_nfe: { type: 'STRING' as Type },
+        client_name: { type: 'STRING' as Type },
+      },
+    },
+  },
+  {
+    name: 'mark_shipment_status',
+    description:
+      'Atualiza o status de um pedido. Use pra "pedido X saiu", "pedido X voltou", "pedido X cancelado". Identifica o pedido por id, nfe ou client_name (fuzzy). Também atualiza data_saida/data_retorno automaticamente.',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        shipment_id: { type: 'STRING' as Type },
+        numero_nfe: { type: 'STRING' as Type },
+        client_name: { type: 'STRING' as Type },
+        new_status: {
+          type: 'STRING' as Type,
+          description: 'pending | shipped | returned | cancelled',
+        },
+      },
+      required: ['new_status'],
+    },
+  },
+  {
+    name: 'update_shipment',
+    description:
+      'Edita campos de um pedido (notes, data_prevista, numero_nfe, client_name). Pra mudar status, prefira mark_shipment_status.',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        shipment_id: { type: 'STRING' as Type },
+        client_name: { type: 'STRING' as Type },
+        numero_nfe: { type: 'STRING' as Type },
+        data_prevista: { type: 'STRING' as Type },
+        notes: { type: 'STRING' as Type },
+      },
+      required: ['shipment_id'],
+    },
+  },
+  {
+    name: 'delete_shipment',
+    description: 'Remove um pedido (e suas observações + itens). Confirme com o usuário antes.',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: { shipment_id: { type: 'STRING' as Type } },
+      required: ['shipment_id'],
+    },
+  },
+  {
+    name: 'add_shipment_observation',
+    description:
+      'Adiciona uma observação livre a um pedido. Use pra "anota: pedido X saiu com 5 peças do produto Y faltando", "marca falta no pedido Z". Pode identificar o pedido por id, nfe ou client_name.',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        shipment_id: { type: 'STRING' as Type },
+        numero_nfe: { type: 'STRING' as Type },
+        client_name: { type: 'STRING' as Type },
+        content: { type: 'STRING' as Type },
+      },
+      required: ['content'],
+    },
+  },
+  {
+    name: 'find_shipments_with_observations',
+    description:
+      'Lista pedidos que têm pelo menos uma observação — útil pra "quais pedidos tiveram faltas", "lista pedidos com problemas". Retorna pedido + cliente + observações.',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        contains: {
+          type: 'STRING' as Type,
+          description: 'Filtra observações que contêm esse texto (opcional).',
+        },
+      },
+    },
+  },
+  {
+    name: 'add_shipment_items',
+    description:
+      'Adiciona itens (produto + qtd) a um pedido existente. Use product_name (fuzzy) ou product_id. Se o produto já estiver no pedido, atualiza a quantidade.',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        shipment_id: { type: 'STRING' as Type },
+        items: {
+          type: 'ARRAY' as Type,
+          items: {
+            type: 'OBJECT' as Type,
+            properties: {
+              product_name: { type: 'STRING' as Type },
+              product_id: { type: 'STRING' as Type },
+              quantity: { type: 'NUMBER' as Type },
+            },
+            required: ['quantity'],
+          },
+        },
+      },
+      required: ['shipment_id', 'items'],
+    },
+  },
+
   // ---------- ESCRITAS — COTAÇÕES ----------
   {
     name: 'create_quotation',
@@ -546,6 +705,65 @@ async function findComponentByName(name: string): Promise<{ id: string; name: st
     .limit(1);
   if (!data || data.length === 0) return null;
   return data[0] as { id: string; name: string };
+}
+
+async function findProductByName(name: string): Promise<{ id: string; name: string } | null> {
+  const { data } = await supabase
+    .from('products')
+    .select('id, name')
+    .ilike('name', `%${name}%`)
+    .limit(1);
+  if (!data || data.length === 0) return null;
+  return data[0] as { id: string; name: string };
+}
+
+/**
+ * Resolve um shipment_id a partir dos args (id direto, nfe ou client_name fuzzy).
+ * Retorna string com o id quando há resolução única, ou objeto ambiguous com candidatos.
+ */
+async function resolveShipmentId(
+  args: any
+): Promise<
+  | string
+  | {
+      ambiguous: true;
+      message: string;
+      candidates: { shipment_id: string; client_name: string; numero_nfe: string | null; status: string }[];
+    }
+> {
+  if (args.shipment_id) return String(args.shipment_id);
+
+  let query = supabase
+    .from('shipments')
+    .select('id, client_name, numero_nfe, status')
+    .order('created_at', { ascending: false })
+    .limit(20);
+  if (args.numero_nfe) query = query.ilike('numero_nfe', `%${String(args.numero_nfe)}%`);
+  if (args.client_name) query = query.ilike('client_name', `%${String(args.client_name)}%`);
+  if (!args.numero_nfe && !args.client_name) {
+    throw new Error('Forneça shipment_id OU numero_nfe OU client_name');
+  }
+  const { data, error } = await query;
+  if (error) throw new Error(error.message);
+  const matches = (data ?? []) as any[];
+  if (matches.length === 0) {
+    throw new Error(
+      `Nenhum pedido encontrado com${args.numero_nfe ? ` NFe "${args.numero_nfe}"` : ''}${
+        args.client_name ? ` cliente "${args.client_name}"` : ''
+      }.`
+    );
+  }
+  if (matches.length === 1) return matches[0].id as string;
+  return {
+    ambiguous: true,
+    message: 'Mais de um pedido bate com a busca. Mostre os candidatos e pergunte qual.',
+    candidates: matches.map((m) => ({
+      shipment_id: m.id,
+      client_name: m.client_name,
+      numero_nfe: m.numero_nfe,
+      status: m.status,
+    })),
+  };
 }
 
 /**
@@ -1435,6 +1653,269 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
       return {
         created: { id: newId, name: newName, items_copied: bom.length },
       };
+    }
+
+    // ---------- SAÍDAS / PEDIDOS ----------
+    case 'create_shipment': {
+      const clientName = String(args.client_name ?? '').trim();
+      if (!clientName) throw new Error('client_name é obrigatório');
+      const payload: any = {
+        client_name: clientName,
+        numero_nfe: args.numero_nfe ? String(args.numero_nfe).trim() : null,
+        data_prevista: args.data_prevista ? String(args.data_prevista) : null,
+        notes: args.notes ? String(args.notes).trim() : null,
+      };
+      const { data: created, error } = await supabase
+        .from('shipments')
+        .insert(payload)
+        .select('id, client_name, numero_nfe, status')
+        .single();
+      if (error || !created) throw new Error(error?.message ?? 'Falha ao criar pedido');
+      const shipmentId = (created as any).id as string;
+
+      const itemsInput: Array<{ product_name?: string; product_id?: string; quantity: number }> =
+        Array.isArray(args.items) ? args.items : [];
+      const itemsAdded: any[] = [];
+      const itemsFailed: any[] = [];
+      for (const it of itemsInput) {
+        let productId = it.product_id ? String(it.product_id) : '';
+        if (!productId && it.product_name) {
+          const found = await findProductByName(String(it.product_name));
+          if (!found) {
+            itemsFailed.push({ product_name: it.product_name, error: 'Produto não encontrado' });
+            continue;
+          }
+          productId = found.id;
+        }
+        if (!productId) {
+          itemsFailed.push({ error: 'item sem product_id nem product_name' });
+          continue;
+        }
+        const qty = Number(it.quantity);
+        if (!(qty > 0)) {
+          itemsFailed.push({ product_name: it.product_name, error: 'quantity inválido' });
+          continue;
+        }
+        const { error: insErr } = await supabase
+          .from('shipment_items')
+          .insert({ shipment_id: shipmentId, product_id: productId, quantity: qty });
+        if (insErr) {
+          itemsFailed.push({ product_name: it.product_name, error: insErr.message });
+        } else {
+          itemsAdded.push({ product_id: productId, product_name: it.product_name, quantity: qty });
+        }
+      }
+      return { created, items_added: itemsAdded, items_failed: itemsFailed };
+    }
+
+    case 'list_shipments': {
+      const limit = Number(args.limit ?? 50);
+      let q = supabase
+        .from('shipments')
+        .select('id, client_name, numero_nfe, status, data_prevista, data_saida, data_retorno, created_at')
+        .order('created_at', { ascending: false })
+        .limit(limit);
+      if (args.status) q = q.eq('status', String(args.status));
+      if (args.client_name) q = q.ilike('client_name', `%${String(args.client_name)}%`);
+      if (args.nfe) q = q.ilike('numero_nfe', `%${String(args.nfe)}%`);
+      const { data, error } = await q;
+      if (error) throw new Error(error.message);
+      return { shipments: data ?? [] };
+    }
+
+    case 'get_shipment_details': {
+      const resolved = await resolveShipmentId(args);
+      if (typeof resolved !== 'string') return resolved;
+      const id = resolved;
+      const [shipRes, itemsRes, obsRes] = await Promise.all([
+        supabase.from('shipments').select('*').eq('id', id).single(),
+        supabase
+          .from('shipment_items')
+          .select('id, quantity, product:products(id, name)')
+          .eq('shipment_id', id),
+        supabase
+          .from('shipment_observations')
+          .select('id, content, created_at')
+          .eq('shipment_id', id)
+          .order('created_at', { ascending: false }),
+      ]);
+      if (shipRes.error) throw new Error(shipRes.error.message);
+      const ship: any = shipRes.data;
+      return {
+        shipment: ship,
+        items: (itemsRes.data ?? []).map((it: any) => ({
+          item_id: it.id,
+          product_id: it.product?.id,
+          product_name: it.product?.name,
+          quantity: Number(it.quantity),
+        })),
+        observations: obsRes.data ?? [],
+      };
+    }
+
+    case 'mark_shipment_status': {
+      const newStatus = String(args.new_status ?? '');
+      const allowed = ['pending', 'shipped', 'returned', 'cancelled'];
+      if (!allowed.includes(newStatus)) {
+        throw new Error(`new_status inválido (use ${allowed.join(', ')})`);
+      }
+      const resolved = await resolveShipmentId(args);
+      if (typeof resolved !== 'string') return resolved;
+      const id = resolved;
+      const payload: any = { status: newStatus, updated_at: new Date().toISOString() };
+      if (newStatus === 'shipped') payload.data_saida = new Date().toISOString();
+      if (newStatus === 'returned') payload.data_retorno = new Date().toISOString();
+      const { error } = await supabase.from('shipments').update(payload).eq('id', id);
+      if (error) throw new Error(error.message);
+      return { updated: true, shipment_id: id, new_status: newStatus };
+    }
+
+    case 'update_shipment': {
+      const id = String(args.shipment_id ?? '');
+      if (!id) throw new Error('shipment_id é obrigatório');
+      const payload: any = { updated_at: new Date().toISOString() };
+      if (args.client_name) payload.client_name = String(args.client_name).trim();
+      if (args.numero_nfe !== undefined) {
+        payload.numero_nfe = args.numero_nfe ? String(args.numero_nfe).trim() : null;
+      }
+      if (args.data_prevista !== undefined) {
+        payload.data_prevista = args.data_prevista ? String(args.data_prevista) : null;
+      }
+      if (args.notes !== undefined) {
+        payload.notes = args.notes ? String(args.notes).trim() : null;
+      }
+      if (Object.keys(payload).length === 1) throw new Error('Nada a atualizar');
+      const { error } = await supabase.from('shipments').update(payload).eq('id', id);
+      if (error) throw new Error(error.message);
+      return { updated: true, shipment_id: id, changes: payload };
+    }
+
+    case 'delete_shipment': {
+      const id = String(args.shipment_id ?? '');
+      if (!id) throw new Error('shipment_id é obrigatório');
+      const { error } = await supabase.from('shipments').delete().eq('id', id);
+      if (error) throw new Error(error.message);
+      return { deleted: true, shipment_id: id };
+    }
+
+    case 'add_shipment_observation': {
+      const content = String(args.content ?? '').trim();
+      if (!content) throw new Error('content é obrigatório');
+      const resolved = await resolveShipmentId(args);
+      if (typeof resolved !== 'string') return resolved;
+      const id = resolved;
+      const { data, error } = await supabase
+        .from('shipment_observations')
+        .insert({ shipment_id: id, content })
+        .select('id, content, created_at')
+        .single();
+      if (error) throw new Error(error.message);
+      // Atualiza updated_at do shipment pra refletir atividade recente
+      await supabase
+        .from('shipments')
+        .update({ updated_at: new Date().toISOString() })
+        .eq('id', id);
+      return { observation: data, shipment_id: id };
+    }
+
+    case 'find_shipments_with_observations': {
+      const contains = args.contains ? String(args.contains).trim() : null;
+      let obsQuery = supabase
+        .from('shipment_observations')
+        .select('id, content, created_at, shipment:shipments(id, client_name, numero_nfe, status)')
+        .order('created_at', { ascending: false })
+        .limit(200);
+      if (contains) obsQuery = obsQuery.ilike('content', `%${contains}%`);
+      const { data, error } = await obsQuery;
+      if (error) throw new Error(error.message);
+      // Agrupa por shipment
+      const map = new Map<
+        string,
+        { shipment_id: string; client_name: string; numero_nfe: string | null; status: string; observations: any[] }
+      >();
+      for (const row of (data ?? []) as any[]) {
+        const ship = row.shipment;
+        if (!ship) continue;
+        if (!map.has(ship.id)) {
+          map.set(ship.id, {
+            shipment_id: ship.id,
+            client_name: ship.client_name,
+            numero_nfe: ship.numero_nfe,
+            status: ship.status,
+            observations: [],
+          });
+        }
+        map.get(ship.id)!.observations.push({
+          id: row.id,
+          content: row.content,
+          created_at: row.created_at,
+        });
+      }
+      return { shipments: Array.from(map.values()) };
+    }
+
+    case 'add_shipment_items': {
+      const id = String(args.shipment_id ?? '');
+      if (!id) throw new Error('shipment_id é obrigatório');
+      const itemsInput: Array<{ product_name?: string; product_id?: string; quantity: number }> =
+        Array.isArray(args.items) ? args.items : [];
+      if (itemsInput.length === 0) throw new Error('items é obrigatório');
+      const added: any[] = [];
+      const failed: any[] = [];
+      for (const it of itemsInput) {
+        let productId = it.product_id ? String(it.product_id) : '';
+        if (!productId && it.product_name) {
+          const found = await findProductByName(String(it.product_name));
+          if (!found) {
+            failed.push({ product_name: it.product_name, error: 'Produto não encontrado' });
+            continue;
+          }
+          productId = found.id;
+        }
+        if (!productId) {
+          failed.push({ error: 'item sem product_id nem product_name' });
+          continue;
+        }
+        const qty = Number(it.quantity);
+        if (!(qty > 0)) {
+          failed.push({ product_name: it.product_name, error: 'quantity inválido' });
+          continue;
+        }
+        // Verifica se produto já está no pedido — se sim, atualiza (idempotente)
+        const { data: existing } = await supabase
+          .from('shipment_items')
+          .select('id')
+          .eq('shipment_id', id)
+          .eq('product_id', productId)
+          .maybeSingle();
+        if (existing) {
+          const { error: upErr } = await supabase
+            .from('shipment_items')
+            .update({ quantity: qty })
+            .eq('id', (existing as any).id);
+          if (upErr) failed.push({ product_name: it.product_name, error: upErr.message });
+          else
+            added.push({
+              action: 'updated',
+              product_id: productId,
+              product_name: it.product_name,
+              quantity: qty,
+            });
+        } else {
+          const { error: insErr } = await supabase
+            .from('shipment_items')
+            .insert({ shipment_id: id, product_id: productId, quantity: qty });
+          if (insErr) failed.push({ product_name: it.product_name, error: insErr.message });
+          else
+            added.push({
+              action: 'created',
+              product_id: productId,
+              product_name: it.product_name,
+              quantity: qty,
+            });
+        }
+      }
+      return { items_processed: added, items_failed: failed };
     }
 
     default:
