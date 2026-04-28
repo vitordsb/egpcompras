@@ -2402,7 +2402,24 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
         const { data } = await q;
         needId = (data?.[0] as any)?.id ?? null;
       }
-      if (!needId) return { updated: false, message: 'Item não encontrado.' };
+      if (!needId) {
+        // Item não existe ainda — cria direto com o status informado
+        // (caso comum: usuário diz "já temos X" sem ter registrado antes)
+        const itemName = args.item_name ? String(args.item_name).trim() : null;
+        if (!itemName) return { updated: false, message: 'Item não encontrado e item_name não informado para criar.' };
+        let shipId: string | null = null;
+        if (args.shipment_id) shipId = String(args.shipment_id);
+        else if (args.numero_venda || args.client_name) {
+          const r = await resolveShipmentId(args);
+          if (typeof r === 'string') shipId = r;
+        }
+        const { data: created, error: createErr } = await supabase
+          .from('purchase_needs')
+          .insert({ item_name: itemName, shipment_id: shipId, status: newStatus })
+          .select('id').single();
+        if (createErr) throw new Error(createErr.message);
+        return { updated: true, created: true, need_id: created?.id, new_status: newStatus };
+      }
       const { error } = await supabase
         .from('purchase_needs')
         .update({ status: newStatus, updated_at: new Date().toISOString() })

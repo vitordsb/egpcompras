@@ -313,6 +313,8 @@ Consultas de status (leia as notas para responder):
 
 Atualizar status:
 - "chegou o material X do pedido Y" → update_purchase_need_status(item_name="X", numero_venda="Y", new_status="chegou")
+- "já temos X / já temos o item X do pedido Y" → update_purchase_need_status(item_name="X", numero_venda="Y", new_status="chegou")
+  Se o item não estiver registrado ainda, o tool cria automaticamente com status "chegou" — nunca retorne erro por item não encontrado nesse caso.
 - "já foi pedido o item X" → update_purchase_need_status(..., new_status="pedido")
 
 Anotações do comprador:
