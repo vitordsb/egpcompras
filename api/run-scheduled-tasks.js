@@ -19,9 +19,11 @@ function getBrazilNow() {
 }
 
 function supabaseAdmin() {
-  const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
+  // Usa VITE_SUPABASE_URL diretamente — evita conflito com variáveis internas do Vercel
+  const url = process.env.VITE_SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!url || !key) throw new Error('Supabase env vars missing');
+  if (!url) throw new Error('VITE_SUPABASE_URL não configurada');
+  if (!key) throw new Error('SUPABASE_SERVICE_ROLE_KEY não configurada');
   return createClient(url, key, { auth: { autoRefreshToken: false, persistSession: false } });
 }
 
@@ -29,7 +31,7 @@ async function callAgentAPI(instruction) {
   // Chama o agente EGP via API interna — reutiliza a mesma lógica do frontend.
   // Em produção, o agente precisa da VITE_GEMINI_API_KEY disponível no servidor.
   // Como Vite não injeta vars no servidor, usamos GEMINI_API_KEY diretamente.
-  const apiKey = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY;
+  const apiKey = process.env.VITE_GEMINI_API_KEY;
   if (!apiKey) throw new Error('GEMINI_API_KEY não configurada');
 
   const { GoogleGenAI } = await import('@google/genai');
