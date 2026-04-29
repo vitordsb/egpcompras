@@ -2959,10 +2959,26 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
       const notes = args.notes ? String(args.notes) : null;
       const results: any[] = [];
 
+      const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+
       for (const it of items) {
         const code = (it.item_code ?? it.item_name).trim().toUpperCase().replace(/\s+/g, '_');
         const qty = Number(it.quantity);
         const unit = it.unit ?? 'un';
+
+        // Verifica se houve entrada semelhante nas últimas 2h (possível duplicata)
+        const { data: recentMovements } = await supabase
+          .from('stock_movements')
+          .select('quantity, created_at')
+          .ilike('item_code', code)
+          .eq('type', 'entrada')
+          .gte('created_at', twoHoursAgo)
+          .order('created_at', { ascending: false })
+          .limit(3);
+
+        const recentSimilar = (recentMovements ?? []).find(
+          (m: any) => Math.abs(Number(m.quantity) - qty) / qty < 0.1 // mesma quantidade ±10%
+        );
 
         // Tenta achar componente pelo SKU para linkar
         const { data: compMatch } = await supabase
@@ -2979,9 +2995,10 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
           .ilike('item_code', code)
           .maybeSingle();
 
+        const previousQty = existing ? Number(existing.quantity) : 0;
         let itemId: string;
         if (existing) {
-          const newQty = Number(existing.quantity) + qty;
+          const newQty = previousQty + qty;
           await supabase.from('stock_items')
             .update({ quantity: newQty, item_name: it.item_name, unit,
                       component_id: componentId ?? undefined,
@@ -3005,7 +3022,17 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
           notes,
         });
 
-        results.push({ item_code: code, item_name: it.item_name, quantity_added: qty });
+        results.push({
+          item_code: code,
+          item_name: it.item_name,
+          quantity_added: qty,
+          previous_balance: previousQty,
+          new_balance: previousQty + qty,
+          // Alerta de possível duplicata para a IA informar o usuário
+          possible_duplicate: recentSimilar
+            ? `Atenção: já foi registrada uma entrada de ${recentSimilar.quantity} unidades desse item nas últimas 2h (${new Date(recentSimilar.created_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}). Se foi duplicata, avise para desfazer.`
+            : null,
+        });
       }
 
       return { registered: results.length, items: results };

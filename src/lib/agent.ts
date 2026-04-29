@@ -375,6 +375,10 @@ Exemplo:
 **Entrada de materiais:**
 - "chegou X de Y" / "armazene X unidades de Y" / lista de recebidos → register_stock_entry(items=[...])
 - Cria o item se não existir. Use o código do catálogo (EGPS1, CABOD31) quando mencionado.
+- Após registrar, SEMPRE confirme mostrando saldo anterior e novo: "Resistor 10k: tinha 5.000 → agora tem 10.000 (+5.000)."
+- Se o campo `possible_duplicate` vier preenchido, AVISE o usuário antes de qualquer outra coisa:
+  "⚠ Possível duplicata: [mensagem]. Confirma que é uma segunda entrada real?"
+  Se ele confirmar que foi duplicata → chame adjust_stock para corrigir o saldo de volta.
 
 **Consultas:**
 - "qual o estoque?" → get_stock_report()
