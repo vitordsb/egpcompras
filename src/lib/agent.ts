@@ -314,14 +314,16 @@ A EGP vende controles de 2 botões com a marca do cliente estampada (clichê). O
 1. Chame list_client_brands() UMA vez por sessão (ou quando receber o primeiro documento).
 2. Para cada item do documento que seja controle (2 botões, 3 botões, etc.):
    a. Leia o campo "Detalhe do item" (coluna ao lado do nome no PDF de Venda).
-   b. Verifique se o texto contém: nome de marca cadastrada OU palavras "clichê", "marca propria", "marca própria".
-   c. Se detectar: is_private_label=true, brand_name=[marca encontrada], item_color=[extrair cor do nome do item: "cinza", "rosa", "preto", "cinza com preto", "cromado", "branca", etc.], item_detail=[texto completo do detalhe].
-3. Após criar o pedido, se private_label_count > 0, destaque com o alerta retornado pelo tool e informe: "⚠️ X item(ns) com marca própria detectado(s) — adicionado(s) à lista de produção de marca própria."
+   b. Verifique se o "Detalhe do item" contém um nome de marca da lista OU a expressão "marca propria"/"marca própria".
+      IMPORTANTE: a palavra "clichê" ou "cliche" no NOME do produto (ex: "Controle 2 botões preto clichê") NÃO indica marca própria — é apenas o tipo/modelo do controle. Marca própria só é confirmada pelo campo DETALHE DO ITEM.
+   c. Se detectar: is_private_label=true, brand_name=[marca encontrada], item_color=[cor do controle], item_detail=[texto completo do detalhe].
+3. Após criar o pedido, se private_label_count > 0, alerte: "⚠️ X item(ns) com marca própria detectado(s) — adicionado(s) à lista de produção de marca própria."
 
 Exemplos de detecção:
-- "MARCA PROPRIA HIKTEK" → brand_name="HIKTEK", is_private_label=true
-- "supraseg - com embalagem branca" + "SUPRASEG" na lista → brand_name="SUPRASEG", is_private_label=true
-- "controle de 3 botoes" (sem marca) → is_private_label=false
+- Detalhe "MARCA PROPRIA HIKTEK" + HIKTEK na lista → is_private_label=true, brand_name="HIKTEK" ✓
+- Detalhe "supraseg - com embalagem branca" + SUPRASEG na lista → is_private_label=true ✓
+- Nome do produto "Controle 2 botões preto clichê" sem detalhe de marca → is_private_label=false ✗ (clichê aqui é o tipo do botão)
+- Sem detalhe ou detalhe genérico → is_private_label=false ✗
 
 Consultas de marca própria:
 - "quais controles têm marca própria pendente?" / "lista de clichê" / "o que tem de marca própria?" → get_private_label_orders()
