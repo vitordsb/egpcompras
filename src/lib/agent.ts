@@ -437,9 +437,21 @@ Ao concluir → produto montado entra no estoque; sobras que voltam voltam para 
   Desconta todos os componentes do BOM multiplicados pela quantidade produzida.
 
 ## Falta Comprar
-Quando o usuário informar que falta material para um pedido:
+
+### Falta para pedido de venda (item vai direto para o cliente)
 - "falta X e Y no pedido 5814" → register_purchase_need(numero_venda="5814", items=[{item_name:"X"},{item_name:"Y"}])
 - Confirme: "Registrado: X e Y faltando no pedido SYVAL #5814."
+
+### Falta componente de produção (componente para montar um produto acabado)
+Componentes de produção **não se vendem diretamente** — eles são usados para montar o produto final. Portanto:
+- Nunca pergunte "para qual pedido de venda?" quando o item faltante for um componente de produção.
+- Antes de registrar, faça a análise de cobertura: chame \`check_component_stock_for_production(component_name="...", finished_product_name="...")\`
+- O resultado informa: estoque atual do componente, quantos produtos dá pra completar, e quantos ficam sem.
+- **Casos de resposta:**
+  - Estoque zero: "Sem chapinhas no sistema — nenhum dos 5160 controles pode ser finalizado. Registro uma necessidade de compra de 5160 chapinhas?"
+  - Estoque parcial: "Com 3000 chapinhas, dá para completar 3000 dos 5160 controles. Os outros 2160 ficam sem — faltam 2160 chapinhas a mais. Registro a necessidade de compra de 2160?"
+  - Estoque suficiente: "Tem chapinhas suficientes para todos os 5160 controles. Nenhuma compra necessária."
+- Para registrar: \`register_purchase_need(items=[{item_name:"chapinha", quantity: N}])\` **sem shipment_id** — é necessidade de produção geral.
 
 Consultas de status (leia as notas para responder):
 - "o que falta comprar?" → list_purchase_needs() — agrupe por pedido na resposta
@@ -490,12 +502,21 @@ Quando o usuário disser "coloque o pedido X na financeira Y", "o pedido X foi p
 - Se uma tool falhar, leia o erro e proponha correção curta.
 
 ## Memória persistente
-Você tem 4 tools especiais pra lembrar fatos entre conversas: \`remember\`, \`list_memories\`, \`update_memory\`, \`forget_memory\`.
+Você tem 5 tools especiais pra lembrar fatos entre conversas: \`remember\`, \`list_memories\`, \`search_memories\`, \`update_memory\`, \`forget_memory\`.
 - Quando o usuário disser "aprenda que X", "lembre que X", "guarde isso", chame \`remember(content: ...)\`.
 - Quando ele perguntar "o que você lembra?", chame \`list_memories\`.
 - Quando ele disser "esqueça X", "remove X da memória", "exclua X", "apague X": chame \`list_memories\` pra identificar o id correto, depois \`forget_memory\`. Confirme: "Memória removida."
 - Se o conteúdo de uma memória precisar mudar, use \`update_memory\` em vez de criar uma nova.
 - Memórias já gravadas aparecem injetadas neste prompt (seção "Coisas que você aprendeu" abaixo, se houver).
+
+**Regra de busca dupla — ordem obrigatória:**
+Quando uma busca no banco (\`list_incoming_materials\`, \`get_stock_report\`, \`find_product_by_name\`, \`list_purchase_needs\`, etc.) retornar vazio para um item específico, antes de dizer que não há registro:
+1. Verifique a seção "Coisas que você aprendeu" neste mesmo prompt — se há menção ao item, use essa informação diretamente, SEM chamar search_memories (a informação já está aqui).
+2. Se o item NÃO aparece nas memórias injetadas, ENTÃO chame \`search_memories(keyword: "nome do item")\` para buscar no banco.
+
+Quando encontrar informação na memória (etapa 1 ou 2), responda com as ações concretas disponíveis. Exemplo:
+"Não há entrada formal no sistema, mas tenho anotado que os controles chegaram — porém não podem ser vendidos pois estão faltando as chapinhas. Posso: (1) registrar a entrada no estoque, (2) abrir uma necessidade de compra para as chapinhas, ou (3) ambos. O que prefere?"
+Nunca use "registrar formalmente" como frase vaga — proponha a ação concreta (register_stock_entry, register_purchase_need, etc.).
 
 **Regra de ouro: memórias têm prioridade sobre pedidos pontuais.**
 Se o usuário pedir algo que contradiz uma memória salva (ex: memória diz "sempre usar frete FOB" e ele pede frete CIF sem mencionar a memória), bata de frente: avise que há uma configuração salva e siga ela — não ignore silenciosamente.
@@ -656,6 +677,15 @@ export async function runAgent({
 
     if (calls.length === 0) {
       const text = response.text ?? '';
+      // Resposta vazia sem tool calls = Gemini ficou confuso (ex: info duplicada em
+      // system prompt + tool response). Injeta um nudge e tenta mais uma vez.
+      if (!text.trim() && step === 0) {
+        workingHistory.push({
+          role: 'user',
+          text: '(sistema: resposta incompleta — por favor, responda ao usuário em português)',
+        });
+        continue;
+      }
       const turn: ChatTurn = {
         role: 'model',
         text,

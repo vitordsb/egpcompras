@@ -408,6 +408,21 @@ export const toolDeclarations = [
     parameters: { type: 'OBJECT' as Type, properties: {} },
   },
   {
+    name: 'search_memories',
+    description:
+      'Busca memórias persistentes que contenham uma palavra-chave. Use SEMPRE que uma busca no banco retornar vazio ou inconclusivo para um produto, material ou pedido específico — pode haver notas salvas na memória que complementam ou contradizem o resultado do banco.',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        keyword: {
+          type: 'STRING' as Type,
+          description: 'Palavra-chave pra buscar. Ex: "Controle 2 Botões", "chapinha", "fornecedor X atraso".',
+        },
+      },
+      required: ['keyword'],
+    },
+  },
+  {
     name: 'update_memory',
     description: 'Atualiza o conteúdo de uma memória existente.',
     parameters: {
@@ -674,16 +689,16 @@ export const toolDeclarations = [
   {
     name: 'register_purchase_need',
     description:
-      'Registra itens que faltam para dar saída em um pedido. Use quando o usuário informar que falta X no pedido Y. Identifica o pedido por shipment_id, numero_venda ou client_name (fuzzy).',
+      'Registra itens que precisam ser comprados. Para itens de pedido de venda: passe shipment_id/numero_venda/client_name. Para componentes de produção (sem pedido de venda vinculado): omita todos os campos de pedido — o registro fica como necessidade de produção geral.',
     parameters: {
       type: 'OBJECT' as Type,
       properties: {
-        shipment_id:   { type: 'STRING' as Type },
-        numero_venda:  { type: 'STRING' as Type },
-        client_name:   { type: 'STRING' as Type },
+        shipment_id:   { type: 'STRING' as Type, description: 'Opcional — só passar se o item falta para um pedido específico.' },
+        numero_venda:  { type: 'STRING' as Type, description: 'Opcional — alternativa ao shipment_id.' },
+        client_name:   { type: 'STRING' as Type, description: 'Opcional — alternativa ao shipment_id.' },
         items: {
           type: 'ARRAY' as Type,
-          description: 'Lista de itens faltantes.',
+          description: 'Lista de itens a comprar.',
           items: {
             type: 'OBJECT' as Type,
             properties: {
@@ -695,9 +710,22 @@ export const toolDeclarations = [
             required: ['item_name'],
           },
         },
-        note: { type: 'STRING' as Type, description: 'Observação inicial opcional (ex: "cobrado do fornecedor X").' },
+        note: { type: 'STRING' as Type, description: 'Observação inicial opcional.' },
       },
       required: ['items'],
+    },
+  },
+  {
+    name: 'check_component_stock_for_production',
+    description:
+      'Verifica se o estoque de um componente é suficiente para produzir um produto acabado em relação aos pedidos em aberto. Retorna: estoque atual do componente, quantidade necessária total (somando pedidos pendentes × qtd na BOM), quantos produtos dá pra fazer com o estoque atual, e quanto falta comprar. Use antes de registrar necessidade de compra de componente de produção.',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        component_name: { type: 'STRING' as Type, description: 'Nome do componente. Ex: "chapinha", "terminal de bateria".' },
+        finished_product_name: { type: 'STRING' as Type, description: 'Produto acabado que usa esse componente. Ex: "Controle 2 Botões".' },
+      },
+      required: ['component_name', 'finished_product_name'],
     },
   },
   {
@@ -2419,6 +2447,18 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
       return { memories: data };
     }
 
+    case 'search_memories': {
+      const keyword = String(args.keyword ?? '').trim();
+      if (!keyword) throw new Error('keyword é obrigatório');
+      const { data, error } = await supabase
+        .from('agent_memories')
+        .select('id, content, created_at')
+        .ilike('content', `%${keyword}%`)
+        .order('created_at', { ascending: false });
+      if (error) throw new Error(error.message);
+      return { memories: data ?? [], count: (data ?? []).length };
+    }
+
     case 'update_memory': {
       const id = String(args.memory_id ?? '');
       const content = String(args.content ?? '').trim();
@@ -2854,8 +2894,12 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
 
     // ── Falta Comprar ────────────────────────────────────────────────────────
     case 'register_purchase_need': {
-      const shipId = await resolveShipmentId(args);
-      const resolvedId = typeof shipId === 'string' ? shipId : null;
+      // Resolve shipment apenas se algum identificador de pedido foi passado.
+      let resolvedId: string | null = null;
+      if (args.shipment_id || args.numero_venda || args.client_name) {
+        const shipId = await resolveShipmentId(args);
+        resolvedId = typeof shipId === 'string' ? shipId : null;
+      }
       const items = (args.items ?? []) as Array<{ item_name: string; item_code?: string; quantity?: number; unit?: string }>;
       if (!items.length) throw new Error('Informe pelo menos um item.');
       const inserted: any[] = [];
@@ -3499,6 +3543,80 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
         components_missing: missing.length,
         missing,
         all_components: analysis,
+      };
+    }
+
+    case 'check_component_stock_for_production': {
+      const compName    = String(args.component_name ?? '').trim();
+      const productName = String(args.finished_product_name ?? '').trim();
+      if (!compName || !productName) throw new Error('component_name e finished_product_name são obrigatórios.');
+
+      // 1. Localiza o componente
+      const { data: comps } = await supabase
+        .from('components')
+        .select('id, name, sku, unit')
+        .ilike('name', `%${compName}%`)
+        .limit(1);
+      const comp = (comps as any[])?.[0];
+      if (!comp) return { error: `Componente "${compName}" não encontrado no catálogo.` };
+
+      // 2. Estoque atual do componente
+      let stockRow: any = null;
+      const { data: stockByComp } = await supabase
+        .from('stock_items').select('quantity, reserved_quantity, unit')
+        .eq('component_id', comp.id).maybeSingle();
+      stockRow = stockByComp;
+      if (!stockRow && comp.sku) {
+        const { data: stockBySku } = await supabase
+          .from('stock_items').select('quantity, reserved_quantity, unit')
+          .ilike('item_code', comp.sku).maybeSingle();
+        stockRow = stockBySku;
+      }
+      const compQty = stockRow ? Number(stockRow.quantity) - Number(stockRow.reserved_quantity) : 0;
+
+      // 3. Produto acabado + stock
+      const { data: products } = await supabase
+        .from('products').select('id, name').ilike('name', `%${productName}%`).limit(1);
+      const product = (products as any[])?.[0];
+      if (!product) return { error: `Produto "${productName}" não encontrado no catálogo.` };
+
+      const { data: prodStock } = await supabase
+        .from('stock_items').select('quantity, reserved_quantity')
+        .ilike('item_name', `%${product.name}%`).maybeSingle();
+      const prodQtyInStock = prodStock
+        ? Number((prodStock as any).quantity) - Number((prodStock as any).reserved_quantity)
+        : 0;
+
+      // 4. BOM: quantas unidades do componente por produto acabado
+      const { data: bomItem } = await supabase
+        .from('bom_items')
+        .select('quantity')
+        .eq('product_id', product.id)
+        .eq('component_id', comp.id)
+        .maybeSingle();
+      const compPerUnit = bomItem ? Number((bomItem as any).quantity) : 1;
+
+      // 5. Calcular cobertura
+      const canComplete   = compPerUnit > 0 ? Math.floor(compQty / compPerUnit) : 0;
+      const totalDemand   = prodQtyInStock; // controles em estoque que precisam do componente
+      const covered       = Math.min(canComplete, totalDemand);
+      const notCovered    = Math.max(0, totalDemand - covered);
+      const compNeeded    = notCovered * compPerUnit;
+
+      return {
+        component:               comp.name,
+        component_stock:         compQty,
+        component_per_unit:      compPerUnit,
+        finished_product:        product.name,
+        finished_product_stock:  totalDemand,
+        can_complete_units:      covered,
+        units_without_component: notCovered,
+        component_missing:       compNeeded,
+        summary: notCovered === 0
+          ? `Estoque de ${comp.name} (${compQty}) é suficiente para todos os ${totalDemand} ${product.name} em estoque.`
+          : covered === 0
+          ? `Sem ${comp.name} em estoque — nenhum dos ${totalDemand} ${product.name} pode ser completado. Faltam ${compNeeded} ${comp.name}.`
+          : `Com ${compQty} ${comp.name}, dá para completar ${covered} dos ${totalDemand} ${product.name}. Os outros ${notCovered} ficam sem — faltam ${compNeeded} ${comp.name} a mais.`,
       };
     }
 
