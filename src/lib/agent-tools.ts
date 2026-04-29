@@ -713,6 +713,75 @@ export const toolDeclarations = [
       required: ['content'],
     },
   },
+  // ── Estoque ──────────────────────────────────────────────────────────────────
+  {
+    name: 'register_stock_entry',
+    description:
+      'Registra entrada de itens no estoque. Use quando o usuário disser "chegou X de Y", "armazene no estoque", ou mandar uma lista de materiais recebidos. Cria o item no estoque se ainda não existir.',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        items: {
+          type: 'ARRAY' as Type,
+          description: 'Lista de itens recebidos.',
+          items: {
+            type: 'OBJECT' as Type,
+            properties: {
+              item_code: { type: 'STRING' as Type, description: 'Código do produto (ex: EGPS1). Use o código do catálogo se souber.' },
+              item_name: { type: 'STRING' as Type, description: 'Nome do item.' },
+              quantity:  { type: 'NUMBER' as Type, description: 'Quantidade recebida.' },
+              unit:      { type: 'STRING' as Type, description: 'Unidade: un, m, kg, etc.' },
+            },
+            required: ['item_name', 'quantity'],
+          },
+        },
+        notes: { type: 'STRING' as Type, description: 'Observação (ex: "NF 1234", "fornecedor X").' },
+      },
+      required: ['items'],
+    },
+  },
+  {
+    name: 'get_stock_report',
+    description:
+      'Retorna o estoque atual. Com include_needs=true, cruza com pedidos pendentes e mostra o que falta comprar. Use para "qual o estoque?", "preciso comprar o quê?", "relatório de compras".',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        include_needs:    { type: 'BOOLEAN' as Type, description: 'Se true, cruza com shipment_items dos pedidos pendentes e calcula o que falta.' },
+        only_shortages:   { type: 'BOOLEAN' as Type, description: 'Se true, retorna só os itens com estoque insuficiente.' },
+        item_code:        { type: 'STRING' as Type, description: 'Filtrar por código específico.' },
+        item_name:        { type: 'STRING' as Type, description: 'Fuzzy match por nome.' },
+      },
+    },
+  },
+  {
+    name: 'adjust_stock',
+    description:
+      'Corrige o saldo de um item no estoque (contagem física, perda, devolução). Use quando o usuário quiser corrigir uma quantidade manualmente.',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        item_code:    { type: 'STRING' as Type },
+        item_name:    { type: 'STRING' as Type, description: 'Fuzzy match se não souber o código.' },
+        new_quantity: { type: 'NUMBER' as Type, description: 'Novo saldo após ajuste.' },
+        notes:        { type: 'STRING' as Type, description: 'Motivo do ajuste.' },
+      },
+      required: ['new_quantity'],
+    },
+  },
+  {
+    name: 'deduct_stock_for_shipment',
+    description:
+      'Desconta do estoque todos os itens de um pedido (shipment). Chame AUTOMATICAMENTE sempre que marcar um pedido como "saiu" (shipped). Identifica o pedido por shipment_id, numero_venda ou client_name.',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        shipment_id:  { type: 'STRING' as Type },
+        numero_venda: { type: 'STRING' as Type },
+        client_name:  { type: 'STRING' as Type },
+      },
+    },
+  },
   {
     name: 'add_shipment_items',
     description:
@@ -2449,6 +2518,152 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
         .single();
       if (error) throw new Error(error.message);
       return { added: true, note_id: data?.id };
+    }
+
+    // ── Estoque ──────────────────────────────────────────────────────────────
+    case 'register_stock_entry': {
+      const items = (args.items ?? []) as Array<{
+        item_code?: string; item_name: string; quantity: number; unit?: string;
+      }>;
+      if (!items.length) throw new Error('Informe pelo menos um item.');
+      const notes = args.notes ? String(args.notes) : null;
+      const results: any[] = [];
+
+      for (const it of items) {
+        const code = (it.item_code ?? it.item_name).trim().toUpperCase().replace(/\s+/g, '_');
+        const qty = Number(it.quantity);
+        const unit = it.unit ?? 'un';
+
+        // Upsert no stock_items — cria ou soma ao saldo
+        const { data: existing } = await supabase
+          .from('stock_items')
+          .select('id, quantity')
+          .ilike('item_code', code)
+          .maybeSingle();
+
+        let itemId: string;
+        if (existing) {
+          const newQty = Number(existing.quantity) + qty;
+          await supabase.from('stock_items')
+            .update({ quantity: newQty, item_name: it.item_name, unit, updated_at: new Date().toISOString() })
+            .eq('id', existing.id);
+          itemId = existing.id;
+        } else {
+          const { data: created } = await supabase.from('stock_items')
+            .insert({ item_code: code, item_name: it.item_name, quantity: qty, unit })
+            .select('id').single();
+          itemId = created?.id;
+        }
+
+        // Registra movimento
+        await supabase.from('stock_movements').insert({
+          stock_item_id: itemId,
+          item_code: code,
+          item_name: it.item_name,
+          quantity: qty,
+          type: 'entrada',
+          notes,
+        });
+
+        results.push({ item_code: code, item_name: it.item_name, quantity_added: qty });
+      }
+
+      return { registered: results.length, items: results };
+    }
+
+    case 'get_stock_report': {
+      let q = supabase.from('stock_items')
+        .select('id, item_code, item_name, quantity, unit, min_quantity')
+        .order('item_name');
+      if (args.item_code) q = q.ilike('item_code', `%${String(args.item_code)}%`);
+      if (args.item_name) q = q.ilike('item_name', `%${String(args.item_name)}%`);
+      const { data: stock, error } = await q;
+      if (error) throw new Error(error.message);
+
+      if (!args.include_needs) {
+        return { stock: stock ?? [] };
+      }
+
+      // Cruza com itens dos pedidos pendentes (status = pending)
+      const { data: pendingItems } = await supabase
+        .from('shipment_items')
+        .select('item_code, item_name, quantity, shipment:shipments!inner(id, client_name, numero_venda, status)')
+        .eq('shipments.status', 'pending');
+
+      // Agrupa necessidade por item_code
+      const needs: Record<string, { item_name: string; needed: number; shipments: string[] }> = {};
+      for (const it of (pendingItems ?? []) as any[]) {
+        const code = (it.item_code ?? it.item_name ?? '').toUpperCase();
+        if (!needs[code]) needs[code] = { item_name: it.item_name ?? it.item_code, needed: 0, shipments: [] };
+        needs[code].needed += Number(it.quantity ?? 1);
+        const label = it.shipment?.numero_venda ? `#${it.shipment.numero_venda}` : it.shipment?.client_name ?? '?';
+        if (!needs[code].shipments.includes(label)) needs[code].shipments.push(label);
+      }
+
+      const stockMap: Record<string, number> = {};
+      for (const s of (stock ?? []) as any[]) stockMap[s.item_code] = Number(s.quantity);
+
+      const report = Object.entries(needs).map(([code, n]) => {
+        const available = stockMap[code] ?? 0;
+        const to_buy = Math.max(0, n.needed - available);
+        return { item_code: code, item_name: n.item_name, needed: n.needed, available, to_buy, shipments: n.shipments };
+      }).sort((a, b) => b.to_buy - a.to_buy);
+
+      const filtered = args.only_shortages ? report.filter((r) => r.to_buy > 0) : report;
+      return { report: filtered, items_to_buy: filtered.filter((r) => r.to_buy > 0).length };
+    }
+
+    case 'adjust_stock': {
+      const newQty = Number(args.new_quantity);
+      let item: any = null;
+      if (args.item_code) {
+        const { data } = await supabase.from('stock_items').select('*').ilike('item_code', String(args.item_code)).maybeSingle();
+        item = data;
+      } else if (args.item_name) {
+        const { data } = await supabase.from('stock_items').select('*').ilike('item_name', `%${String(args.item_name)}%`).limit(1);
+        item = (data as any)?.[0];
+      }
+      if (!item) throw new Error('Item não encontrado no estoque.');
+      const diff = newQty - Number(item.quantity);
+      await supabase.from('stock_items').update({ quantity: newQty, updated_at: new Date().toISOString() }).eq('id', item.id);
+      await supabase.from('stock_movements').insert({
+        stock_item_id: item.id, item_code: item.item_code, item_name: item.item_name,
+        quantity: diff, type: 'ajuste', notes: args.notes ? String(args.notes) : null,
+      });
+      return { adjusted: true, item_code: item.item_code, old_quantity: item.quantity, new_quantity: newQty };
+    }
+
+    case 'deduct_stock_for_shipment': {
+      const resolved = await resolveShipmentId(args);
+      if (typeof resolved !== 'string') return resolved;
+      const shipmentId = resolved;
+
+      const { data: items } = await supabase
+        .from('shipment_items')
+        .select('item_code, item_name, quantity')
+        .eq('shipment_id', shipmentId);
+
+      if (!items?.length) return { deducted: 0, message: 'Pedido sem itens cadastrados.' };
+
+      const results: any[] = [];
+      for (const it of items as any[]) {
+        const code = (it.item_code ?? it.item_name ?? '').toUpperCase();
+        const qty = Number(it.quantity ?? 1);
+        const { data: stockItem } = await supabase.from('stock_items').select('id, quantity').ilike('item_code', code).maybeSingle();
+
+        if (stockItem) {
+          const newQty = Number(stockItem.quantity) - qty;
+          await supabase.from('stock_items').update({ quantity: newQty, updated_at: new Date().toISOString() }).eq('id', stockItem.id);
+          await supabase.from('stock_movements').insert({
+            stock_item_id: stockItem.id, item_code: code, item_name: it.item_name,
+            quantity: -qty, type: 'saida', shipment_id: shipmentId,
+          });
+          results.push({ item_code: code, deducted: qty, new_balance: newQty });
+        } else {
+          results.push({ item_code: code, deducted: 0, note: 'Não encontrado no estoque' });
+        }
+      }
+      return { deducted: results.filter((r) => r.deducted > 0).length, items: results };
     }
 
     case 'add_shipment_items': {

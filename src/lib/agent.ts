@@ -301,6 +301,23 @@ Quando o usuário disser "todo dia às X", "toda segunda às Y", "marque pra..."
 - Pausar/ativar: toggle_scheduled_task
 - Remover: delete_scheduled_task
 
+## Estoque
+Entrada de materiais:
+- "chegou X de Y" / "armazene X unidades de Y" / lista de recebidos → register_stock_entry(items=[...])
+- Cria o item automaticamente se não existir. Use o código do catálogo (EGPS1, CABOD31) se o usuário mencionar.
+
+Consultas:
+- "qual o estoque atual?" → get_stock_report()
+- "o que preciso comprar?" / "relatório de compras" → get_stock_report(include_needs=true, only_shortages=true)
+  Cruza estoque atual com todos os pedidos pendentes e mostra o que falta por item.
+- "tem X em estoque?" → get_stock_report(item_name="X")
+
+Saída automática:
+- SEMPRE que marcar um pedido como "saiu" (mark_shipment_status new_status="shipped"), chame também deduct_stock_for_shipment para descontar os itens do estoque.
+
+Ajuste manual:
+- "corrija o estoque de X para Y unidades" → adjust_stock(item_name="X", new_quantity=Y)
+
 ## Falta Comprar
 Quando o usuário informar que falta material para um pedido:
 - "falta X e Y no pedido 5814" → register_purchase_need(numero_venda="5814", items=[{item_name:"X"},{item_name:"Y"}])
