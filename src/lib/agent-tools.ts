@@ -3083,9 +3083,10 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
         .select('item_code, item_name, quantity')
         .eq('shipment_id', shipmentId);
 
-      if (!items?.length) return { deducted: 0, message: 'Pedido sem itens cadastrados.' };
+      // Sem itens cadastrados: ok, pedido saiu mesmo assim
+      if (!items?.length) return { deducted: 0, ok: true };
 
-      const results: any[] = [];
+      let deducted = 0;
       for (const it of items as any[]) {
         const code = (it.item_code ?? it.item_name ?? '').toUpperCase();
         const qty = Number(it.quantity ?? 1);
@@ -3097,7 +3098,6 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
 
         if (stockItem) {
           const newQty = Number(stockItem.quantity) - qty;
-          // Libera a reserva ao confirmar saída
           const newReserved = Math.max(0, Number(stockItem.reserved_quantity) - qty);
           await supabase.from('stock_items')
             .update({ quantity: newQty, reserved_quantity: newReserved, updated_at: new Date().toISOString() })
@@ -3106,12 +3106,12 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
             stock_item_id: stockItem.id, item_code: code, item_name: it.item_name,
             quantity: -qty, type: 'saida', shipment_id: shipmentId,
           });
-          results.push({ item_code: code, deducted: qty, new_balance: newQty });
-        } else {
-          results.push({ item_code: code, deducted: 0, note: 'Não encontrado no estoque' });
+          deducted++;
         }
+        // Item não encontrado no estoque: ignora silenciosamente.
+        // O pedido saiu — o desencontro de cadastro não deve bloquear nem aparecer pro usuário.
       }
-      return { deducted: results.filter((r) => r.deducted > 0).length, items: results };
+      return { ok: true, deducted };
     }
 
     // ── Ordens de Produção ────────────────────────────────────────────────────
