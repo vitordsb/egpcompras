@@ -615,6 +615,54 @@ export const toolDeclarations = [
     },
   },
 
+  // ---------- MARCAS PRÓPRIAS (CLICHÊS) ----------
+  {
+    name: 'list_client_brands',
+    description: 'Lista todas as marcas próprias (clichês) cadastradas. Chame ANTES de importar qualquer PDF de pedido para cruzar com os detalhes dos itens.',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        active_only: { type: 'BOOLEAN' as Type, description: 'true = só ativas (default true).' },
+      },
+    },
+  },
+  {
+    name: 'register_client_brand',
+    description: 'Cadastra uma marca própria (clichê) de cliente. Use quando o usuário disser "cadastra a marca X do cliente Y" ou "adiciona o clichê HIKTEK".',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        brand_name:  { type: 'STRING' as Type, description: 'Nome da marca/clichê. Ex: "HIKTEK", "SUPRASEG". Será usado para detecção automática nos PDFs.' },
+        client_name: { type: 'STRING' as Type, description: 'Razão social do cliente (opcional, para referência).' },
+        notes:       { type: 'STRING' as Type, description: 'Observações: cores padrão, embalagem especial, etc.' },
+      },
+      required: ['brand_name'],
+    },
+  },
+  {
+    name: 'delete_client_brand',
+    description: 'Remove ou desativa uma marca própria cadastrada.',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        brand_name: { type: 'STRING' as Type, description: 'Nome da marca a remover.' },
+      },
+      required: ['brand_name'],
+    },
+  },
+  {
+    name: 'get_private_label_orders',
+    description: 'Retorna lista de produção de controles com marca própria — agrupada por cliente, marca, modelo e cor. Use para responder "quais controles precisam de clichê?", "lista de marca própria pendente", "o que tem de controle personalizado pra separar?".',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        status:      { type: 'STRING' as Type, description: 'Filtrar por status do pedido: pending, shipped, etc. Omitir = pending.' },
+        client_name: { type: 'STRING' as Type, description: 'Filtrar por cliente específico.' },
+        brand_name:  { type: 'STRING' as Type, description: 'Filtrar por marca específica.' },
+      },
+    },
+  },
+
   // ---------- SAÍDAS / PEDIDOS ----------
   {
     name: 'find_partial_shipment',
@@ -682,10 +730,14 @@ export const toolDeclarations = [
             properties: {
               product_name: { type: 'STRING' as Type, description: 'Nome pra fuzzy match no catálogo.' },
               product_id:   { type: 'STRING' as Type, description: 'UUID do produto se já conhecido.' },
-              item_code:    { type: 'STRING' as Type, description: 'Código do item no Conta Azul (ex: cod17, EGPADV1).' },
-              item_name:    { type: 'STRING' as Type, description: 'Descrição livre do item.' },
-              unit_price:   { type: 'NUMBER' as Type, description: 'Valor unitário em R$.' },
-              quantity:     { type: 'NUMBER' as Type },
+              item_code:        { type: 'STRING' as Type, description: 'Código do item no Conta Azul (ex: cod17, EGPADV1).' },
+              item_name:        { type: 'STRING' as Type, description: 'Descrição livre do item.' },
+              unit_price:       { type: 'NUMBER' as Type, description: 'Valor unitário em R$.' },
+              quantity:         { type: 'NUMBER' as Type },
+              is_private_label: { type: 'BOOLEAN' as Type, description: 'true se o item for controle com marca própria/clichê detectado.' },
+              brand_name:       { type: 'STRING' as Type, description: 'Nome da marca detectada (ex: "HIKTEK"). Preencher quando is_private_label=true.' },
+              item_color:       { type: 'STRING' as Type, description: 'Cor do controle extraída do nome (ex: "cinza", "rosa", "preto", "cinza com preto").' },
+              item_detail:      { type: 'STRING' as Type, description: 'Texto do campo "Detalhe do item" do PDF (preservar integralmente).' },
             },
             required: ['quantity'],
           },
@@ -3175,6 +3227,90 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
     }
 
     // ---------- SAÍDAS / PEDIDOS ----------
+    // ---------- MARCAS PRÓPRIAS ----------
+    case 'list_client_brands': {
+      const activeOnly = args.active_only !== false;
+      let q = supabase.from('client_brands')
+        .select('id, brand_name, client_name, notes, active, created_at')
+        .order('brand_name');
+      if (activeOnly) q = q.eq('active', true);
+      const { data, error } = await q;
+      if (error) throw new Error(error.message);
+      return { brands: data ?? [], count: (data ?? []).length };
+    }
+
+    case 'register_client_brand': {
+      const brandName  = String(args.brand_name ?? '').trim().toUpperCase();
+      if (!brandName) throw new Error('brand_name é obrigatório');
+      const clientName = args.client_name ? String(args.client_name).trim() : null;
+      const notes      = args.notes ? String(args.notes).trim() : null;
+      const { data, error } = await supabase.from('client_brands')
+        .upsert({ brand_name: brandName, client_name: clientName, notes, active: true },
+                 { onConflict: 'brand_name' })
+        .select('id, brand_name, client_name').single();
+      if (error) throw new Error(error.message);
+      return { registered: data };
+    }
+
+    case 'delete_client_brand': {
+      const brandName = String(args.brand_name ?? '').trim().toUpperCase();
+      if (!brandName) throw new Error('brand_name é obrigatório');
+      // Desativa em vez de deletar (preserva histórico)
+      const { error } = await supabase.from('client_brands')
+        .update({ active: false }).ilike('brand_name', brandName);
+      if (error) throw new Error(error.message);
+      return { deactivated: true, brand_name: brandName };
+    }
+
+    case 'get_private_label_orders': {
+      const statusFilter = args.status ? String(args.status) : 'pending';
+      let q = supabase.from('shipment_items')
+        .select(`id, item_name, item_code, brand_name, item_color, item_detail, quantity, unit_price,
+                 shipment:shipments!inner(id, client_name, numero_venda, numero_nfe, data_prevista, status)`)
+        .eq('is_private_label', true)
+        .order('shipments.data_prevista', { ascending: true });
+      if (statusFilter !== 'all') {
+        q = q.eq('shipments.status', statusFilter);
+      }
+      if (args.client_name) {
+        q = q.ilike('shipments.client_name', `%${String(args.client_name)}%`);
+      }
+      if (args.brand_name) {
+        q = q.ilike('brand_name', `%${String(args.brand_name)}%`);
+      }
+      const { data, error } = await q.limit(200);
+      if (error) throw new Error(error.message);
+
+      // Agrupa por cliente + marca
+      const grouped: Record<string, {
+        client_name: string; brand_name: string;
+        items: Array<{ item_name: string; item_color: string | null; item_detail: string | null; quantity: number; numero_venda: string | null; data_prevista: string | null }>;
+      }> = {};
+      for (const row of (data ?? []) as any[]) {
+        const key = `${row.shipment?.client_name}__${row.brand_name ?? '?'}`;
+        if (!grouped[key]) {
+          grouped[key] = { client_name: row.shipment?.client_name ?? '?', brand_name: row.brand_name ?? '(sem marca)', items: [] };
+        }
+        grouped[key].items.push({
+          item_name:     row.item_name,
+          item_color:    row.item_color,
+          item_detail:   row.item_detail,
+          quantity:      row.quantity,
+          numero_venda:  row.shipment?.numero_venda,
+          data_prevista: row.shipment?.data_prevista,
+        });
+      }
+
+      return {
+        total_items: (data ?? []).length,
+        groups: Object.values(grouped),
+        summary: Object.values(grouped).map((g) =>
+          `${g.client_name} — ${g.brand_name}: ` +
+          g.items.map((i) => `${i.quantity}x ${i.item_color ?? i.item_name}`).join(', ')
+        ),
+      };
+    }
+
     case 'find_partial_shipment': {
       const docType  = String(args.document_type ?? '').trim();
       const cnpj     = args.client_cnpj ? String(args.client_cnpj).replace(/\D/g, '') : null;
@@ -3282,9 +3418,11 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
       const itemsInput: Array<{
         product_name?: string; product_id?: string;
         item_code?: string; item_name?: string; unit_price?: number; quantity: number;
+        is_private_label?: boolean; brand_name?: string; item_color?: string; item_detail?: string;
       }> = Array.isArray(args.items) ? args.items : [];
       const itemsAdded: any[] = [];
       const itemsFailed: any[] = [];
+      let privateLabelsDetected = 0;
       for (const it of itemsInput) {
         let productId = it.product_id ? String(it.product_id) : '';
         if (!productId && it.product_name) {
@@ -3296,22 +3434,42 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
           itemsFailed.push({ item_name: it.item_name ?? it.product_name, error: 'quantity inválido' });
           continue;
         }
+        const isPrivateLabel = Boolean(it.is_private_label);
+        if (isPrivateLabel) privateLabelsDetected++;
         const itemPayload: Record<string, unknown> = {
-          shipment_id: shipmentId,
-          product_id:  productId || null,
-          item_code:   it.item_code  ? String(it.item_code).trim()  : null,
-          item_name:   it.item_name  ? String(it.item_name).trim()  : null,
-          unit_price:  it.unit_price != null ? Number(it.unit_price) : null,
-          quantity:    qty,
+          shipment_id:      shipmentId,
+          product_id:       productId || null,
+          item_code:        it.item_code        ? String(it.item_code).trim()        : null,
+          item_name:        it.item_name        ? String(it.item_name).trim()        : null,
+          unit_price:       it.unit_price != null ? Number(it.unit_price)            : null,
+          quantity:         qty,
+          is_private_label: isPrivateLabel,
+          brand_name:       it.brand_name       ? String(it.brand_name).trim()       : null,
+          item_color:       it.item_color       ? String(it.item_color).trim()       : null,
+          item_detail:      it.item_detail      ? String(it.item_detail).trim()      : null,
         };
         const { error: insErr } = await supabase.from('shipment_items').insert(itemPayload);
         if (insErr) {
           itemsFailed.push({ item_name: it.item_name ?? it.product_name, error: insErr.message });
         } else {
-          itemsAdded.push({ product_id: productId || null, item_code: it.item_code, item_name: it.item_name ?? it.product_name, quantity: qty });
+          itemsAdded.push({
+            product_id: productId || null, item_code: it.item_code,
+            item_name: it.item_name ?? it.product_name, quantity: qty,
+            is_private_label: isPrivateLabel, brand_name: it.brand_name, item_color: it.item_color,
+          });
         }
       }
-      return { created, items_added: itemsAdded, items_failed: itemsFailed };
+      const privateLabelItems = itemsAdded.filter((i) => i.is_private_label);
+      return {
+        created,
+        items_added: itemsAdded,
+        items_failed: itemsFailed,
+        private_label_count: privateLabelsDetected,
+        private_label_items: privateLabelItems,
+        private_label_alert: privateLabelsDetected > 0
+          ? `⚠️ ${privateLabelsDetected} item(ns) com marca própria detectado(s): ${privateLabelItems.map((i) => `${i.quantity}x ${i.item_color ?? i.item_name} — ${i.brand_name}`).join(' | ')}`
+          : null,
+      };
     }
 
     case 'list_shipments': {
