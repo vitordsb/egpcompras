@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { supabase } from '@/lib/supabase';
 import { Card, CardBody } from '@/components/ui/Card';
 import { Input } from '@/components/ui/Input';
+import { Button } from '@/components/ui/Button';
 import { cn } from '@/lib/utils';
 
 interface StockItem {
@@ -26,6 +27,33 @@ interface Movement {
   shipment: { client_name: string; numero_venda: string | null } | null;
 }
 
+interface Product {
+  id: string;
+  name: string;
+  sku: string | null;
+}
+
+interface BomAnalysis {
+  component: string;
+  sku: string | null;
+  unit: string;
+  qty_per_unit: number;
+  needed: number;
+  available: number;
+  missing: number;
+  ok: boolean;
+}
+
+interface FeasibilityResult {
+  product: string;
+  quantity_requested: number;
+  feasible: boolean;
+  components_ok: number;
+  components_missing: number;
+  missing: BomAnalysis[];
+  all_components: BomAnalysis[];
+}
+
 interface NeedRow {
   item_code: string;
   item_name: string;
@@ -42,7 +70,7 @@ function fmtDate(iso: string) {
   return new Date(iso).toLocaleDateString('pt-BR');
 }
 
-type Tab = 'stock' | 'needs' | 'history';
+type Tab = 'stock' | 'needs' | 'capacity' | 'history';
 
 export default function EstoquePage() {
   const [tab, setTab] = useState<Tab>('stock');
@@ -51,6 +79,14 @@ export default function EstoquePage() {
   const [needs, setNeeds] = useState<NeedRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
+
+  // Aba Capacidade
+  const [products, setProducts] = useState<Product[]>([]);
+  const [selectedProduct, setSelectedProduct] = useState('');
+  const [qtyInput, setQtyInput] = useState('');
+  const [feasibility, setFeasibility] = useState<FeasibilityResult | null>(null);
+  const [maxProducible, setMaxProducible] = useState<{ max: number; limiting: string } | null>(null);
+  const [checking, setChecking] = useState(false);
 
   async function loadStock() {
     const { data } = await supabase
@@ -112,7 +148,72 @@ export default function EstoquePage() {
   useEffect(() => {
     if (tab === 'needs' && needs.length === 0) loadNeeds();
     if (tab === 'history' && movements.length === 0) loadMovements();
+    if (tab === 'capacity' && products.length === 0) {
+      supabase.from('products').select('id, name, sku').order('name').then(({ data }) => {
+        setProducts((data ?? []) as Product[]);
+      });
+    }
   }, [tab]);
+
+  async function checkFeasibility(e: FormEvent) {
+    e.preventDefault();
+    if (!selectedProduct) return;
+    setChecking(true);
+    setFeasibility(null);
+    setMaxProducible(null);
+    const qty = Number(qtyInput);
+
+    const product = products.find((p) => p.id === selectedProduct);
+    if (!product) { setChecking(false); return; }
+
+    // Busca BOM
+    const { data: bom } = await supabase
+      .from('bom_items')
+      .select('quantity, component:components(id, name, sku, unit)')
+      .eq('product_id', product.id);
+
+    if (!bom?.length) {
+      setFeasibility({ product: product.name, quantity_requested: qty, feasible: false, components_ok: 0, components_missing: 0, missing: [], all_components: [] });
+      setChecking(false);
+      return;
+    }
+
+    const analysis: BomAnalysis[] = [];
+    let maxProd = Infinity;
+
+    for (const item of bom as any[]) {
+      const comp = item.component;
+      const qtyPerUnit = Number(item.quantity);
+
+      let stockRow: any = null;
+      if (comp.id) {
+        const { data } = await supabase.from('stock_items').select('quantity, reserved_quantity').eq('component_id', comp.id).maybeSingle();
+        stockRow = data;
+      }
+      if (!stockRow && comp.sku) {
+        const { data } = await supabase.from('stock_items').select('quantity, reserved_quantity').ilike('item_code', comp.sku).maybeSingle();
+        stockRow = data;
+      }
+
+      const available = stockRow ? Number(stockRow.quantity) - Number(stockRow.reserved_quantity) : 0;
+      const maxFromThis = qtyPerUnit > 0 ? Math.floor(available / qtyPerUnit) : Infinity;
+      if (isFinite(maxFromThis)) maxProd = Math.min(maxProd, maxFromThis);
+
+      if (qty > 0) {
+        const needed = qtyPerUnit * qty;
+        analysis.push({ component: comp.name, sku: comp.sku, unit: comp.unit ?? 'un', qty_per_unit: qtyPerUnit, needed, available, missing: Math.max(0, needed - available), ok: available >= needed });
+      } else {
+        analysis.push({ component: comp.name, sku: comp.sku, unit: comp.unit ?? 'un', qty_per_unit: qtyPerUnit, needed: 0, available, missing: 0, ok: true });
+      }
+    }
+
+    if (qty > 0) {
+      const missing = analysis.filter((a) => !a.ok);
+      setFeasibility({ product: product.name, quantity_requested: qty, feasible: missing.length === 0, components_ok: analysis.length - missing.length, components_missing: missing.length, missing, all_components: analysis });
+    }
+    setMaxProducible({ max: isFinite(maxProd) ? maxProd : 0, limiting: analysis.reduce((min, a) => a.missing === 0 && a.available / a.qty_per_unit < (min ? min.available / min.qty_per_unit : Infinity) ? a : min, analysis[0])?.component ?? '' });
+    setChecking(false);
+  }
 
   const filteredStock = stock.filter((s) =>
     !search.trim() ||
@@ -123,9 +224,10 @@ export default function EstoquePage() {
   const shortages = needs.filter((n) => n.to_buy > 0);
 
   const TABS = [
-    { key: 'stock',   label: 'Estoque atual' },
-    { key: 'needs',   label: `O que comprar${shortages.length > 0 ? ` (${shortages.length})` : ''}` },
-    { key: 'history', label: 'Movimentações' },
+    { key: 'stock',    label: 'Estoque atual' },
+    { key: 'needs',    label: `O que comprar${shortages.length > 0 ? ` (${shortages.length})` : ''}` },
+    { key: 'capacity', label: 'Capacidade produtiva' },
+    { key: 'history',  label: 'Movimentações' },
   ] as const;
 
   return (
@@ -277,6 +379,116 @@ export default function EstoquePage() {
             </Card>
           )}
         </>
+      )}
+
+      {/* ── Capacidade produtiva ── */}
+      {tab === 'capacity' && (
+        <div className="space-y-6">
+          <Card>
+            <CardBody>
+              <form onSubmit={checkFeasibility} className="flex flex-wrap items-end gap-3">
+                <div className="flex-1 min-w-[200px]">
+                  <label className="mb-1 block text-xs font-medium text-slate-600">Produto</label>
+                  <select
+                    value={selectedProduct}
+                    onChange={(e) => { setSelectedProduct(e.target.value); setFeasibility(null); setMaxProducible(null); }}
+                    className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
+                    required
+                  >
+                    <option value="">Selecione um produto…</option>
+                    {products.map((p) => (
+                      <option key={p.id} value={p.id}>{p.name}{p.sku ? ` (${p.sku})` : ''}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="w-32">
+                  <label className="mb-1 block text-xs font-medium text-slate-600">Quantidade</label>
+                  <Input
+                    type="number"
+                    min="1"
+                    step="1"
+                    value={qtyInput}
+                    onChange={(e) => setQtyInput(e.target.value)}
+                    placeholder="ex: 50"
+                  />
+                </div>
+                <Button type="submit" disabled={!selectedProduct || checking}>
+                  {checking ? 'Verificando…' : 'Verificar'}
+                </Button>
+              </form>
+            </CardBody>
+          </Card>
+
+          {maxProducible !== null && (
+            <div className={cn(
+              'rounded-lg border px-4 py-3 text-sm',
+              maxProducible.max === 0
+                ? 'border-red-200 bg-red-50 text-red-800'
+                : 'border-emerald-200 bg-emerald-50 text-emerald-800'
+            )}>
+              {maxProducible.max === 0
+                ? 'Estoque insuficiente — não é possível produzir nenhuma unidade com os componentes atuais.'
+                : <>Com o estoque atual, é possível produzir <strong>{maxProducible.max} unidades</strong>.</>}
+            </div>
+          )}
+
+          {feasibility && feasibility.all_components.length === 0 && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+              BOM não cadastrado para este produto. Acesse a página de Produtos e adicione os componentes.
+            </div>
+          )}
+
+          {feasibility && feasibility.all_components.length > 0 && (
+            <Card>
+              <div className="border-b border-slate-100 px-5 py-3 flex items-center justify-between">
+                <span className="font-medium text-slate-900">{feasibility.product} × {feasibility.quantity_requested} unidades</span>
+                <span className={cn(
+                  'rounded-full px-3 py-1 text-xs font-semibold',
+                  feasibility.feasible ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'
+                )}>
+                  {feasibility.feasible ? '✓ Produção viável' : `✗ Faltam ${feasibility.components_missing} componente${feasibility.components_missing !== 1 ? 's' : ''}`}
+                </span>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="border-b border-slate-100 bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
+                    <tr>
+                      <th className="px-5 py-2">Componente</th>
+                      <th className="px-5 py-2 text-right">Por unid.</th>
+                      <th className="px-5 py-2 text-right">Total necessário</th>
+                      <th className="px-5 py-2 text-right">Em estoque</th>
+                      <th className="px-5 py-2 text-right">Falta</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {feasibility.all_components
+                      .sort((a, b) => (a.ok ? 1 : -1) - (b.ok ? 1 : -1))
+                      .map((c, i) => (
+                      <tr key={i} className={cn('border-b border-slate-100 last:border-0', !c.ok && 'bg-red-50/50')}>
+                        <td className="px-5 py-2.5">
+                          <div className="font-medium text-slate-900">{c.component}</div>
+                          {c.sku && <div className="font-mono text-[11px] text-slate-400">{c.sku}</div>}
+                        </td>
+                        <td className="px-5 py-2.5 text-right tabular-nums text-slate-500">{c.qty_per_unit} {c.unit}</td>
+                        <td className="px-5 py-2.5 text-right tabular-nums font-medium text-slate-700">{c.needed} {c.unit}</td>
+                        <td className={cn('px-5 py-2.5 text-right tabular-nums font-medium', c.ok ? 'text-emerald-700' : 'text-red-700')}>
+                          {c.available} {c.unit}
+                        </td>
+                        <td className="px-5 py-2.5 text-right">
+                          {c.missing > 0 ? (
+                            <span className="rounded-full bg-red-100 px-2.5 py-0.5 text-xs font-semibold text-red-700">{c.missing} {c.unit}</span>
+                          ) : (
+                            <span className="text-emerald-500 text-xs">✓</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+          )}
+        </div>
       )}
 
       {/* ── Movimentações ── */}

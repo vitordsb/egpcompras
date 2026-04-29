@@ -782,6 +782,46 @@ export const toolDeclarations = [
       },
     },
   },
+  // ── Produção / BOM ───────────────────────────────────────────────────────────
+  {
+    name: 'check_production_feasibility',
+    description:
+      'Verifica se há componentes em estoque suficientes para produzir X unidades de um produto. Cruza BOM × estoque e mostra o que falta. Use: "consigo produzir 50 eletrificadores 12v?", "tem componentes para o pedido de 30 unidades?".',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        product_name: { type: 'STRING' as Type, description: 'Nome ou parte do nome do produto (fuzzy).' },
+        quantity:     { type: 'NUMBER' as Type, description: 'Quantidade de unidades a produzir.' },
+      },
+      required: ['product_name', 'quantity'],
+    },
+  },
+  {
+    name: 'get_max_producible',
+    description:
+      'Calcula quantas unidades de um produto é possível produzir com o estoque atual de componentes. Use: "quantos eletrificadores 12v consigo produzir agora?".',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        product_name: { type: 'STRING' as Type, description: 'Nome ou parte do nome do produto (fuzzy).' },
+      },
+      required: ['product_name'],
+    },
+  },
+  {
+    name: 'deduct_components_for_production',
+    description:
+      'Desconta do estoque os componentes usados para produzir X unidades de um produto. Chame quando a produção for concluída. Registra movimento de saída para cada componente.',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        product_name: { type: 'STRING' as Type },
+        quantity:     { type: 'NUMBER' as Type, description: 'Unidades produzidas.' },
+        notes:        { type: 'STRING' as Type, description: 'Ex: "Produção lote 001".' },
+      },
+      required: ['product_name', 'quantity'],
+    },
+  },
   {
     name: 'set_stock_minimum',
     description: 'Define a quantidade mínima de reposição de um item. Quando o saldo cair abaixo, o sistema marca como "baixo". Use: "mínimo de 50 sirenes EGPS1", "ponto de reposição do cabo CABOD31 é 30".',
@@ -2604,6 +2644,14 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
         const qty = Number(it.quantity);
         const unit = it.unit ?? 'un';
 
+        // Tenta achar componente pelo SKU para linkar
+        const { data: compMatch } = await supabase
+          .from('components')
+          .select('id, sku')
+          .ilike('sku', code)
+          .maybeSingle();
+        const componentId = compMatch?.id ?? null;
+
         // Upsert no stock_items — cria ou soma ao saldo
         const { data: existing } = await supabase
           .from('stock_items')
@@ -2615,12 +2663,14 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
         if (existing) {
           const newQty = Number(existing.quantity) + qty;
           await supabase.from('stock_items')
-            .update({ quantity: newQty, item_name: it.item_name, unit, updated_at: new Date().toISOString() })
+            .update({ quantity: newQty, item_name: it.item_name, unit,
+                      component_id: componentId ?? undefined,
+                      updated_at: new Date().toISOString() })
             .eq('id', existing.id);
           itemId = existing.id;
         } else {
           const { data: created } = await supabase.from('stock_items')
-            .insert({ item_code: code, item_name: it.item_name, quantity: qty, unit })
+            .insert({ item_code: code, item_name: it.item_name, quantity: qty, unit, component_id: componentId })
             .select('id').single();
           itemId = created?.id;
         }
@@ -2742,6 +2792,166 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
         }
       }
       return { deducted: results.filter((r) => r.deducted > 0).length, items: results };
+    }
+
+    // ── Produção / BOM ────────────────────────────────────────────────────────
+    case 'check_production_feasibility':
+    case 'get_max_producible': {
+      const productName = String(args.product_name ?? '').trim();
+      const unitsWanted = args.quantity ? Number(args.quantity) : null;
+
+      // Busca produto pelo nome (fuzzy)
+      const { data: products } = await supabase
+        .from('products')
+        .select('id, name, sku')
+        .ilike('name', `%${productName}%`)
+        .limit(1);
+      const product = (products as any[])?.[0];
+      if (!product) return { feasible: false, message: `Produto "${productName}" não encontrado no catálogo.` };
+
+      // Busca BOM completo do produto
+      const { data: bom } = await supabase
+        .from('bom_items')
+        .select('quantity, component:components(id, name, sku, unit)')
+        .eq('product_id', product.id);
+
+      if (!bom?.length) return { feasible: false, message: `${product.name} não tem BOM cadastrado. Cadastre os componentes primeiro.` };
+
+      // Para cada componente do BOM, busca estoque disponível
+      const analysis: any[] = [];
+      for (const item of bom as any[]) {
+        const comp = item.component;
+        const qtyPerUnit = Number(item.quantity);
+
+        // Busca stock pelo component_id (link direto) ou pelo SKU
+        let stockRow: any = null;
+        if (comp.id) {
+          const { data } = await supabase.from('stock_items')
+            .select('quantity, reserved_quantity, unit')
+            .eq('component_id', comp.id)
+            .maybeSingle();
+          stockRow = data;
+        }
+        if (!stockRow && comp.sku) {
+          const { data } = await supabase.from('stock_items')
+            .select('quantity, reserved_quantity, unit')
+            .ilike('item_code', comp.sku)
+            .maybeSingle();
+          stockRow = data;
+        }
+
+        const available = stockRow
+          ? Number(stockRow.quantity) - Number(stockRow.reserved_quantity)
+          : 0;
+
+        const maxFromThis = qtyPerUnit > 0 ? Math.floor(available / qtyPerUnit) : Infinity;
+
+        if (unitsWanted !== null) {
+          const needed = qtyPerUnit * unitsWanted;
+          analysis.push({
+            component: comp.name,
+            sku: comp.sku,
+            unit: comp.unit,
+            qty_per_unit: qtyPerUnit,
+            needed,
+            available,
+            missing: Math.max(0, needed - available),
+            ok: available >= needed,
+          });
+        } else {
+          analysis.push({
+            component: comp.name,
+            sku: comp.sku,
+            qty_per_unit: qtyPerUnit,
+            available,
+            max_from_this: maxFromThis,
+          });
+        }
+      }
+
+      if (args.name === 'get_max_producible' || unitsWanted === null) {
+        const maxProducible = analysis.reduce((min: number, a: any) => Math.min(min, a.max_from_this ?? Infinity), Infinity);
+        const limitingComponents = analysis.filter((a: any) => a.max_from_this === maxProducible);
+        return {
+          product: product.name,
+          max_producible: isFinite(maxProducible) ? maxProducible : 0,
+          limiting_components: limitingComponents,
+          bom: analysis,
+        };
+      }
+
+      const missing = analysis.filter((a: any) => !a.ok);
+      return {
+        product: product.name,
+        quantity_requested: unitsWanted,
+        feasible: missing.length === 0,
+        components_ok: analysis.filter((a: any) => a.ok).length,
+        components_missing: missing.length,
+        missing,
+        all_components: analysis,
+      };
+    }
+
+    case 'deduct_components_for_production': {
+      const productName = String(args.product_name ?? '').trim();
+      const units = Number(args.quantity ?? 1);
+      const notes = args.notes ? String(args.notes) : `Produção: ${units}x ${productName}`;
+
+      const { data: products } = await supabase
+        .from('products')
+        .select('id, name')
+        .ilike('name', `%${productName}%`)
+        .limit(1);
+      const product = (products as any[])?.[0];
+      if (!product) throw new Error(`Produto "${productName}" não encontrado.`);
+
+      const { data: bom } = await supabase
+        .from('bom_items')
+        .select('quantity, component:components(id, name, sku, unit)')
+        .eq('product_id', product.id);
+
+      if (!bom?.length) throw new Error(`${product.name} não tem BOM cadastrado.`);
+
+      const results: any[] = [];
+      for (const item of bom as any[]) {
+        const comp = item.component;
+        const totalQty = Number(item.quantity) * units;
+
+        let stockRow: any = null;
+        if (comp.id) {
+          const { data } = await supabase.from('stock_items').select('id, quantity, reserved_quantity').eq('component_id', comp.id).maybeSingle();
+          stockRow = data;
+        }
+        if (!stockRow && comp.sku) {
+          const { data } = await supabase.from('stock_items').select('id, quantity, reserved_quantity').ilike('item_code', comp.sku).maybeSingle();
+          stockRow = data;
+        }
+
+        if (stockRow) {
+          const newQty = Number(stockRow.quantity) - totalQty;
+          await supabase.from('stock_items')
+            .update({ quantity: newQty, updated_at: new Date().toISOString() })
+            .eq('id', stockRow.id);
+          await supabase.from('stock_movements').insert({
+            stock_item_id: stockRow.id,
+            item_code: comp.sku ?? comp.name,
+            item_name: comp.name,
+            quantity: -totalQty,
+            type: 'saida',
+            notes,
+          });
+          results.push({ component: comp.name, deducted: totalQty, new_balance: newQty });
+        } else {
+          results.push({ component: comp.name, deducted: 0, note: 'Não encontrado no estoque' });
+        }
+      }
+
+      return {
+        product: product.name,
+        units_produced: units,
+        components_deducted: results.filter((r: any) => r.deducted > 0).length,
+        items: results,
+      };
     }
 
     case 'set_stock_minimum': {

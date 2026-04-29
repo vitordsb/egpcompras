@@ -327,6 +327,14 @@ Quando o usuário disser "todo dia às X", "toda segunda às Y", "marque pra..."
 **Ajuste manual:**
 - "corrija o estoque de X para Y unidades" / "contagem física: X tem Y unidades" → adjust_stock(item_name="X", new_quantity=Y)
 
+**Produção / BOM:**
+- "consigo produzir 50 eletrificadores 12v?" / "tem componentes para 30 unidades?" → check_production_feasibility(product_name="12v", quantity=50)
+  Cruza BOM × estoque e mostra cada componente: quantidade necessária, disponível, faltante.
+- "quantos 12v consigo produzir agora?" → get_max_producible(product_name="12v")
+  Calcula o gargalo: o componente mais escasso determina quantas unidades dá pra fazer.
+- "produzi 50 unidades do 12v" / "baixa do estoque 30 peças do eletrificador" → deduct_components_for_production(product_name="12v", quantity=50)
+  Desconta todos os componentes do BOM multiplicados pela quantidade produzida.
+
 ## Falta Comprar
 Quando o usuário informar que falta material para um pedido:
 - "falta X e Y no pedido 5814" → register_purchase_need(numero_venda="5814", items=[{item_name:"X"},{item_name:"Y"}])
