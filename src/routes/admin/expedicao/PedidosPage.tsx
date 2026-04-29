@@ -519,7 +519,7 @@ export default function PedidosPage() {
               <thead className="border-b border-slate-200 bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
                 <tr>
                   <th className="px-5 py-3">Cliente</th>
-                  <th className="px-5 py-3">Venda / NFe</th>
+                  <th className="px-5 py-3">Nº Pedido / NF-e</th>
                   <th className="px-5 py-3">Status</th>
                   <th className="px-5 py-3">Prevista</th>
                   <th className="px-5 py-3 text-right">Total</th>
@@ -534,11 +534,22 @@ export default function PedidosPage() {
                       <div className="font-medium text-slate-900">{s.client_name}</div>
                       {s.client_cnpj && <div className="text-xs text-slate-400">{s.client_cnpj}</div>}
                     </td>
-                    <td className="px-5 py-3 text-slate-600">
-                      {s.numero_venda ? <span className="font-medium">#{s.numero_venda}</span> : null}
-                      {s.numero_venda && s.numero_nfe ? <span className="text-slate-300"> · </span> : null}
-                      {s.numero_nfe ? <span className="text-xs">NFe {s.numero_nfe}</span> : null}
-                      {!s.numero_venda && !s.numero_nfe ? '—' : null}
+                    <td className="px-5 py-3">
+                      <div className="flex flex-col gap-1">
+                        {s.numero_venda ? (
+                          <span className="inline-flex w-fit items-center gap-1 rounded-md border border-blue-200 bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700">
+                            <span className="text-[10px] font-semibold uppercase tracking-wide text-blue-400">Pedido</span>
+                            #{s.numero_venda}
+                          </span>
+                        ) : null}
+                        {s.numero_nfe ? (
+                          <span className="inline-flex w-fit items-center gap-1 rounded-md border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700">
+                            <span className="text-[10px] font-semibold uppercase tracking-wide text-emerald-400">NF-e</span>
+                            {s.numero_nfe}
+                          </span>
+                        ) : null}
+                        {!s.numero_venda && !s.numero_nfe ? <span className="text-slate-300">—</span> : null}
+                      </div>
                     </td>
                     <td className="px-5 py-3">
                       <span
@@ -943,10 +954,21 @@ export default function PedidosPage() {
                   {STATUS_LABEL[effectiveStatus(detailShipment)]}
                 </span>
               </div>
-              <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-slate-500">
-                {detailShipment.numero_venda && <span>Venda #{detailShipment.numero_venda}</span>}
-                {detailShipment.data_venda && <span>Emitido {formatDate(detailShipment.data_venda)}</span>}
-                {detailShipment.numero_nfe && <span>NFe {detailShipment.numero_nfe}</span>}
+              <div className="mt-1 flex flex-wrap gap-x-2 gap-y-1 items-center">
+                {detailShipment.numero_venda && (
+                  <span className="inline-flex items-center gap-1 rounded-md border border-blue-200 bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700">
+                    <span className="text-[10px] font-semibold uppercase tracking-wide text-blue-400">Pedido</span>
+                    #{detailShipment.numero_venda}
+                  </span>
+                )}
+                {detailShipment.numero_nfe && (
+                  <span className="inline-flex items-center gap-1 rounded-md border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700">
+                    <span className="text-[10px] font-semibold uppercase tracking-wide text-emerald-400">NF-e</span>
+                    {detailShipment.numero_nfe}
+                  </span>
+                )}
+                {detailShipment.data_venda && <span className="text-xs text-slate-500">Emitido {formatDate(detailShipment.data_venda)}</span>}
+                {detailShipment.numero_nfe && <span className="sr-only"/>}
                 {detailShipment.data_prevista && <span>Prevista {formatDate(detailShipment.data_prevista)}</span>}
                 {detailShipment.data_saida && <span>Saiu {formatDate(detailShipment.data_saida)}</span>}
                 {detailShipment.data_retorno && <span>Voltou {formatDate(detailShipment.data_retorno)}</span>}
