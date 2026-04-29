@@ -951,6 +951,62 @@ export const toolDeclarations = [
       required: ['product_name', 'quantity'],
     },
   },
+  // ── Prazos e chegada de materiais ────────────────────────────────────────────
+  {
+    name: 'set_component_lead_time',
+    description:
+      'Define o prazo típico de entrega/produção de um componente em dias. Use: "bobina demora 15 dias", "resistor 10k tem lead time de 7 dias".',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        component_name: { type: 'STRING' as Type, description: 'Nome ou parte do nome do componente.' },
+        lead_time_days: { type: 'NUMBER' as Type, description: 'Dias típicos de lead time.' },
+      },
+      required: ['component_name', 'lead_time_days'],
+    },
+  },
+  {
+    name: 'register_incoming_material',
+    description:
+      'Registra que um material foi pedido e tem data prevista de chegada. Use para: "a bobina vai chegar dia 05/05", "componente X vem pela JadLog dia 10/05", "fornecedor vai entregar X no dia Y". Vincula ao item em falta se existir, ou cria registro novo.',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        item_name:        { type: 'STRING' as Type, description: 'Nome do material/componente.' },
+        expected_arrival: { type: 'STRING' as Type, description: 'Data de chegada YYYY-MM-DD.' },
+        carrier:          { type: 'STRING' as Type, description: 'Transportadora, correios, retirada, etc.' },
+        ordered_quantity: { type: 'NUMBER' as Type, description: 'Quantidade pedida.' },
+        ordered_at:       { type: 'STRING' as Type, description: 'Data do pedido YYYY-MM-DD (default hoje).' },
+        shipment_id:      { type: 'STRING' as Type, description: 'Pedido de venda vinculado (opcional).' },
+        numero_venda:     { type: 'STRING' as Type },
+        notes:            { type: 'STRING' as Type, description: 'Observação livre.' },
+      },
+      required: ['item_name', 'expected_arrival'],
+    },
+  },
+  {
+    name: 'list_incoming_materials',
+    description:
+      'Lista materiais que foram pedidos e têm data de chegada registrada. Use para "o que está chegando?", "quando chega o componente X?", "materiais a caminho".',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        item_name:  { type: 'STRING' as Type, description: 'Filtrar por nome (fuzzy).' },
+        due_before: { type: 'STRING' as Type, description: 'Listar só os que chegam até esta data YYYY-MM-DD.' },
+      },
+    },
+  },
+  {
+    name: 'get_procurement_alerts',
+    description:
+      'Alerta inteligente de compras: cruza estoque atual + materiais chegando + pedidos pendentes + lead times. Identifica o que precisa ser comprado AGORA considerando o tempo que demora para chegar. Use: "o que preciso pedir hoje?", "tem algo urgente para comprar?", "alertas de reposição".',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        horizon_days: { type: 'NUMBER' as Type, description: 'Janela de análise em dias (default 30). Considera pedidos com saída prevista dentro desse prazo.' },
+      },
+    },
+  },
   {
     name: 'set_product_type',
     description:
@@ -2800,6 +2856,7 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
       let q = supabase
         .from('purchase_needs')
         .select(`id, item_name, item_code, quantity, unit, status, updated_at,
+                 expected_arrival, carrier, ordered_at, ordered_quantity,
                  shipment:shipments(id, client_name, numero_venda, numero_nfe),
                  notes:purchase_need_notes(id, content, author, created_at)`)
         .order('updated_at', { ascending: false })
@@ -3435,6 +3492,173 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
         components_deducted: results.filter((r: any) => r.deducted > 0).length,
         items: results,
       };
+    }
+
+    // ── Prazos e chegada de materiais ─────────────────────────────────────────
+    case 'set_component_lead_time': {
+      const compName = String(args.component_name ?? '').trim();
+      const days = Number(args.lead_time_days);
+      if (!days || days < 0) throw new Error('lead_time_days deve ser um número positivo.');
+      const { data: comps } = await supabase.from('components').select('id, name').ilike('name', `%${compName}%`).limit(1);
+      const comp = (comps as any[])?.[0];
+      if (!comp) throw new Error(`Componente "${compName}" não encontrado.`);
+      await supabase.from('components').update({ lead_time_days: days }).eq('id', comp.id);
+      return { updated: true, component: comp.name, lead_time_days: days };
+    }
+
+    case 'register_incoming_material': {
+      const itemName = String(args.item_name ?? '').trim();
+      const expectedArrival = String(args.expected_arrival);
+      const orderedAt = args.ordered_at ? String(args.ordered_at) : new Date().toISOString().slice(0, 10);
+
+      // Resolve pedido vinculado se informado
+      let shipId: string | null = null;
+      if (args.shipment_id || args.numero_venda) {
+        const r = await resolveShipmentId(args);
+        if (typeof r === 'string') shipId = r;
+      }
+
+      // Tenta encontrar um purchase_need existente para esse item (status pedido/pendente)
+      let needId: string | null = null;
+      {
+        let q = supabase.from('purchase_needs').select('id').ilike('item_name', `%${itemName}%`).in('status', ['pendente', 'pedido']).limit(1);
+        if (shipId) q = q.eq('shipment_id', shipId);
+        const { data } = await q;
+        needId = (data as any[])?.[0]?.id ?? null;
+      }
+
+      if (needId) {
+        // Atualiza o registro existente
+        await supabase.from('purchase_needs').update({
+          status: 'pedido',
+          expected_arrival: expectedArrival,
+          carrier: args.carrier ? String(args.carrier) : null,
+          ordered_at: orderedAt,
+          ordered_quantity: args.ordered_quantity ? Number(args.ordered_quantity) : null,
+          updated_at: new Date().toISOString(),
+        }).eq('id', needId);
+        if (args.notes) {
+          await supabase.from('purchase_need_notes').insert({ need_id: needId, content: String(args.notes) });
+        }
+        return { registered: true, action: 'updated', need_id: needId, item_name: itemName, expected_arrival: expectedArrival };
+      } else {
+        // Cria novo registro de incoming
+        const { data: created } = await supabase.from('purchase_needs').insert({
+          item_name: itemName,
+          shipment_id: shipId,
+          status: 'pedido',
+          expected_arrival: expectedArrival,
+          carrier: args.carrier ? String(args.carrier) : null,
+          ordered_at: orderedAt,
+          ordered_quantity: args.ordered_quantity ? Number(args.ordered_quantity) : null,
+        }).select('id').single();
+        if (args.notes && created?.id) {
+          await supabase.from('purchase_need_notes').insert({ need_id: created.id, content: String(args.notes) });
+        }
+        return { registered: true, action: 'created', need_id: created?.id, item_name: itemName, expected_arrival: expectedArrival };
+      }
+    }
+
+    case 'list_incoming_materials': {
+      let q = supabase
+        .from('purchase_needs')
+        .select(`id, item_name, ordered_quantity, expected_arrival, carrier, ordered_at, status,
+                 notes:purchase_need_notes(content, created_at),
+                 shipment:shipments(client_name, numero_venda)`)
+        .in('status', ['pedido'])
+        .not('expected_arrival', 'is', null)
+        .order('expected_arrival', { ascending: true });
+      if (args.item_name) q = q.ilike('item_name', `%${String(args.item_name)}%`);
+      if (args.due_before) q = q.lte('expected_arrival', String(args.due_before));
+      const { data, error } = await q;
+      if (error) throw new Error(error.message);
+      return { count: (data ?? []).length, incoming: data ?? [] };
+    }
+
+    case 'get_procurement_alerts': {
+      const horizonDays = Number(args.horizon_days ?? 30);
+      const today = new Date();
+      const todayStr = today.toISOString().slice(0, 10);
+
+      // Busca todos os componentes com lead_time configurado
+      const { data: comps } = await supabase
+        .from('components')
+        .select('id, name, sku, lead_time_days')
+        .not('lead_time_days', 'is', null);
+
+      // Busca estoque atual + chegando
+      const { data: stockItems } = await supabase.from('stock_items').select('component_id, item_code, quantity, reserved_quantity');
+      const { data: incoming } = await supabase
+        .from('purchase_needs')
+        .select('item_name, ordered_quantity, expected_arrival, carrier')
+        .eq('status', 'pedido')
+        .not('expected_arrival', 'is', null);
+
+      // Busca necessidades dos pedidos pendentes (dentro do horizonte)
+      const { data: pendingItems } = await supabase
+        .from('shipment_items')
+        .select(`item_code, item_name, quantity,
+                 shipment:shipments!inner(status, data_prevista, client_name, numero_venda)`)
+        .eq('shipments.status', 'pending');
+
+      // Monta mapa de necessidades por componente SKU
+      const needsMap: Record<string, { needed: number; shipments: string[] }> = {};
+      for (const it of (pendingItems ?? []) as any[]) {
+        const code = (it.item_code ?? '').toUpperCase();
+        if (!needsMap[code]) needsMap[code] = { needed: 0, shipments: [] };
+        needsMap[code].needed += Number(it.quantity ?? 1);
+        const label = it.shipment?.numero_venda ? `#${it.shipment.numero_venda}` : it.shipment?.client_name ?? '?';
+        if (!needsMap[code].shipments.includes(label)) needsMap[code].shipments.push(label);
+      }
+
+      const alerts: any[] = [];
+
+      for (const comp of (comps ?? []) as any[]) {
+        const leadDays = Number(comp.lead_time_days);
+        // Data limite para pedir: hoje + lead_time é "último dia para comprar"
+        const lastOrderDate = new Date(today.getTime() + leadDays * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
+        // Estoque disponível
+        const stockRow = (stockItems ?? []).find((s: any) =>
+          (comp.id && s.component_id === comp.id) ||
+          (comp.sku && s.item_code?.toUpperCase() === comp.sku?.toUpperCase())
+        ) as any;
+        const available = stockRow ? Number(stockRow.quantity) - Number(stockRow.reserved_quantity) : 0;
+
+        // Quantidade chegando
+        const incomingQty = (incoming ?? [])
+          .filter((i: any) => i.item_name?.toLowerCase().includes(comp.name.toLowerCase()))
+          .reduce((s: number, i: any) => s + Number(i.ordered_quantity ?? 0), 0);
+        const incomingDetails = (incoming ?? [])
+          .filter((i: any) => i.item_name?.toLowerCase().includes(comp.name.toLowerCase()));
+
+        // Necessidade
+        const need = needsMap[comp.sku?.toUpperCase() ?? ''] ?? { needed: 0, shipments: [] };
+        const totalAvailable = available + incomingQty;
+        const gap = need.needed - totalAvailable;
+
+        // Urgência: se o lead time já passou a janela de análise, ou se o gap > 0
+        const urgency = leadDays >= horizonDays ? 'critico' : gap > 0 ? 'alto' : available <= 0 ? 'medio' : null;
+        if (!urgency && gap <= 0) continue; // Tudo ok, sem alerta
+
+        alerts.push({
+          component: comp.name,
+          sku: comp.sku,
+          lead_time_days: leadDays,
+          available_stock: available,
+          incoming_qty: incomingQty,
+          incoming_details: incomingDetails.map((i: any) => ({ arrival: i.expected_arrival, carrier: i.carrier, qty: i.ordered_quantity })),
+          needed_for_orders: need.needed,
+          gap: Math.max(0, gap),
+          urgency,
+          must_order_by: lastOrderDate,
+          already_late: lastOrderDate < todayStr,
+          shipments_affected: need.shipments,
+        });
+      }
+
+      alerts.sort((a, b) => (a.already_late ? -1 : 1) - (b.already_late ? -1 : 1) || b.gap - a.gap);
+      return { alerts_count: alerts.length, horizon_days: horizonDays, alerts };
     }
 
     case 'set_product_type': {

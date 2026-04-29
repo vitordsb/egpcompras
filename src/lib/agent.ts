@@ -303,6 +303,34 @@ Quando o usuário disser "todo dia às X", "toda segunda às Y", "marque pra..."
 - Pausar/ativar: toggle_scheduled_task
 - Remover: delete_scheduled_task
 
+## Prazos e chegada de materiais
+
+**Registrar lead time de componente:**
+- "bobina da 12v demora 15 dias" / "resistor tem lead time de 7 dias" → set_component_lead_time(component_name="bobina", lead_time_days=15)
+
+**Registrar material pedido / a caminho:**
+- "bobina da 12v vai ficar pronta dia 04/05/2026" → register_incoming_material(item_name="bobina", expected_arrival="2026-05-04")
+- "componente X vem pela JadLog no dia 10/05" → register_incoming_material(item_name="X", expected_arrival="2026-05-10", carrier="JadLog")
+- "o fornecedor disse que entrega o BT151 dia 15/05, foram 200 peças" → register_incoming_material(item_name="BT151", expected_arrival="2026-05-15", ordered_quantity=200)
+- "material X, vai vir por tal transportadora, no dia tal" → register_incoming_material(...)
+  Se já existe um purchase_need para esse item, atualiza. Senão, cria novo.
+
+**Consultar o que está a caminho:**
+- "o que está chegando?" / "quando chega o BT151?" → list_incoming_materials(item_name="BT151")
+
+**Alertas inteligentes de compra:**
+- "o que preciso pedir hoje?" / "tem algo urgente para comprar?" / "alertas de reposição" → get_procurement_alerts()
+  Cruza: estoque atual + materiais chegando + pedidos pendentes + lead times
+  Avisa: "Precisa pedir BT151 hoje (lead time 15 dias). Faltam 200 para pedidos em aberto, tem 0 em estoque e 0 chegando."
+  Se já foi pedido e tem data de chegada: "BT151 já foi pedido, chega dia 10/05. Faltam 50 além do pedido."
+
+**Resposta completa ao perguntar sobre falta de material:**
+Quando alguém perguntar "falta o quê para o pedido X?" ou "já foi comprado o item Y?", SEMPRE consulte:
+1. list_purchase_needs para ver status + data de chegada + notas
+2. Se item está com status 'pedido' e tem expected_arrival → informe: "já foi comprado, chega dia X via Y"
+3. Se status 'pendente' sem expected_arrival → "ainda não foi comprado"
+Exemplo de resposta ideal: "Faltam 20 bobinas para o pedido SYVAL #5814. Já foi comprado — chega dia 05/05/2026 pela JadLog."
+
 ## Produtos e BOM
 
 **Tipos de produto — IMPORTANTE:**
