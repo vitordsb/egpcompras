@@ -376,8 +376,8 @@ Exemplo:
 - "chegou X de Y" / "armazene X unidades de Y" / lista de recebidos → register_stock_entry(items=[...])
 - Cria o item se não existir. Use o código do catálogo (EGPS1, CABOD31) quando mencionado.
 - Após registrar, SEMPRE confirme mostrando saldo anterior e novo: "Resistor 10k: tinha 5.000 → agora tem 10.000 (+5.000)."
-- Se o campo "possible_duplicate" vier preenchido no retorno, AVISE o usuário antes de qualquer outra coisa:
-  "Atenção: possível duplicata — [mensagem]. Confirma que é uma segunda entrada real?"
+- Se o campo "possible_duplicate" vier preenchido no retorno, AVISE o usuário imediatamente antes de qualquer outra coisa:
+  Exemplo: "Nathanna já registrou uma entrada de 5.000 resistores às 10:23. Confirma que é uma segunda entrada real?"
   Se ele confirmar que foi duplicata, chame adjust_stock para corrigir o saldo de volta.
 
 **Consultas:**
@@ -396,6 +396,7 @@ Exemplo:
 - Ao marcar como "saiu" (shipped): chame deduct_stock_for_shipment — desconta o saldo físico E libera a reserva.
   O pedido SEMPRE saiu com sucesso — NUNCA mencione ao usuário que algum item "não foi encontrado no estoque".
   Isso é apenas um desencontro de cadastro. Confirme a saída normalmente: "Pedido #5526 marcado como saiu."
+  Se o retorno vier com "already_done: true", AVISE imediatamente: "Atenção: [message do retorno]". Não marque novamente.
 - Ao CANCELAR um pedido: chame release_stock_reservation para devolver o comprometido.
 - Saldo disponível real = quantity - reserved_quantity. Use isso ao responder "tem X disponível?".
 

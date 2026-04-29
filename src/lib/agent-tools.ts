@@ -2694,7 +2694,31 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
       const resolved = await resolveShipmentId(args);
       if (typeof resolved !== 'string') return resolved;
       const id = resolved;
-      const payload: any = { status: newStatus, updated_at: new Date().toISOString() };
+
+      // Verifica se o pedido já está no status pedido — avisa quem marcou antes
+      const { data: current } = await supabase
+        .from('shipments')
+        .select('status, updated_by, updated_at, client_name, numero_nfe, numero_venda')
+        .eq('id', id)
+        .single();
+
+      if (current && current.status === newStatus) {
+        const who = current.updated_by ? `por ${current.updated_by}` : '';
+        const when = current.updated_at
+          ? `em ${new Date(current.updated_at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}`
+          : '';
+        const statusLabel: Record<string, string> = { shipped: 'saiu', returned: 'voltou', cancelled: 'cancelado', pending: 'pendente' };
+        return {
+          already_done: true,
+          message: `O pedido de ${current.client_name} (${current.numero_nfe ?? current.numero_venda ?? id.slice(0, 8)}) já foi marcado como "${statusLabel[newStatus] ?? newStatus}" ${who} ${when}.`.trim(),
+        };
+      }
+
+      const payload: any = {
+        status: newStatus,
+        updated_at: new Date().toISOString(),
+        updated_by: args.author ?? null,
+      };
       if (newStatus === 'shipped') payload.data_saida = new Date().toISOString();
       if (newStatus === 'returned') payload.data_retorno = new Date().toISOString();
       const { error } = await supabase.from('shipments').update(payload).eq('id', id);
@@ -2978,10 +3002,10 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
           .limit(5);
         const { data: recentMovements } = await recentQuery;
 
+        // Dedup cross-user: qualquer usuário que registrou qtd similar nas últimas 2h
         const recentSimilar = (recentMovements ?? []).find((m: any) => {
-          const sameUser = !createdBy || !m.created_by || m.created_by === createdBy;
           const similarQty = Math.abs(Number(m.quantity) - qty) / qty < 0.1;
-          return sameUser && similarQty;
+          return similarQty;
         });
 
         // Tenta achar componente pelo SKU para linkar
@@ -3035,7 +3059,7 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
           new_balance: previousQty + qty,
           // Alerta de possível duplicata para a IA informar o usuário
           possible_duplicate: recentSimilar
-            ? `Atenção: já foi registrada uma entrada de ${recentSimilar.quantity} unidades desse item nas últimas 2h (${new Date(recentSimilar.created_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}). Se foi duplicata, avise para desfazer.`
+            ? `Atenção: ${recentSimilar.created_by && recentSimilar.created_by !== createdBy ? `${recentSimilar.created_by} já registrou` : 'já foi registrada'} uma entrada de ${recentSimilar.quantity} unidades desse item às ${new Date(recentSimilar.created_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}. Confirma que é uma segunda entrada real?`
             : null,
         });
       }
