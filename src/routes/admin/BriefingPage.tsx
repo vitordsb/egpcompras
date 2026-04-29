@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { supabase } from '@/lib/supabase';
 import { cn } from '@/lib/utils';
 import { isLate } from '@/routes/admin/expedicao/shared';
+import MarkdownText from '@/components/MarkdownText';
 import type { ShipmentStatus } from '@/types/db';
 
 interface TaskRun {
@@ -155,37 +156,46 @@ export default function BriefingPage() {
             {runs.length === 0 ? (
               <p className="text-sm text-slate-400">Nenhuma tarefa executou nas últimas 24h.</p>
             ) : (
-              <div className="space-y-2">
+              <div className="space-y-3">
                 {runs.map((r) => (
                   <div
                     key={r.id}
-                    className="rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm"
+                    className={cn(
+                      'rounded-lg border bg-white',
+                      r.status === 'error' ? 'border-red-200' : 'border-slate-200'
+                    )}
                   >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="flex items-center gap-2 font-medium text-slate-900">
-                        <span
-                          className={cn(
-                            'h-2 w-2 shrink-0 rounded-full',
-                            r.status === 'ok' ? 'bg-emerald-500' : r.status === 'error' ? 'bg-red-500' : 'bg-slate-300'
-                          )}
-                        />
-                        {(r.task as any)?.name ?? 'Tarefa'}
+                    {/* Cabeçalho da tarefa */}
+                    <div className={cn(
+                      'flex items-center justify-between gap-3 rounded-t-lg px-4 py-2.5',
+                      r.status === 'error' ? 'bg-red-50' : 'bg-slate-50',
+                      'border-b',
+                      r.status === 'error' ? 'border-red-100' : 'border-slate-100'
+                    )}>
+                      <div className="flex items-center gap-2">
+                        <span className={cn(
+                          'h-2 w-2 shrink-0 rounded-full',
+                          r.status === 'ok' ? 'bg-emerald-500' : r.status === 'error' ? 'bg-red-500' : 'bg-slate-300'
+                        )} />
+                        <span className="text-sm font-semibold text-slate-900">
+                          {(r.task as any)?.name ?? 'Tarefa'}
+                        </span>
+                        {r.status === 'error' && (
+                          <span className="rounded-full bg-red-100 px-2 py-0.5 text-[11px] font-medium text-red-600">
+                            erro
+                          </span>
+                        )}
                       </div>
                       <span className="shrink-0 text-xs text-slate-400">
                         {fmtDate(r.started_at)} às {fmtTime(r.started_at)}
                       </span>
                     </div>
+
+                    {/* Resultado renderizado como markdown */}
                     {r.result && (
-                      r.result.length > 120 ? (
-                        <details className="mt-1.5">
-                          <summary className="cursor-pointer text-xs text-slate-500 hover:text-slate-700">
-                            {r.result.slice(0, 120)}… <span className="underline">ver mais</span>
-                          </summary>
-                          <p className="mt-1 text-xs text-slate-600 whitespace-pre-wrap">{r.result}</p>
-                        </details>
-                      ) : (
-                        <p className="mt-1.5 text-xs text-slate-600">{r.result}</p>
-                      )
+                      <div className="px-4 py-3 text-sm text-slate-700 [&_ul]:mt-1 [&_ul]:space-y-0.5 [&_li]:text-sm [&_strong]:font-semibold [&_strong]:text-slate-900">
+                        <MarkdownText text={r.result} />
+                      </div>
                     )}
                   </div>
                 ))}

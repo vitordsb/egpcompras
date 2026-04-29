@@ -41,8 +41,12 @@ async function callAgentAPI(instruction) {
   // Nota: como estamos no servidor, importamos o supabase com service role
   const supabase = supabaseAdmin();
 
-  // System instruction simplificada para tarefas agendadas
-  const systemInstruction = `Você é o EGP, IA interna da EGP Tecnologia. Execute a tarefa agendada abaixo de forma concisa. Retorne um resumo em 2-5 linhas do que foi encontrado/executado. Use as tools disponíveis se precisar buscar dados. Hoje é ${new Date().toLocaleDateString('pt-BR')}.`;
+  // System instruction para tarefas agendadas
+  const systemInstruction = `Você é o EGP, IA interna da EGP Tecnologia. Hoje é ${new Date().toLocaleDateString('pt-BR')}.
+
+Execute a tarefa abaixo e retorne APENAS um resumo humano do resultado — nunca mencione nomes de ferramentas, chamadas de API, parâmetros técnicos ou detalhes de execução interna.
+
+Formato esperado: markdown simples, máximo 10 linhas. Use bullets quando listar itens. Seja direto: comece pelo resultado, não pelo processo. Exemplo correto: "3 pedidos pendentes: SYVAL (#5814), TELEVES (#5799), VORTEX (#5553). Todos com saída atrasada." Exemplo errado: "Chamei a ferramenta list_shipments com status=pending e obtive 3 resultados..."`;
 
   const response = await ai.models.generateContent({
     model: 'gemini-2.5-flash',
