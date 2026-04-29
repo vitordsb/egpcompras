@@ -350,15 +350,17 @@ export const toolDeclarations = [
   // ---------- ESCRITAS — FORNECEDORES ----------
   {
     name: 'create_supplier',
-    description: 'Cadastra um fornecedor.',
+    description: 'Cadastra um fornecedor. Nome é obrigatório; email, CNPJ e endereço são opcionais e podem ser informados depois.',
     parameters: {
       type: 'OBJECT' as Type,
       properties: {
-        name: { type: 'STRING' as Type },
-        email: { type: 'STRING' as Type },
+        name:             { type: 'STRING' as Type, description: 'Nome da empresa (obrigatório).' },
+        email:            { type: 'STRING' as Type, description: 'Email comercial (opcional).' },
+        cnpj:             { type: 'STRING' as Type, description: 'CNPJ (opcional).' },
+        address:          { type: 'STRING' as Type, description: 'Endereço (opcional).' },
         default_currency: { type: 'STRING' as Type, description: '"BRL" ou "USD". Default BRL.' },
       },
-      required: ['name', 'email'],
+      required: ['name'],
     },
   },
   {
@@ -367,9 +369,11 @@ export const toolDeclarations = [
     parameters: {
       type: 'OBJECT' as Type,
       properties: {
-        supplier_id: { type: 'STRING' as Type },
-        name: { type: 'STRING' as Type },
-        email: { type: 'STRING' as Type },
+        supplier_id:      { type: 'STRING' as Type },
+        name:             { type: 'STRING' as Type },
+        email:            { type: 'STRING' as Type },
+        cnpj:             { type: 'STRING' as Type },
+        address:          { type: 'STRING' as Type },
         default_currency: { type: 'STRING' as Type },
       },
       required: ['supplier_id'],
@@ -383,6 +387,109 @@ export const toolDeclarations = [
       properties: { supplier_id: { type: 'STRING' as Type } },
       required: ['supplier_id'],
     },
+  },
+
+  // ---------- FORNECEDORES POR COMPONENTE --------------------------------
+  {
+    name: 'get_component_suppliers',
+    description: 'Retorna todos os fornecedores vinculados a um componente, indicando qual é o preferido. Use ANTES de registrar necessidade de compra de componente.',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        component_name: { type: 'STRING' as Type, description: 'Nome ou parte do nome do componente.' },
+      },
+      required: ['component_name'],
+    },
+  },
+  {
+    name: 'set_component_supplier',
+    description: 'Vincula um fornecedor a um componente. Use quando o usuário disser "o ideal é comprar esse componente no fornecedor X" ou quiser registrar de onde comprar. is_preferred=true marca como preferido (só pode haver um preferido por componente).',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        component_name:  { type: 'STRING' as Type },
+        supplier_name:   { type: 'STRING' as Type, description: 'Nome do fornecedor (fuzzy match).' },
+        is_preferred:    { type: 'BOOLEAN' as Type, description: 'true = fornecedor preferido para este componente.' },
+        notes:           { type: 'STRING' as Type, description: 'Observação opcional (ex: "prazo 7 dias", "só vende em lote de 100").' },
+      },
+      required: ['component_name', 'supplier_name'],
+    },
+  },
+  {
+    name: 'remove_component_supplier',
+    description: 'Remove o vínculo entre um componente e um fornecedor.',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        component_name: { type: 'STRING' as Type },
+        supplier_name:  { type: 'STRING' as Type },
+      },
+      required: ['component_name', 'supplier_name'],
+    },
+  },
+
+  // ---------- COTAÇÃO DE LISTA LIVRE -------------------------------------
+  {
+    name: 'create_quotation_from_list',
+    description: 'Cria uma cotação a partir de uma lista livre de componentes (não vinculada a um produto). Use quando o usuário pedir cotação dos itens do "falta comprar" ou de uma lista avulsa. Se auto_invite_preferred=true, convida automaticamente o fornecedor preferido de cada componente.',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        items: {
+          type: 'ARRAY' as Type,
+          description: 'Lista de componentes para cotar.',
+          items: {
+            type: 'OBJECT' as Type,
+            properties: {
+              name:             { type: 'STRING' as Type, description: 'Nome do componente.' },
+              quantity:         { type: 'NUMBER' as Type, description: 'Quantidade a cotar.' },
+              target_price_brl: { type: 'NUMBER' as Type, description: 'Preço alvo em BRL (opcional).' },
+            },
+            required: ['name', 'quantity'],
+          },
+        },
+        title:                    { type: 'STRING' as Type, description: 'Título da cotação (opcional).' },
+        deadline_days:            { type: 'NUMBER' as Type, description: 'Prazo em dias a partir de hoje (default 5).' },
+        auto_invite_preferred:    { type: 'BOOLEAN' as Type, description: 'true = convida automaticamente o fornecedor preferido de cada componente.' },
+        additional_supplier_names: {
+          type: 'ARRAY' as Type,
+          items: { type: 'STRING' as Type },
+          description: 'Nomes de fornecedores adicionais a convidar (além dos preferidos automáticos).',
+        },
+      },
+      required: ['items'],
+    },
+  },
+
+  // ---------- ANÁLISE DE COTAÇÕES ----------------------------------------
+  {
+    name: 'analyze_quotation_responses',
+    description: 'Analisa as respostas de uma cotação. mode="full" → tabela completa todos fornecedores × todos componentes. mode="best_price" → lista resumida com menor preço por componente + segundo menor preço e fornecedor.',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        quotation_id: { type: 'STRING' as Type },
+        mode:         { type: 'STRING' as Type, description: '"full" (default) ou "best_price".' },
+      },
+      required: ['quotation_id'],
+    },
+  },
+  {
+    name: 'get_component_price_history',
+    description: 'Retorna histórico de preços de um componente através das cotações respondidas. Mostra variação % em relação à cotação anterior.',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        component_name: { type: 'STRING' as Type },
+        limit:          { type: 'NUMBER' as Type, description: 'Máximo de registros (default 10).' },
+      },
+      required: ['component_name'],
+    },
+  },
+  {
+    name: 'check_expired_quotations',
+    description: 'Verifica cotações com prazo vencido que ainda têm convites sem resposta. Retorna lista de fornecedores que não responderam e cria notas de follow-up nos purchase_needs vinculados.',
+    parameters: { type: 'OBJECT' as Type, properties: {} },
   },
 
   // ---------- MEMÓRIAS PERSISTENTES ----------
@@ -2055,14 +2162,20 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
     // ---------- ESCRITAS — FORNECEDORES ----------
     case 'create_supplier': {
       const sname = String(args.name ?? '').trim();
-      const email = String(args.email ?? '').trim().toLowerCase();
       if (!sname) throw new Error('name é obrigatório');
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('email inválido');
       const currency = args.default_currency === 'USD' ? 'USD' : 'BRL';
+      const payload: any = { name: sname, default_currency: currency };
+      if (args.email) {
+        const e = String(args.email).trim().toLowerCase();
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)) throw new Error('email inválido');
+        payload.email = e;
+      }
+      if (args.cnpj)    payload.cnpj    = String(args.cnpj).trim();
+      if (args.address) payload.address = String(args.address).trim();
       const { data, error } = await supabase
         .from('suppliers')
-        .insert({ name: sname, email, default_currency: currency })
-        .select('id, name, email, default_currency')
+        .insert(payload)
+        .select('id, name, email, cnpj, address, default_currency')
         .single();
       if (error) throw new Error(error.message);
       return { created: data };
@@ -2072,7 +2185,9 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
       const id = String(args.supplier_id ?? '');
       if (!id) throw new Error('supplier_id é obrigatório');
       const payload: any = {};
-      if (args.name) payload.name = String(args.name).trim();
+      if (args.name)    payload.name    = String(args.name).trim();
+      if (args.cnpj)    payload.cnpj    = String(args.cnpj).trim();
+      if (args.address) payload.address = String(args.address).trim();
       if (args.email) {
         const e = String(args.email).trim().toLowerCase();
         if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)) throw new Error('email inválido');
@@ -2093,6 +2208,363 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
       const { error } = await supabase.from('suppliers').delete().eq('id', id);
       if (error) throw new Error(error.message);
       return { deleted: true, id };
+    }
+
+    // ---------- FORNECEDORES POR COMPONENTE ----------
+    case 'get_component_suppliers': {
+      const compName = String(args.component_name ?? '').trim();
+      const { data: comps } = await supabase.from('components')
+        .select('id, name').ilike('name', `%${compName}%`).limit(1);
+      const comp = (comps as any[])?.[0];
+      if (!comp) return { component: compName, suppliers: [], message: 'Componente não encontrado no catálogo.' };
+
+      const { data, error } = await supabase.from('component_suppliers')
+        .select('is_preferred, notes, created_at, supplier:suppliers(id, name, email, cnpj, address, default_currency)')
+        .eq('component_id', comp.id)
+        .order('is_preferred', { ascending: false });
+      if (error) throw new Error(error.message);
+
+      return {
+        component_id: comp.id,
+        component: comp.name,
+        suppliers: (data ?? []).map((r: any) => ({
+          supplier_id:   r.supplier?.id,
+          name:          r.supplier?.name,
+          email:         r.supplier?.email,
+          cnpj:          r.supplier?.cnpj,
+          address:       r.supplier?.address,
+          is_preferred:  r.is_preferred,
+          notes:         r.notes,
+        })),
+        has_preferred: (data ?? []).some((r: any) => r.is_preferred),
+      };
+    }
+
+    case 'set_component_supplier': {
+      const compName  = String(args.component_name ?? '').trim();
+      const suppName  = String(args.supplier_name ?? '').trim();
+      const preferred = Boolean(args.is_preferred ?? false);
+      const notes     = args.notes ? String(args.notes).trim() : null;
+
+      const { data: comps } = await supabase.from('components')
+        .select('id, name').ilike('name', `%${compName}%`).limit(1);
+      const comp = (comps as any[])?.[0];
+      if (!comp) throw new Error(`Componente "${compName}" não encontrado.`);
+
+      const { data: supps } = await supabase.from('suppliers')
+        .select('id, name').ilike('name', `%${suppName}%`).limit(1);
+      const supp = (supps as any[])?.[0];
+      if (!supp) throw new Error(`Fornecedor "${suppName}" não encontrado. Cadastre primeiro com create_supplier.`);
+
+      // Se is_preferred, remove preferência de outros fornecedores do mesmo componente
+      if (preferred) {
+        await supabase.from('component_suppliers')
+          .update({ is_preferred: false })
+          .eq('component_id', comp.id);
+      }
+
+      const { error } = await supabase.from('component_suppliers')
+        .upsert({ component_id: comp.id, supplier_id: supp.id, is_preferred: preferred, notes },
+                 { onConflict: 'component_id,supplier_id' });
+      if (error) throw new Error(error.message);
+
+      return { linked: supp.name, to_component: comp.name, is_preferred: preferred };
+    }
+
+    case 'remove_component_supplier': {
+      const compName = String(args.component_name ?? '').trim();
+      const suppName = String(args.supplier_name ?? '').trim();
+
+      const { data: comps } = await supabase.from('components')
+        .select('id').ilike('name', `%${compName}%`).limit(1);
+      const comp = (comps as any[])?.[0];
+      if (!comp) throw new Error(`Componente "${compName}" não encontrado.`);
+
+      const { data: supps } = await supabase.from('suppliers')
+        .select('id').ilike('name', `%${suppName}%`).limit(1);
+      const supp = (supps as any[])?.[0];
+      if (!supp) throw new Error(`Fornecedor "${suppName}" não encontrado.`);
+
+      const { error } = await supabase.from('component_suppliers')
+        .delete().eq('component_id', comp.id).eq('supplier_id', supp.id);
+      if (error) throw new Error(error.message);
+      return { removed: true, component: compName, supplier: suppName };
+    }
+
+    // ---------- COTAÇÃO DE LISTA LIVRE ----------
+    case 'create_quotation_from_list': {
+      const items = (args.items ?? []) as Array<{ name: string; quantity: number; target_price_brl?: number }>;
+      if (!items.length) throw new Error('items é obrigatório');
+      const deadlineDays = args.deadline_days ? Number(args.deadline_days) : 5;
+      const autoInvitePreferred = Boolean(args.auto_invite_preferred ?? true);
+      const additionalSupplierNames: string[] = Array.isArray(args.additional_supplier_names)
+        ? args.additional_supplier_names.map((s: any) => String(s).trim()).filter(Boolean)
+        : [];
+      const title = args.title
+        ? String(args.title)
+        : `Cotação Lista ${new Date().toLocaleDateString('pt-BR')}`;
+      const deadline = new Date(Date.now() + deadlineDays * 86400000).toISOString();
+
+      let usdRate: number | null = null;
+      try { const fx = await fetchUsdBrl(); usdRate = fx.rate; } catch {}
+
+      // Cria a cotação (sem product_id)
+      const { data: q, error: qErr } = await supabase.from('quotations')
+        .insert({ title, status: 'sent', context_type: 'purchase_list', usd_brl_rate: usdRate, deadline })
+        .select('id, public_token').single();
+      if (qErr || !q) throw new Error(qErr?.message ?? 'Falha ao criar cotação');
+      const quotationId = (q as any).id as string;
+      const publicToken = (q as any).public_token as string;
+
+      // Resolve componentes e insere itens
+      const preferredSupplierIds = new Set<string>();
+      const itemsPayload: any[] = [];
+      const unresolvedItems: string[] = [];
+
+      for (let i = 0; i < items.length; i++) {
+        const it = items[i];
+        const { data: comps } = await supabase.from('components')
+          .select('id').ilike('name', `%${it.name}%`).limit(1);
+        const comp = (comps as any[])?.[0];
+
+        itemsPayload.push({
+          quotation_id:        quotationId,
+          component_id:        comp?.id ?? null,
+          component_name_free: comp ? null : it.name,
+          quantity:            it.quantity,
+          target_price_brl:    it.target_price_brl ?? null,
+          position:            i,
+        });
+
+        // Coleta fornecedor preferido do componente
+        if (comp && autoInvitePreferred) {
+          const { data: cs } = await supabase.from('component_suppliers')
+            .select('supplier_id').eq('component_id', comp.id).eq('is_preferred', true).maybeSingle();
+          if (cs) preferredSupplierIds.add((cs as any).supplier_id);
+          else unresolvedItems.push(it.name);
+        }
+      }
+
+      await supabase.from('quotation_items').insert(itemsPayload);
+
+      // Adiciona fornecedores adicionais por nome
+      if (additionalSupplierNames.length) {
+        for (const sn of additionalSupplierNames) {
+          const { data: ss } = await supabase.from('suppliers')
+            .select('id').ilike('name', `%${sn}%`).limit(1);
+          const s = (ss as any[])?.[0];
+          if (s) preferredSupplierIds.add(s.id);
+        }
+      }
+
+      // Cria convites
+      const invites: Array<{ supplier_name: string; url: string }> = [];
+      if (preferredSupplierIds.size > 0) {
+        const { data: suppData } = await supabase.from('suppliers')
+          .select('id, name').in('id', [...preferredSupplierIds]);
+        const invitePayload = (suppData ?? []).map((s: any) => ({
+          quotation_id: quotationId, supplier_id: s.id, status: 'sent', sent_at: new Date().toISOString(),
+        }));
+        const { data: createdInvites } = await supabase.from('quotation_invites')
+          .insert(invitePayload).select('token, supplier:suppliers(name)');
+        for (const inv of (createdInvites ?? []) as any[]) {
+          invites.push({ supplier_name: inv.supplier?.name ?? '—', url: buildPublicQuoteUrl(inv.token) });
+        }
+      }
+
+      return {
+        success: true,
+        quotation_id: quotationId,
+        title,
+        items_count: items.length,
+        public_url: buildPublicQuoteUrl(publicToken),
+        expires_at: deadline,
+        invites,
+        items_without_preferred_supplier: unresolvedItems,
+        note: unresolvedItems.length
+          ? `Esses componentes não têm fornecedor preferido — convide manualmente: ${unresolvedItems.join(', ')}`
+          : 'Todos os componentes têm fornecedor preferido vinculado.',
+      };
+    }
+
+    // ---------- ANÁLISE DE COTAÇÕES ----------
+    case 'analyze_quotation_responses': {
+      const qId  = String(args.quotation_id ?? '');
+      const mode = String(args.mode ?? 'full');
+      if (!qId) throw new Error('quotation_id é obrigatório');
+
+      // Busca todas as respostas com itens
+      const { data: invites } = await supabase.from('quotation_invites')
+        .select('id, supplier:suppliers(id, name)').eq('quotation_id', qId);
+      const inviteIds = ((invites ?? []) as any[]).map((i) => i.id);
+      if (!inviteIds.length) return { message: 'Nenhum convite encontrado nessa cotação.', responses: [] };
+
+      const { data: responses, error } = await supabase.from('quotation_responses')
+        .select(`id, supplier_name, currency, usd_brl_rate_used, payment_response, notes, submitted_at, invite_id,
+                 items:quotation_response_items(
+                   unit_price, ipi_pct, pis_pct, cofins_pct, st_pct,
+                   quotation_item:quotation_items(id, quantity, component_id, component_name_free,
+                     component:components(name))
+                 )`)
+        .in('invite_id', inviteIds)
+        .order('submitted_at');
+      if (error) throw new Error(error.message);
+
+      // Busca convites sem resposta
+      const respondedInviteIds = new Set(((responses ?? []) as any[]).map((r) => r.invite_id));
+      const notResponded = ((invites ?? []) as any[])
+        .filter((i) => !respondedInviteIds.has(i.id))
+        .map((i) => (i.supplier as any)?.name ?? '?');
+
+      // Normaliza preço pra BRL
+      function effectivePriceBrl(item: any, currency: string, usdRate: number | null): number | null {
+        if (item.unit_price == null) return null;
+        const base = Number(item.unit_price);
+        const taxes = 1 + Number(item.ipi_pct ?? 0) / 100 + Number(item.pis_pct ?? 0) / 100
+          + Number(item.cofins_pct ?? 0) / 100 + Number(item.st_pct ?? 0) / 100;
+        const brl = currency === 'USD' ? base * (usdRate ?? 1) : base;
+        return parseFloat((brl * taxes).toFixed(4));
+      }
+
+      if (mode === 'full') {
+        return {
+          mode: 'full',
+          responded_count: (responses ?? []).length,
+          not_responded: notResponded,
+          suppliers: ((responses ?? []) as any[]).map((r) => ({
+            supplier_name:    r.supplier_name,
+            currency:         r.currency,
+            payment_response: r.payment_response,
+            notes:            r.notes,
+            submitted_at:     r.submitted_at,
+            items: (r.items ?? []).map((it: any) => {
+              const compName = it.quotation_item?.component?.name ?? it.quotation_item?.component_name_free ?? '?';
+              const priceBrl = effectivePriceBrl(it, r.currency, r.usd_brl_rate_used);
+              return { component: compName, quantity: it.quotation_item?.quantity, unit_price: it.unit_price, currency: r.currency, effective_price_brl: priceBrl, ipi_pct: it.ipi_pct, st_pct: it.st_pct };
+            }),
+          })),
+        };
+      }
+
+      // mode === 'best_price': agrupa por componente, acha 1° e 2° menor preço
+      const byComponent: Record<string, Array<{ supplier: string; price_brl: number; original_price: number; currency: string; payment: string }>> = {};
+      for (const r of (responses ?? []) as any[]) {
+        for (const it of r.items ?? []) {
+          const compName = it.quotation_item?.component?.name ?? it.quotation_item?.component_name_free ?? '?';
+          const priceBrl = effectivePriceBrl(it, r.currency, r.usd_brl_rate_used);
+          if (priceBrl == null) continue;
+          if (!byComponent[compName]) byComponent[compName] = [];
+          byComponent[compName].push({ supplier: r.supplier_name, price_brl: priceBrl, original_price: Number(it.unit_price), currency: r.currency, payment: r.payment_response ?? '' });
+        }
+      }
+
+      const bestPrices = Object.entries(byComponent).map(([comp, entries]) => {
+        const sorted = [...entries].sort((a, b) => a.price_brl - b.price_brl);
+        const best   = sorted[0];
+        const second = sorted[1] ?? null;
+        const saving = second ? parseFloat(((second.price_brl - best.price_brl) / second.price_brl * 100).toFixed(1)) : null;
+        return {
+          component:         comp,
+          best_price_brl:    best.price_brl,
+          best_supplier:     best.supplier,
+          best_currency:     best.currency,
+          best_payment:      best.payment,
+          second_price_brl:  second?.price_brl ?? null,
+          second_supplier:   second?.supplier ?? null,
+          saving_vs_second_pct: saving,
+        };
+      }).sort((a, b) => a.component.localeCompare(b.component));
+
+      return { mode: 'best_price', best_prices: bestPrices, not_responded: notResponded };
+    }
+
+    case 'get_component_price_history': {
+      const compName = String(args.component_name ?? '').trim();
+      const limit    = Math.min(Number(args.limit ?? 10), 50);
+
+      const { data: comps } = await supabase.from('components')
+        .select('id, name').ilike('name', `%${compName}%`).limit(1);
+      const comp = (comps as any[])?.[0];
+      if (!comp) return { component: compName, history: [], message: 'Componente não encontrado.' };
+
+      // Busca todos quotation_items desse componente com respostas
+      const { data: qItems } = await supabase.from('quotation_items')
+        .select('id').eq('component_id', comp.id);
+      const qItemIds = ((qItems ?? []) as any[]).map((i) => i.id);
+      if (!qItemIds.length) return { component: comp.name, history: [], message: 'Nenhuma cotação com esse componente.' };
+
+      const { data: responseItems, error } = await supabase.from('quotation_response_items')
+        .select(`unit_price, ipi_pct, pis_pct, cofins_pct, st_pct,
+                 response:quotation_responses(currency, usd_brl_rate_used, supplier_name, submitted_at,
+                   invite:quotation_invites(quotation_id))`)
+        .in('quotation_item_id', qItemIds)
+        .not('unit_price', 'is', null)
+        .order('quotation_responses.submitted_at', { ascending: false })
+        .limit(limit);
+      if (error) throw new Error(error.message);
+
+      const history = ((responseItems ?? []) as any[]).map((it) => {
+        const r   = it.response;
+        const base = Number(it.unit_price);
+        const taxes = 1 + (Number(it.ipi_pct) + Number(it.pis_pct) + Number(it.cofins_pct) + Number(it.st_pct)) / 100;
+        const brl  = r.currency === 'USD' ? base * (r.usd_brl_rate_used ?? 1) : base;
+        return {
+          supplier:           r.supplier_name,
+          submitted_at:       r.submitted_at,
+          unit_price:         base,
+          currency:           r.currency,
+          effective_price_brl: parseFloat((brl * taxes).toFixed(4)),
+          quotation_id:       r.invite?.quotation_id,
+        };
+      }).sort((a, b) => new Date(b.submitted_at).getTime() - new Date(a.submitted_at).getTime());
+
+      // Calcula variação % entre entradas consecutivas
+      for (let i = 0; i < history.length - 1; i++) {
+        const prev = history[i + 1].effective_price_brl;
+        const curr = history[i].effective_price_brl;
+        (history[i] as any).change_pct = prev > 0 ? parseFloat(((curr - prev) / prev * 100).toFixed(1)) : null;
+      }
+
+      return { component: comp.name, history, count: history.length };
+    }
+
+    case 'check_expired_quotations': {
+      const now = new Date().toISOString();
+      // Cotações vencidas com convites ainda pendentes/sent
+      const { data: expired, error } = await supabase.from('quotation_invites')
+        .select(`id, supplier:suppliers(name, email),
+                 quotation:quotations!inner(id, title, deadline, status)`)
+        .in('status', ['pending', 'sent'])
+        .not('quotations.deadline', 'is', null)
+        .lt('quotations.deadline', now)
+        .neq('quotations.status', 'closed');
+      if (error) throw new Error(error.message);
+
+      const grouped: Record<string, { quotation_title: string; non_responders: string[] }> = {};
+      for (const inv of (expired ?? []) as any[]) {
+        const qId    = inv.quotation?.id;
+        const qTitle = inv.quotation?.title ?? qId;
+        if (!grouped[qId]) grouped[qId] = { quotation_title: qTitle, non_responders: [] };
+        const suppName = inv.supplier?.name ?? '?';
+        grouped[qId].non_responders.push(suppName);
+
+        // Marca convite como expirado
+        await supabase.from('quotation_invites').update({ status: 'expired' }).eq('id', inv.id);
+      }
+
+      const result = Object.entries(grouped).map(([qId, g]) => ({
+        quotation_id:    qId,
+        quotation_title: g.quotation_title,
+        non_responders:  g.non_responders,
+      }));
+
+      return {
+        expired_count: result.length,
+        quotations: result,
+        message: result.length === 0
+          ? 'Nenhuma cotação vencida com resposta pendente.'
+          : `${result.length} cotação(ões) vencida(s) com fornecedor(es) que não responderam.`,
+      };
     }
 
     // ---------- ESCRITAS — COTAÇÕES ----------
