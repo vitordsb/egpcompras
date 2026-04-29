@@ -25,6 +25,9 @@ import ComNotaPage from '@/routes/admin/financeira/ComNotaPage';
 import SemNotaPage from '@/routes/admin/financeira/SemNotaPage';
 import RelatorioFinanceiraPage from '@/routes/admin/financeira/RelatorioFinanceiraPage';
 import SupplierQuotePage from '@/routes/public/SupplierQuotePage';
+import PrestadoresPage from '@/routes/admin/rh/PrestadoresPage';
+import CalculosPage from '@/routes/admin/rh/CalculosPage';
+import HistoricoRhPage from '@/routes/admin/rh/HistoricoRhPage';
 import { readUIMode, readLastAdminRoute } from '@/lib/ui-mode';
 import { supabase } from '@/lib/supabase';
 import { InternalAuthProvider } from '@/lib/auth-context';
@@ -214,6 +217,8 @@ function AuthenticatedApp() {
   const homeTarget = initialMode === 'ai' ? '/ia' : readLastAdminRoute();
   const isAccessAdmin = masterAuthenticated || isAccessAdminSession(session);
   const userEmail = session?.user?.email ?? null;
+  const RH_EMAILS = ['vitor@grupoegp.com.br', 'joane@grupoegp.com.br'];
+  const isRhUser = userEmail != null && RH_EMAILS.includes(userEmail.toLowerCase());
 
   return (
     <InternalAuthProvider isMaster={isAccessAdmin} userEmail={userEmail}>
@@ -255,6 +260,10 @@ function AuthenticatedApp() {
           path="acessos"
           element={isAccessAdmin ? <AccessUsersPage /> : <Navigate to="/admin/produtos" replace />}
         />
+        <Route path="rh" element={<Navigate to="/admin/rh/prestadores" replace />} />
+        <Route path="rh/prestadores" element={isRhUser ? <PrestadoresPage /> : <Navigate to="/admin" replace />} />
+        <Route path="rh/calculos"    element={isRhUser ? <CalculosPage />    : <Navigate to="/admin" replace />} />
+        <Route path="rh/historico"   element={isRhUser ? <HistoricoRhPage /> : <Navigate to="/admin" replace />} />
       </Route>
 
       {/* Fallback pra desenvolvimento local: /cotacao/:token continua funcionando */}
