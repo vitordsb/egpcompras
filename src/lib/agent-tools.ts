@@ -617,6 +617,40 @@ export const toolDeclarations = [
 
   // ---------- SAÍDAS / PEDIDOS ----------
   {
+    name: 'find_partial_shipment',
+    description:
+      'Busca pedidos existentes que estejam "incompletos" — NF-e sem número de venda vinculado, ou venda sem NF-e. Use SEMPRE antes de criar um novo pedido quando tiver CNPJ ou nome do cliente: pode ser que já exista metade do registro. Retorna candidatos para o usuário confirmar se é o mesmo pedido.',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        client_cnpj:     { type: 'STRING' as Type, description: 'CNPJ do cliente (preferido — mais preciso).' },
+        client_name:     { type: 'STRING' as Type, description: 'Nome do cliente (fuzzy match, usado se não tiver CNPJ).' },
+        document_type:   { type: 'STRING' as Type, description: '"nfe" — busca vendas sem NF-e | "venda" — busca NF-es sem número de venda.' },
+        days_back:       { type: 'NUMBER' as Type, description: 'Quantos dias pra trás buscar (default 90).' },
+      },
+      required: ['document_type'],
+    },
+  },
+  {
+    name: 'link_document_to_shipment',
+    description:
+      'Vincula uma NF-e a uma venda existente (ou vice-versa) sem criar registro duplicado. Use quando o usuário confirmar que o documento importado corresponde a um pedido já cadastrado.',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        shipment_id:   { type: 'STRING' as Type, description: 'ID do pedido existente a atualizar.' },
+        numero_nfe:    { type: 'STRING' as Type, description: 'Número da NF-e a vincular (se for NF-e chegando para uma venda).' },
+        numero_venda:  { type: 'STRING' as Type, description: 'Número da venda a vincular (se for venda chegando para uma NF-e).' },
+        chave_acesso:  { type: 'STRING' as Type, description: 'Chave de acesso da NF-e (44 dígitos).' },
+        data_venda:    { type: 'STRING' as Type, description: 'Data da venda (YYYY-MM-DD), se faltar no registro.' },
+        data_prevista: { type: 'STRING' as Type, description: 'Data prevista de saída, se faltar no registro.' },
+        valor_total:   { type: 'NUMBER' as Type },
+        notes:         { type: 'STRING' as Type },
+      },
+      required: ['shipment_id'],
+    },
+  },
+  {
     name: 'create_shipment',
     description:
       'Cria um pedido de saída (controle paralelo ao Conta Azul). Use quando o usuário disser "adiciona pedido X pra sair", "registra a saída de X", "cadastra pedido Y do cliente Z", ou ao importar um PDF de venda. Pode incluir produtos com qtd e todos os dados do Conta Azul.',
@@ -3141,6 +3175,80 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
     }
 
     // ---------- SAÍDAS / PEDIDOS ----------
+    case 'find_partial_shipment': {
+      const docType  = String(args.document_type ?? '').trim();
+      const cnpj     = args.client_cnpj ? String(args.client_cnpj).replace(/\D/g, '') : null;
+      const name     = args.client_name ? String(args.client_name).trim() : null;
+      const daysBack = Number(args.days_back ?? 90);
+      const since    = new Date(Date.now() - daysBack * 86400000).toISOString();
+
+      if (!cnpj && !name) return { candidates: [], message: 'Informe client_cnpj ou client_name para buscar.' };
+
+      let q = supabase.from('shipments')
+        .select('id, client_name, client_cnpj, numero_nfe, numero_venda, data_venda, status, valor_total, created_at')
+        .gte('created_at', since)
+        .order('created_at', { ascending: false })
+        .limit(10);
+
+      // Busca por CNPJ (exato) ou nome (fuzzy)
+      if (cnpj) {
+        q = q.eq('client_cnpj', cnpj);
+      } else if (name) {
+        q = q.ilike('client_name', `%${name}%`);
+      }
+
+      // Filtra registros "incompletos" conforme o tipo do documento chegando
+      if (docType === 'nfe') {
+        // Chegou uma NF-e → procura vendas sem NF-e vinculada
+        q = q.is('numero_nfe', null);
+      } else if (docType === 'venda') {
+        // Chegou uma Venda → procura NF-es sem número de venda vinculado
+        q = q.is('numero_venda', null);
+      }
+
+      const { data, error } = await q;
+      if (error) throw new Error(error.message);
+
+      const candidates = (data ?? []) as any[];
+      return {
+        candidates,
+        count: candidates.length,
+        message: candidates.length === 0
+          ? `Nenhum pedido parcial encontrado para esse cliente nos últimos ${daysBack} dias.`
+          : `Encontrei ${candidates.length} pedido(s) que pode(m) corresponder. Confirme com o usuário antes de vincular.`,
+      };
+    }
+
+    case 'link_document_to_shipment': {
+      const id = String(args.shipment_id ?? '').trim();
+      if (!id) throw new Error('shipment_id é obrigatório');
+
+      const updates: Record<string, unknown> = {};
+      if (args.numero_nfe)    updates.numero_nfe    = String(args.numero_nfe).trim();
+      if (args.numero_venda)  updates.numero_venda  = String(args.numero_venda).trim();
+      if (args.chave_acesso)  updates.chave_acesso  = String(args.chave_acesso).replace(/\D/g, '').slice(0, 44) || null;
+      if (args.data_venda)    updates.data_venda    = String(args.data_venda);
+      if (args.data_prevista) updates.data_prevista = String(args.data_prevista);
+      if (args.valor_total != null) updates.valor_total = Number(args.valor_total);
+      if (args.notes)         updates.notes         = String(args.notes).trim();
+
+      if (Object.keys(updates).length === 0) throw new Error('Nenhum campo para atualizar.');
+
+      const { data: before } = await supabase.from('shipments')
+        .select('client_name, numero_nfe, numero_venda').eq('id', id).single();
+
+      const { error } = await supabase.from('shipments').update(updates).eq('id', id);
+      if (error) throw new Error(error.message);
+
+      return {
+        linked: true,
+        shipment_id: id,
+        client_name: (before as any)?.client_name,
+        before: { numero_nfe: (before as any)?.numero_nfe, numero_venda: (before as any)?.numero_venda },
+        after: updates,
+      };
+    }
+
     case 'create_shipment': {
       const clientName = String(args.client_name ?? '').trim();
       if (!clientName) throw new Error('client_name é obrigatório');

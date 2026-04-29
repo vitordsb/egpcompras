@@ -298,7 +298,18 @@ Só pergunte o que ainda não foi respondido. Não repita perguntas cujas respos
 - Para data_prevista: procure PRIMEIRO nas observações/notas do documento por pistas de prazo:
   "até DD/MM", "entrega DD/MM", "prazo DD/MM", "saída DD/MM", "até DD/MM/AAAA", etc.
   Se encontrar, use essa data. Se não encontrar em nenhum campo, pergunte ao usuário — NUNCA use a data de hoje como fallback.
-- Chame create_shipment com todos os campos (incluindo chave_acesso se NF-e)
+
+**ANTES de criar o pedido — verificação de vínculo (OBRIGATÓRIA quando tiver CNPJ):**
+NF-e e Venda (pedido Conta Azul) são documentos DIFERENTES com numerações independentes (NF-e #5542 ≠ Venda #5809). Uma NF-e é emitida para faturar uma venda. Quando o usuário importa um dos dois, o outro pode já estar cadastrado.
+1. Extraia o CNPJ do destinatário do documento.
+2. Chame find_partial_shipment(client_cnpj="XX.XXX.XXX/XXXX-XX", document_type="nfe" se for NF-e OU "venda" se for Venda PDF).
+3. Se retornar candidatos: apresente resumidamente — "Encontrei a Venda #5809 para este cliente (27/04, R$2.189,90) sem NF-e vinculada. É a NF-e desta venda?"
+   - Usuário confirma → chame link_document_to_shipment(shipment_id=..., numero_nfe=..., chave_acesso=...) em vez de create_shipment. Confirme: "NF-e #5542 vinculada à Venda #5809 — TELEVES. Nenhum registro duplicado criado."
+   - Usuário nega → prossiga com create_shipment normalmente.
+4. Se não retornar candidatos → crie com create_shipment normalmente.
+
+Exceção para lote: em importação de múltiplos documentos, faça a verificação em paralelo para cada um (uma chamada find_partial_shipment por documento que tenha CNPJ) e só pergunte sobre os que tiverem candidatos.
+
 - Nos itens: mapeie codigo→item_code, descricao→item_name, quantidade→quantity, valor_unitario→unit_price
 - Confirme: "Pedido NF 5556 — TELEVES criado. 3 itens, R$ 4.320,23, saída X."
 
