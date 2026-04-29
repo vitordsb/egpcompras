@@ -783,6 +783,76 @@ export const toolDeclarations = [
     },
   },
   {
+    name: 'set_stock_minimum',
+    description: 'Define a quantidade mínima de reposição de um item. Quando o saldo cair abaixo, o sistema marca como "baixo". Use: "mínimo de 50 sirenes EGPS1", "ponto de reposição do cabo CABOD31 é 30".',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        item_code:    { type: 'STRING' as Type },
+        item_name:    { type: 'STRING' as Type, description: 'Fuzzy match se não souber o código.' },
+        min_quantity: { type: 'NUMBER' as Type, description: 'Quantidade mínima desejada.' },
+      },
+      required: ['min_quantity'],
+    },
+  },
+  {
+    name: 'get_low_stock_alerts',
+    description: 'Lista itens com saldo crítico: negativos, zerados ou abaixo do mínimo configurado. Use para "o que está em falta?", "itens críticos de estoque", ou em tarefas agendadas de monitoramento.',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        include_zero: { type: 'BOOLEAN' as Type, description: 'Se true, inclui itens com saldo zero (default true).' },
+      },
+    },
+  },
+  {
+    name: 'get_stock_history',
+    description: 'Retorna o histórico de movimentações de um item específico. Use para "histórico do EGPS1", "quando foi a última entrada de cabo?", "quanto de X entrou no último mês?".',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        item_code: { type: 'STRING' as Type },
+        item_name: { type: 'STRING' as Type, description: 'Fuzzy match.' },
+        days:      { type: 'NUMBER' as Type, description: 'Últimos N dias (default 30).' },
+      },
+    },
+  },
+  {
+    name: 'generate_purchase_list',
+    description: 'Gera uma lista de compras formatada para enviar ao fornecedor (WhatsApp, e-mail). Cruza estoque atual + reservas + pedidos pendentes e calcula o que falta. Retorna texto pronto para copiar.',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        include_all: { type: 'BOOLEAN' as Type, description: 'Se true, inclui todos os itens (mesmo os com estoque suficiente). Default: só os que precisam comprar.' },
+        supplier:    { type: 'STRING' as Type, description: 'Filtrar por fornecedor (fuzzy match).' },
+      },
+    },
+  },
+  {
+    name: 'reserve_stock',
+    description: 'Reserva suave de estoque para um pedido criado mas ainda não saído. Chame ao criar um novo pedido. Reduz o saldo disponível sem baixar o saldo físico.',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        shipment_id:  { type: 'STRING' as Type },
+        numero_venda: { type: 'STRING' as Type },
+        client_name:  { type: 'STRING' as Type },
+      },
+    },
+  },
+  {
+    name: 'release_stock_reservation',
+    description: 'Libera a reserva de estoque de um pedido cancelado ou devolvido. Chame sempre que cancelar ou devolver um pedido.',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        shipment_id:  { type: 'STRING' as Type },
+        numero_venda: { type: 'STRING' as Type },
+        client_name:  { type: 'STRING' as Type },
+      },
+    },
+  },
+  {
     name: 'add_shipment_items',
     description:
       'Adiciona itens a um pedido existente. Suporta itens com product_name/product_id (match no catálogo) ou itens livres com item_code/item_name/unit_price. Se o item já estiver no pedido, atualiza.',
@@ -2649,11 +2719,19 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
       for (const it of items as any[]) {
         const code = (it.item_code ?? it.item_name ?? '').toUpperCase();
         const qty = Number(it.quantity ?? 1);
-        const { data: stockItem } = await supabase.from('stock_items').select('id, quantity').ilike('item_code', code).maybeSingle();
+        const { data: stockItem } = await supabase
+          .from('stock_items')
+          .select('id, quantity, reserved_quantity')
+          .ilike('item_code', code)
+          .maybeSingle();
 
         if (stockItem) {
           const newQty = Number(stockItem.quantity) - qty;
-          await supabase.from('stock_items').update({ quantity: newQty, updated_at: new Date().toISOString() }).eq('id', stockItem.id);
+          // Libera a reserva ao confirmar saída
+          const newReserved = Math.max(0, Number(stockItem.reserved_quantity) - qty);
+          await supabase.from('stock_items')
+            .update({ quantity: newQty, reserved_quantity: newReserved, updated_at: new Date().toISOString() })
+            .eq('id', stockItem.id);
           await supabase.from('stock_movements').insert({
             stock_item_id: stockItem.id, item_code: code, item_name: it.item_name,
             quantity: -qty, type: 'saida', shipment_id: shipmentId,
@@ -2664,6 +2742,173 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
         }
       }
       return { deducted: results.filter((r) => r.deducted > 0).length, items: results };
+    }
+
+    case 'set_stock_minimum': {
+      const minQty = Number(args.min_quantity);
+      if (minQty < 0) throw new Error('min_quantity deve ser >= 0.');
+      let item: any = null;
+      if (args.item_code) {
+        const { data } = await supabase.from('stock_items').select('id, item_name').ilike('item_code', String(args.item_code)).maybeSingle();
+        item = data;
+      } else if (args.item_name) {
+        const { data } = await supabase.from('stock_items').select('id, item_name').ilike('item_name', `%${String(args.item_name)}%`).limit(1);
+        item = (data as any)?.[0];
+      }
+      if (!item) throw new Error('Item não encontrado no estoque. Registre uma entrada primeiro.');
+      await supabase.from('stock_items').update({ min_quantity: minQty, updated_at: new Date().toISOString() }).eq('id', item.id);
+      return { updated: true, item_name: item.item_name, min_quantity: minQty };
+    }
+
+    case 'get_low_stock_alerts': {
+      const includeZero = args.include_zero !== false;
+      const { data, error } = await supabase
+        .from('stock_items')
+        .select('item_code, item_name, quantity, reserved_quantity, min_quantity, unit')
+        .order('quantity');
+      if (error) throw new Error(error.message);
+
+      const alerts = (data ?? []).filter((s: any) => {
+        const qty = Number(s.quantity);
+        const min = Number(s.min_quantity);
+        const avail = qty - Number(s.reserved_quantity);
+        if (qty < 0) return true;
+        if (includeZero && qty === 0) return true;
+        if (min > 0 && avail < min) return true;
+        return false;
+      }).map((s: any) => ({
+        item_code: s.item_code,
+        item_name: s.item_name,
+        quantity: Number(s.quantity),
+        reserved: Number(s.reserved_quantity),
+        available: Number(s.quantity) - Number(s.reserved_quantity),
+        min_quantity: Number(s.min_quantity),
+        unit: s.unit,
+        severity: Number(s.quantity) < 0 ? 'negativo' : Number(s.quantity) === 0 ? 'zerado' : 'abaixo_do_minimo',
+      }));
+
+      return { alerts, count: alerts.length };
+    }
+
+    case 'get_stock_history': {
+      const days = Number(args.days ?? 30);
+      const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+      let q = supabase
+        .from('stock_movements')
+        .select('id, quantity, type, notes, created_at, shipment:shipments(client_name, numero_venda)')
+        .gte('created_at', since)
+        .order('created_at', { ascending: false })
+        .limit(50);
+      if (args.item_code) q = q.ilike('item_code', `%${String(args.item_code)}%`);
+      else if (args.item_name) q = q.ilike('item_name', `%${String(args.item_name)}%`);
+      else throw new Error('Informe item_code ou item_name.');
+      const { data, error } = await q;
+      if (error) throw new Error(error.message);
+
+      const totalIn  = (data ?? []).filter((m: any) => Number(m.quantity) > 0).reduce((s: number, m: any) => s + Number(m.quantity), 0);
+      const totalOut = (data ?? []).filter((m: any) => Number(m.quantity) < 0).reduce((s: number, m: any) => s + Math.abs(Number(m.quantity)), 0);
+      return { period_days: days, total_in: totalIn, total_out: totalOut, movements: data ?? [] };
+    }
+
+    case 'generate_purchase_list': {
+      const { data: stockItems } = await supabase
+        .from('stock_items')
+        .select('item_code, item_name, quantity, reserved_quantity, unit');
+      const { data: pendingItems } = await supabase
+        .from('shipment_items')
+        .select('item_code, item_name, quantity, shipment:shipments!inner(client_name, numero_venda, status)')
+        .eq('shipments.status', 'pending');
+
+      const needsMap: Record<string, { item_name: string; needed: number; shipments: string[] }> = {};
+      for (const it of (pendingItems ?? []) as any[]) {
+        const code = (it.item_code ?? it.item_name ?? '').toUpperCase();
+        if (!needsMap[code]) needsMap[code] = { item_name: it.item_name ?? code, needed: 0, shipments: [] };
+        needsMap[code].needed += Number(it.quantity ?? 1);
+        const lbl = it.shipment?.numero_venda ? `#${it.shipment.numero_venda}` : it.shipment?.client_name ?? '?';
+        if (!needsMap[code].shipments.includes(lbl)) needsMap[code].shipments.push(lbl);
+      }
+
+      const stockMap: Record<string, { qty: number; reserved: number; unit: string }> = {};
+      for (const s of (stockItems ?? []) as any[]) {
+        stockMap[s.item_code] = { qty: Number(s.quantity), reserved: Number(s.reserved_quantity), unit: s.unit };
+      }
+
+      const lines: string[] = [];
+      const toBuy: Array<{ code: string; name: string; qty: number; unit: string; shipments: string[] }> = [];
+
+      for (const [code, n] of Object.entries(needsMap)) {
+        const stock = stockMap[code];
+        const available = stock ? stock.qty - stock.reserved : 0;
+        const needed = Math.max(0, n.needed - available);
+        if (needed > 0 || args.include_all) {
+          toBuy.push({ code, name: n.item_name, qty: needed || n.needed, unit: stock?.unit ?? 'un', shipments: n.shipments });
+        }
+      }
+
+      if (!toBuy.length) return { list: 'Estoque suficiente para todos os pedidos pendentes. Nada a comprar.', count: 0 };
+
+      const date = new Date().toLocaleDateString('pt-BR');
+      lines.push(`**Lista de Compras — ${date}**\n`);
+      for (const item of toBuy.sort((a, b) => a.name.localeCompare(b.name))) {
+        lines.push(`- **${item.qty} ${item.unit}** — ${item.name} \`${item.code}\` _(pedidos: ${item.shipments.join(', ')})_`);
+      }
+      lines.push(`\n_${toBuy.length} item${toBuy.length !== 1 ? 's' : ''} — gerado pelo EGP_`);
+
+      return { list: lines.join('\n'), count: toBuy.length, items: toBuy };
+    }
+
+    case 'reserve_stock': {
+      const resolved = await resolveShipmentId(args);
+      if (typeof resolved !== 'string') return resolved;
+      const shipmentId = resolved;
+
+      const { data: items } = await supabase
+        .from('shipment_items')
+        .select('item_code, item_name, quantity')
+        .eq('shipment_id', shipmentId);
+
+      if (!items?.length) return { reserved: 0, message: 'Pedido sem itens.' };
+
+      const results: any[] = [];
+      for (const it of items as any[]) {
+        const code = (it.item_code ?? it.item_name ?? '').toUpperCase();
+        const qty = Number(it.quantity ?? 1);
+        const { data: s } = await supabase.from('stock_items').select('id, quantity, reserved_quantity').ilike('item_code', code).maybeSingle();
+        if (s) {
+          const newReserved = Number(s.reserved_quantity) + qty;
+          await supabase.from('stock_items').update({ reserved_quantity: newReserved, updated_at: new Date().toISOString() }).eq('id', s.id);
+          results.push({ item_code: code, reserved: qty, available_after: Number(s.quantity) - newReserved });
+        } else {
+          results.push({ item_code: code, reserved: 0, note: 'Não encontrado no estoque' });
+        }
+      }
+      return { reserved: results.filter((r) => r.reserved > 0).length, items: results };
+    }
+
+    case 'release_stock_reservation': {
+      const resolved = await resolveShipmentId(args);
+      if (typeof resolved !== 'string') return resolved;
+      const shipmentId = resolved;
+
+      const { data: items } = await supabase
+        .from('shipment_items')
+        .select('item_code, item_name, quantity')
+        .eq('shipment_id', shipmentId);
+
+      if (!items?.length) return { released: 0, message: 'Pedido sem itens.' };
+
+      const results: any[] = [];
+      for (const it of items as any[]) {
+        const code = (it.item_code ?? it.item_name ?? '').toUpperCase();
+        const qty = Number(it.quantity ?? 1);
+        const { data: s } = await supabase.from('stock_items').select('id, quantity, reserved_quantity').ilike('item_code', code).maybeSingle();
+        if (s) {
+          const newReserved = Math.max(0, Number(s.reserved_quantity) - qty);
+          await supabase.from('stock_items').update({ reserved_quantity: newReserved, updated_at: new Date().toISOString() }).eq('id', s.id);
+          results.push({ item_code: code, released: qty });
+        }
+      }
+      return { released: results.length, items: results };
     }
 
     case 'add_shipment_items': {

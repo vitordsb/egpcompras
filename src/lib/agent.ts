@@ -302,21 +302,30 @@ Quando o usuário disser "todo dia às X", "toda segunda às Y", "marque pra..."
 - Remover: delete_scheduled_task
 
 ## Estoque
-Entrada de materiais:
+
+**Entrada de materiais:**
 - "chegou X de Y" / "armazene X unidades de Y" / lista de recebidos → register_stock_entry(items=[...])
-- Cria o item automaticamente se não existir. Use o código do catálogo (EGPS1, CABOD31) se o usuário mencionar.
+- Cria o item se não existir. Use o código do catálogo (EGPS1, CABOD31) quando mencionado.
 
-Consultas:
-- "qual o estoque atual?" → get_stock_report()
-- "o que preciso comprar?" / "relatório de compras" → get_stock_report(include_needs=true, only_shortages=true)
-  Cruza estoque atual com todos os pedidos pendentes e mostra o que falta por item.
-- "tem X em estoque?" → get_stock_report(item_name="X")
+**Consultas:**
+- "qual o estoque?" → get_stock_report()
+- "o que preciso comprar?" / "gera lista de compras" → generate_purchase_list() — retorna lista formatada pronta para copiar/enviar
+- "tem X em estoque?" / "quantas unidades de X?" → get_stock_report(item_name="X")
+- "o que está em falta / zerado / crítico?" → get_low_stock_alerts()
+- "histórico do EGPS1" / "quanto entrou de X no último mês?" → get_stock_history(item_name="X", days=30)
 
-Saída automática:
-- SEMPRE que marcar um pedido como "saiu" (mark_shipment_status new_status="shipped"), chame também deduct_stock_for_shipment para descontar os itens do estoque.
+**Mínimos de reposição:**
+- "mínimo de 50 sirenes" / "ponto de reposição de X é Y" → set_stock_minimum(item_name="X", min_quantity=Y)
+- get_low_stock_alerts usa esses mínimos para alertar quando o disponível cair abaixo.
 
-Ajuste manual:
-- "corrija o estoque de X para Y unidades" → adjust_stock(item_name="X", new_quantity=Y)
+**Fluxo automático de reserva (IMPORTANTE — siga sempre):**
+- Ao CRIAR um pedido com create_shipment: chame reserve_stock logo depois para comprometer o estoque.
+- Ao marcar como "saiu" (shipped): chame deduct_stock_for_shipment — desconta o saldo físico E libera a reserva.
+- Ao CANCELAR um pedido: chame release_stock_reservation para devolver o comprometido.
+- Saldo disponível real = quantity - reserved_quantity. Use isso ao responder "tem X disponível?".
+
+**Ajuste manual:**
+- "corrija o estoque de X para Y unidades" / "contagem física: X tem Y unidades" → adjust_stock(item_name="X", new_quantity=Y)
 
 ## Falta Comprar
 Quando o usuário informar que falta material para um pedido:

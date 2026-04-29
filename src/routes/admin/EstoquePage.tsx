@@ -9,6 +9,7 @@ interface StockItem {
   item_code: string;
   item_name: string;
   quantity: number;
+  reserved_quantity: number;
   unit: string;
   min_quantity: number;
   updated_at: string;
@@ -75,8 +76,9 @@ export default function EstoquePage() {
       .select('item_code, item_name, quantity, shipment:shipments!inner(id, client_name, numero_venda, status)')
       .eq('shipments.status', 'pending');
 
+    // Disponível = físico − reservado
     const stockMap: Record<string, number> = {};
-    for (const s of stock) stockMap[s.item_code] = Number(s.quantity);
+    for (const s of stock) stockMap[s.item_code] = Number(s.quantity) - Number(s.reserved_quantity);
 
     const needsMap: Record<string, NeedRow> = {};
     for (const it of (pendingItems ?? []) as any[]) {
@@ -184,21 +186,28 @@ export default function EstoquePage() {
                     <tr>
                       <th className="px-5 py-3">Código</th>
                       <th className="px-5 py-3">Item</th>
-                      <th className="px-5 py-3 text-right">Saldo</th>
+                      <th className="px-5 py-3 text-right">Físico</th>
+                      <th className="px-5 py-3 text-right">Reservado</th>
+                      <th className="px-5 py-3 text-right">Disponível</th>
                       <th className="px-5 py-3 text-right">Mín.</th>
                       <th className="px-5 py-3">Atualizado</th>
                     </tr>
                   </thead>
                   <tbody>
                     {filteredStock.map((s) => {
-                      const low = Number(s.quantity) <= Number(s.min_quantity) && Number(s.min_quantity) > 0;
-                      const negative = Number(s.quantity) < 0;
+                      const available = Number(s.quantity) - Number(s.reserved_quantity);
+                      const low = available <= Number(s.min_quantity) && Number(s.min_quantity) > 0;
+                      const negative = available < 0;
                       return (
                         <tr key={s.id} className={cn('border-b border-slate-100 last:border-0', negative && 'bg-red-50')}>
                           <td className="px-5 py-3 font-mono text-xs text-slate-500">{s.item_code}</td>
                           <td className="px-5 py-3 font-medium text-slate-900">{s.item_name}</td>
-                          <td className={cn('px-5 py-3 text-right font-semibold tabular-nums', negative ? 'text-red-700' : low ? 'text-amber-700' : 'text-slate-900')}>
-                            {fmtQty(s.quantity, s.unit)}
+                          <td className="px-5 py-3 text-right tabular-nums text-slate-500">{fmtQty(s.quantity, s.unit)}</td>
+                          <td className="px-5 py-3 text-right tabular-nums text-amber-600">
+                            {Number(s.reserved_quantity) > 0 ? fmtQty(s.reserved_quantity, s.unit) : '—'}
+                          </td>
+                          <td className={cn('px-5 py-3 text-right font-semibold tabular-nums', negative ? 'text-red-700' : low ? 'text-amber-700' : 'text-emerald-700')}>
+                            {fmtQty(available, s.unit)}
                             {negative && <span className="ml-1 text-[10px] font-normal text-red-500">negativo</span>}
                             {!negative && low && <span className="ml-1 text-[10px] font-normal text-amber-500">baixo</span>}
                           </td>
