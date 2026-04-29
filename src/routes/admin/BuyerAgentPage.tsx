@@ -348,6 +348,7 @@ export default function BuyerAgentPage() {
         provider,
         history,
         userMessage: finalMessage,
+        currentUser: userLabel,
         userInlineDataList: filesToSend.length > 0
           ? filesToSend.map((f) => ({ mimeType: f.mimeType, data: f.data, fileName: f.name }))
           : undefined,

@@ -530,9 +530,13 @@ async function loadProcedureCatalog(): Promise<{ name: string; description: stri
 
 function buildSystemInstruction(
   memories: { id: string; content: string }[],
-  procedures: { name: string; description: string | null }[]
+  procedures: { name: string; description: string | null }[],
+  currentUser?: string
 ): string {
   let out = SYSTEM_INSTRUCTION;
+  if (currentUser) {
+    out += `\n\n## Sessão atual\nUsuário logado: **${currentUser}**\nSempre que uma tool aceitar o campo "author", passe "${currentUser}". Isso registra internamente quem fez cada ação.`;
+  }
   if (memories.length > 0) {
     out +=
       '\n\n## Coisas que você aprendeu (memórias persistentes — válidas em todas as conversas)\n' +
@@ -552,6 +556,8 @@ export interface RunOptions {
   provider: AgentProvider;
   history: ChatTurn[];
   userMessage: string;
+  /** Usuário atual — injetado no system prompt e passado como author nas tools */
+  currentUser?: string;
   /** PDF único (legado) */
   userInlineData?: { mimeType: string; data: string; fileName?: string };
   /** Múltiplos PDFs enviados de uma vez */
@@ -569,6 +575,7 @@ export async function runAgent({
   provider,
   history,
   userMessage,
+  currentUser,
   userInlineData,
   userInlineDataList,
   onTurn,
@@ -623,7 +630,7 @@ export async function runAgent({
   // Se o user usar remember/define_procedure durante o loop, vão valer só no
   // próximo runAgent — aceitável.
   const [memories, procedures] = await Promise.all([loadMemories(), loadProcedureCatalog()]);
-  const fullSystemInstruction = buildSystemInstruction(memories, procedures);
+  const fullSystemInstruction = buildSystemInstruction(memories, procedures, currentUser);
 
   const MAX_STEPS = 25;
   for (let step = 0; step < MAX_STEPS; step++) {

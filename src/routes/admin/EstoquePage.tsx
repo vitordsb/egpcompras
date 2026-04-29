@@ -24,6 +24,7 @@ interface Movement {
   type: 'entrada' | 'saida' | 'ajuste';
   notes: string | null;
   created_at: string;
+  created_by: string | null;
   shipment: { client_name: string; numero_venda: string | null } | null;
 }
 
@@ -99,7 +100,7 @@ export default function EstoquePage() {
   async function loadMovements() {
     const { data } = await supabase
       .from('stock_movements')
-      .select('id, item_code, item_name, quantity, type, notes, created_at, shipment:shipments(client_name, numero_venda)')
+      .select('id, item_code, item_name, quantity, type, notes, created_at, created_by, shipment:shipments(client_name, numero_venda)')
       .order('created_at', { ascending: false })
       .limit(100);
     setMovements((data ?? []) as unknown as Movement[]);
@@ -530,6 +531,7 @@ export default function EstoquePage() {
                         {(m.shipment as any)?.numero_venda ? `Pedido #${(m.shipment as any).numero_venda}` : ''}
                         {(m.shipment as any)?.client_name && !(m.shipment as any)?.numero_venda ? (m.shipment as any).client_name : ''}
                         {m.notes ? (m.shipment ? ` · ${m.notes}` : m.notes) : ''}
+                        {m.created_by && <span className="ml-1 text-slate-400">· {m.created_by.split('@')[0]}</span>}
                       </td>
                     </tr>
                   ))}

@@ -2957,6 +2957,7 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
       }>;
       if (!items.length) throw new Error('Informe pelo menos um item.');
       const notes = args.notes ? String(args.notes) : null;
+      const createdBy = args.author ? String(args.author) : null;
       const results: any[] = [];
 
       const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
@@ -2966,19 +2967,22 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
         const qty = Number(it.quantity);
         const unit = it.unit ?? 'un';
 
-        // Verifica se houve entrada semelhante nas últimas 2h (possível duplicata)
-        const { data: recentMovements } = await supabase
+        // Verifica se houve entrada semelhante nas últimas 2h pelo mesmo usuário (possível duplicata)
+        let recentQuery = supabase
           .from('stock_movements')
-          .select('quantity, created_at')
+          .select('quantity, created_at, created_by')
           .ilike('item_code', code)
           .eq('type', 'entrada')
           .gte('created_at', twoHoursAgo)
           .order('created_at', { ascending: false })
-          .limit(3);
+          .limit(5);
+        const { data: recentMovements } = await recentQuery;
 
-        const recentSimilar = (recentMovements ?? []).find(
-          (m: any) => Math.abs(Number(m.quantity) - qty) / qty < 0.1 // mesma quantidade ±10%
-        );
+        const recentSimilar = (recentMovements ?? []).find((m: any) => {
+          const sameUser = !createdBy || !m.created_by || m.created_by === createdBy;
+          const similarQty = Math.abs(Number(m.quantity) - qty) / qty < 0.1;
+          return sameUser && similarQty;
+        });
 
         // Tenta achar componente pelo SKU para linkar
         const { data: compMatch } = await supabase
@@ -3012,7 +3016,7 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
           itemId = created?.id;
         }
 
-        // Registra movimento
+        // Registra movimento com autor
         await supabase.from('stock_movements').insert({
           stock_item_id: itemId,
           item_code: code,
@@ -3020,6 +3024,7 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
           quantity: qty,
           type: 'entrada',
           notes,
+          created_by: createdBy,
         });
 
         results.push({
@@ -3096,6 +3101,7 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
       await supabase.from('stock_movements').insert({
         stock_item_id: item.id, item_code: item.item_code, item_name: item.item_name,
         quantity: diff, type: 'ajuste', notes: args.notes ? String(args.notes) : null,
+        created_by: args.author ?? null,
       });
       return { adjusted: true, item_code: item.item_code, old_quantity: item.quantity, new_quantity: newQty };
     }
@@ -3132,6 +3138,7 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
           await supabase.from('stock_movements').insert({
             stock_item_id: stockItem.id, item_code: code, item_name: it.item_name,
             quantity: -qty, type: 'saida', shipment_id: shipmentId,
+            created_by: args.author ?? null,
           });
           deducted++;
         }
