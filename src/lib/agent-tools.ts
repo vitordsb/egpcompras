@@ -286,6 +286,36 @@ export const toolDeclarations = [
     },
   },
   {
+    name: 'setup_product_bom',
+    description:
+      'Define ou redefine a BOM completa de um produto de uma vez. Cria o produto se não existir. Para cada componente: busca no catálogo por nome/SKU (fuzzy); se não encontrar, cria automaticamente. Use quando o usuário disser "o produto X usa os componentes A, B, C" ou "o acervo do produto X é...".',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        product_name: { type: 'STRING' as Type, description: 'Nome do produto.' },
+        replace_existing: {
+          type: 'BOOLEAN' as Type,
+          description: 'Se true, apaga o BOM atual antes de inserir. Default false (adiciona/atualiza).',
+        },
+        components: {
+          type: 'ARRAY' as Type,
+          description: 'Lista completa de componentes do produto.',
+          items: {
+            type: 'OBJECT' as Type,
+            properties: {
+              name:     { type: 'STRING' as Type, description: 'Nome do componente.' },
+              sku:      { type: 'STRING' as Type, description: 'SKU/código (opcional).' },
+              quantity: { type: 'NUMBER' as Type, description: 'Quantidade por unidade do produto.' },
+              unit:     { type: 'STRING' as Type, description: 'Unidade (opcional, default un).' },
+            },
+            required: ['name', 'quantity'],
+          },
+        },
+      },
+      required: ['product_name', 'components'],
+    },
+  },
+  {
     name: 'duplicate_product',
     description:
       'Cria um novo produto copiando a BOM e configurações de markup de um existente. Útil pra criar variações.',
@@ -2306,6 +2336,95 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
       const { error } = await supabase.from('agent_memories').delete().eq('id', id);
       if (error) throw new Error(error.message);
       return { forgotten: true, id };
+    }
+
+    case 'setup_product_bom': {
+      const productName = String(args.product_name ?? '').trim();
+      const components = (args.components ?? []) as Array<{ name: string; sku?: string; quantity: number; unit?: string }>;
+      if (!components.length) throw new Error('Informe pelo menos um componente.');
+
+      // 1. Localiza ou cria o produto
+      let productId: string;
+      const { data: existingProds } = await supabase
+        .from('products')
+        .select('id, name')
+        .ilike('name', `%${productName}%`)
+        .limit(1);
+      const existing = (existingProds as any[])?.[0];
+      if (existing) {
+        productId = existing.id;
+      } else {
+        const { data: created, error: createErr } = await supabase
+          .from('products')
+          .insert({ name: productName })
+          .select('id')
+          .single();
+        if (createErr) throw new Error(createErr.message);
+        productId = created!.id;
+      }
+
+      // 2. Se replace_existing, apaga o BOM atual
+      if (args.replace_existing) {
+        await supabase.from('bom_items').delete().eq('product_id', productId);
+      }
+
+      // 3. Para cada componente: busca ou cria, depois upsert na BOM
+      const results: any[] = [];
+      for (const comp of components) {
+        let componentId: string;
+
+        // Busca por SKU exato primeiro, depois fuzzy por nome
+        let compRow: any = null;
+        if (comp.sku) {
+          const { data } = await supabase.from('components').select('id, name').ilike('sku', comp.sku).maybeSingle();
+          compRow = data;
+        }
+        if (!compRow) {
+          const { data } = await supabase.from('components').select('id, name').ilike('name', `%${comp.name}%`).limit(1);
+          compRow = (data as any[])?.[0] ?? null;
+        }
+
+        if (compRow) {
+          componentId = compRow.id;
+        } else {
+          // Cria componente automaticamente
+          const { data: newComp, error: compErr } = await supabase
+            .from('components')
+            .insert({
+              name: comp.name.trim(),
+              sku: comp.sku?.trim() ?? null,
+              unit: comp.unit ?? 'un',
+            })
+            .select('id')
+            .single();
+          if (compErr) throw new Error(`Erro ao criar componente "${comp.name}": ${compErr.message}`);
+          componentId = newComp!.id;
+        }
+
+        // Upsert na BOM (atualiza se já existir, insere se não)
+        const { data: existingBom } = await supabase
+          .from('bom_items')
+          .select('id')
+          .eq('product_id', productId)
+          .eq('component_id', componentId)
+          .maybeSingle();
+
+        if (existingBom) {
+          await supabase.from('bom_items').update({ quantity: comp.quantity }).eq('id', existingBom.id);
+          results.push({ component: comp.name, action: 'atualizado', quantity: comp.quantity });
+        } else {
+          await supabase.from('bom_items').insert({ product_id: productId, component_id: componentId, quantity: comp.quantity });
+          results.push({ component: comp.name, action: 'adicionado', quantity: comp.quantity });
+        }
+      }
+
+      return {
+        product: productName,
+        product_id: productId,
+        created_product: !existing,
+        components_processed: results.length,
+        bom: results,
+      };
     }
 
     case 'duplicate_product': {
