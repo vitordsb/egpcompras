@@ -180,12 +180,13 @@ export const toolDeclarations = [
   // ---------- ESCRITAS — PRODUTOS ----------
   {
     name: 'create_product',
-    description: 'Cria um novo produto (sem BOM ainda — adicione com add_bom_item depois).',
+    description: 'Cria um novo produto (sem BOM ainda — adicione com add_bom_item depois). Para criar produto + BOM de uma vez, prefira setup_product_bom.',
     parameters: {
       type: 'OBJECT' as Type,
       properties: {
-        name: { type: 'STRING' as Type },
-        description: { type: 'STRING' as Type },
+        name:         { type: 'STRING' as Type },
+        description:  { type: 'STRING' as Type },
+        product_type: { type: 'STRING' as Type, description: '"revenda" (default) ou "fabricacao".' },
       },
       required: ['name'],
     },
@@ -296,6 +297,10 @@ export const toolDeclarations = [
         replace_existing: {
           type: 'BOOLEAN' as Type,
           description: 'Se true, apaga o BOM atual antes de inserir. Default false (adiciona/atualiza).',
+        },
+        product_type: {
+          type: 'STRING' as Type,
+          description: '"fabricacao" (default quando tem BOM) ou "revenda". Defina ao criar produto novo.',
         },
         components: {
           type: 'ARRAY' as Type,
@@ -944,6 +949,33 @@ export const toolDeclarations = [
         notes:        { type: 'STRING' as Type, description: 'Ex: "Produção lote 001".' },
       },
       required: ['product_name', 'quantity'],
+    },
+  },
+  {
+    name: 'set_product_type',
+    description:
+      'Define se um produto é de "revenda" (compra e vende direto, estoque do produto em si) ou "fabricacao" (montado com componentes do BOM). Use quando o usuário disser "esse produto é de revenda" ou "esse produto é de fabricação/produção".',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        product_name:  { type: 'STRING' as Type, description: 'Nome ou parte do nome do produto.' },
+        product_type:  { type: 'STRING' as Type, description: '"revenda" ou "fabricacao".' },
+      },
+      required: ['product_name', 'product_type'],
+    },
+  },
+  {
+    name: 'check_order_fulfillment',
+    description:
+      'Verifica se é possível atender um pedido (ou todos os pedidos pendentes) com o estoque atual. Para cada item: se for revenda → verifica estoque direto; se for fabricação → cruza BOM × estoque de componentes. Retorna o que pode ser atendido e o que falta. Use para "consigo atender o pedido X?", "quais pedidos eu consigo dar saída agora?", "o que falta para atender todos os pedidos?".',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        shipment_id:  { type: 'STRING' as Type, description: 'ID do pedido específico (opcional).' },
+        numero_venda: { type: 'STRING' as Type, description: 'Número da venda (opcional).' },
+        client_name:  { type: 'STRING' as Type, description: 'Cliente (fuzzy, opcional).' },
+        all_pending:  { type: 'BOOLEAN' as Type, description: 'Se true, analisa todos os pedidos pendentes.' },
+      },
     },
   },
   {
@@ -1736,6 +1768,7 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
       if (!pname) throw new Error('name é obrigatório');
       const payload: any = { name: pname };
       if (args.description) payload.description = String(args.description).trim();
+      if (args.product_type) payload.product_type = String(args.product_type).trim();
       const { data, error } = await supabase
         .from('products')
         .insert(payload)
@@ -2350,13 +2383,18 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
         .select('id, name')
         .ilike('name', `%${productName}%`)
         .limit(1);
+      const productType = args.product_type ? String(args.product_type).trim() : 'fabricacao';
       const existing = (existingProds as any[])?.[0];
       if (existing) {
         productId = existing.id;
+        // Atualiza o tipo se informado
+        if (args.product_type) {
+          await supabase.from('products').update({ product_type: productType }).eq('id', productId);
+        }
       } else {
         const { data: created, error: createErr } = await supabase
           .from('products')
-          .insert({ name: productName })
+          .insert({ name: productName, product_type: productType })
           .select('id')
           .single();
         if (createErr) throw new Error(createErr.message);
@@ -3396,6 +3434,149 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
         units_produced: units,
         components_deducted: results.filter((r: any) => r.deducted > 0).length,
         items: results,
+      };
+    }
+
+    case 'set_product_type': {
+      const productName = String(args.product_name ?? '').trim();
+      const productType = String(args.product_type ?? '').trim().toLowerCase();
+      if (!['revenda', 'fabricacao'].includes(productType)) {
+        throw new Error('product_type deve ser "revenda" ou "fabricacao".');
+      }
+      const { data: prods } = await supabase
+        .from('products')
+        .select('id, name, product_type')
+        .ilike('name', `%${productName}%`)
+        .limit(1);
+      const product = (prods as any[])?.[0];
+      if (!product) throw new Error(`Produto "${productName}" não encontrado.`);
+      await supabase.from('products').update({ product_type: productType }).eq('id', product.id);
+      return { updated: true, product: product.name, product_type: productType };
+    }
+
+    case 'check_order_fulfillment': {
+      // Resolve quais pedidos analisar
+      let shipmentIds: string[] = [];
+      if (args.all_pending) {
+        const { data } = await supabase
+          .from('shipments')
+          .select('id, client_name, numero_venda')
+          .eq('status', 'pending');
+        shipmentIds = (data ?? []).map((s: any) => s.id);
+      } else {
+        const resolved = await resolveShipmentId(args);
+        if (typeof resolved === 'string') shipmentIds = [resolved];
+        else return resolved;
+      }
+
+      if (!shipmentIds.length) return { message: 'Nenhum pedido pendente encontrado.' };
+
+      const shipmentResults: any[] = [];
+
+      for (const shipId of shipmentIds) {
+        const [shipRes, itemsRes] = await Promise.all([
+          supabase.from('shipments').select('id, client_name, numero_venda, numero_nfe').eq('id', shipId).single(),
+          supabase.from('shipment_items').select('item_code, item_name, quantity, product:products(id, name, product_type)').eq('shipment_id', shipId),
+        ]);
+
+        const ship: any = shipRes.data;
+        const itemAnalysis: any[] = [];
+        let shipmentFullyFulfillable = true;
+
+        for (const si of (itemsRes.data ?? []) as any[]) {
+          const qty = Number(si.quantity ?? 1);
+          const prod: any = si.product;
+          const itemCode = si.item_code?.toUpperCase() ?? si.item_name?.toUpperCase().replace(/\s+/g, '_');
+
+          if (!prod) {
+            // Item sem produto vinculado — trata como revenda, checa estoque pelo item_code
+            const { data: stock } = await supabase.from('stock_items').select('quantity, reserved_quantity, unit').ilike('item_code', itemCode ?? '').maybeSingle();
+            const available = stock ? Number(stock.quantity) - Number(stock.reserved_quantity) : 0;
+            const canFulfill = available >= qty;
+            if (!canFulfill) shipmentFullyFulfillable = false;
+            itemAnalysis.push({ item: si.item_name, type: 'revenda', needed: qty, available, can_fulfill: canFulfill, missing: Math.max(0, qty - available) });
+            continue;
+          }
+
+          const type = prod.product_type ?? 'revenda';
+
+          if (type === 'revenda') {
+            // Checa estoque do produto acabado diretamente
+            const productCode = prod.name.toUpperCase().replace(/\s+/g, '_');
+            let stock: any = null;
+            // Tenta pelo item_code do shipment_item primeiro
+            if (itemCode) {
+              const { data } = await supabase.from('stock_items').select('quantity, reserved_quantity, unit').ilike('item_code', itemCode).maybeSingle();
+              stock = data;
+            }
+            if (!stock) {
+              const { data } = await supabase.from('stock_items').select('quantity, reserved_quantity, unit').ilike('item_code', productCode).maybeSingle();
+              stock = data;
+            }
+            const available = stock ? Number(stock.quantity) - Number(stock.reserved_quantity) : 0;
+            const canFulfill = available >= qty;
+            if (!canFulfill) shipmentFullyFulfillable = false;
+            itemAnalysis.push({ item: prod.name, type: 'revenda', needed: qty, available, can_fulfill: canFulfill, missing: Math.max(0, qty - available) });
+
+          } else {
+            // Fabricação — cruza BOM × estoque de componentes
+            const { data: bom } = await supabase
+              .from('bom_items')
+              .select('quantity, component:components(id, name, sku)')
+              .eq('product_id', prod.id);
+
+            if (!bom?.length) {
+              itemAnalysis.push({ item: prod.name, type: 'fabricacao', needed: qty, can_fulfill: false, note: 'BOM não cadastrado' });
+              shipmentFullyFulfillable = false;
+              continue;
+            }
+
+            const componentAnalysis: any[] = [];
+            let maxProducible = Infinity;
+            for (const bi of bom as any[]) {
+              const comp = bi.component;
+              const totalNeeded = Number(bi.quantity) * qty;
+              let stock: any = null;
+              if (comp.id) {
+                const { data } = await supabase.from('stock_items').select('quantity, reserved_quantity').eq('component_id', comp.id).maybeSingle();
+                stock = data;
+              }
+              if (!stock && comp.sku) {
+                const { data } = await supabase.from('stock_items').select('quantity, reserved_quantity').ilike('item_code', comp.sku).maybeSingle();
+                stock = data;
+              }
+              const available = stock ? Number(stock.quantity) - Number(stock.reserved_quantity) : 0;
+              const maxFromThis = Number(bi.quantity) > 0 ? Math.floor(available / Number(bi.quantity)) : Infinity;
+              if (isFinite(maxFromThis)) maxProducible = Math.min(maxProducible, maxFromThis);
+              if (totalNeeded > available) {
+                componentAnalysis.push({ component: comp.name, needed: totalNeeded, available, missing: totalNeeded - available });
+              }
+            }
+            const canFulfill = componentAnalysis.length === 0;
+            const maxProd = isFinite(maxProducible) ? maxProducible : 0;
+            if (!canFulfill) shipmentFullyFulfillable = false;
+            itemAnalysis.push({
+              item: prod.name, type: 'fabricacao', needed: qty,
+              max_producible: maxProd, can_fulfill: canFulfill,
+              missing_components: componentAnalysis,
+            });
+          }
+        }
+
+        shipmentResults.push({
+          shipment_id: shipId,
+          client: ship?.client_name,
+          numero_venda: ship?.numero_venda,
+          can_fulfill: shipmentFullyFulfillable,
+          items: itemAnalysis,
+        });
+      }
+
+      const canFulfillAll = shipmentResults.filter((s: any) => s.can_fulfill).length;
+      return {
+        total_shipments: shipmentResults.length,
+        can_fulfill_count: canFulfillAll,
+        shipments: shipmentResults,
       };
     }
 

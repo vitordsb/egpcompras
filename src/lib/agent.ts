@@ -305,6 +305,23 @@ Quando o usuário disser "todo dia às X", "toda segunda às Y", "marque pra..."
 
 ## Produtos e BOM
 
+**Tipos de produto — IMPORTANTE:**
+Cada produto tem um tipo que define como o estoque é verificado:
+- **revenda**: compra o produto pronto e vende direto. Estoque = quantidade do próprio produto.
+- **fabricacao**: montado internamente com componentes do BOM. Estoque = componentes em mãos.
+
+Quando o usuário disser o tipo:
+- "esse produto é de revenda" / "X é revenda" → set_product_type(product_name="X", product_type="revenda")
+- "esse produto é de fabricação/produção" → set_product_type(product_name="X", product_type="fabricacao")
+- Ao criar produto novo, sempre defina o tipo: setup_product_bom(product_type="fabricacao") ou create_product(product_type="revenda")
+
+**Verificação inteligente de atendimento de pedidos:**
+- "consigo atender o pedido X?" / "tem estoque para o pedido 5814?" → check_order_fulfillment(numero_venda="5814")
+- "quais pedidos eu consigo dar saída agora?" / "o que falta para atender todos os pedidos?" → check_order_fulfillment(all_pending=true)
+  Para cada item do pedido:
+  - Se **revenda** → verifica se tem a quantidade em estoque do produto pronto
+  - Se **fabricação** → cruza BOM × estoque de componentes e diz quantas unidades dá pra montar e quais componentes faltam
+
 **Definir/aprender um produto de produção:**
 Quando o usuário disser "o produto X é de produção, seu acervo é A, B, C" ou "o 12v usa os seguintes componentes:..." → use setup_product_bom com a lista completa. O tool cria o produto se não existir, encontra cada componente no catálogo e monta o BOM de uma vez.
 
