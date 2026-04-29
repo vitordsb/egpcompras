@@ -2017,14 +2017,27 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
     case 'create_product': {
       const pname = String(args.name ?? '').trim();
       if (!pname) throw new Error('name é obrigatório');
+
+      // Verifica se já existe produto com nome igual (ilike) — atualiza em vez de duplicar
+      const { data: existing } = await supabase
+        .from('products').select('id, name').ilike('name', pname).limit(1);
+      const found = (existing as any[])?.[0];
+
+      if (found) {
+        const updates: any = {};
+        if (args.description) updates.description = String(args.description).trim();
+        if (args.product_type) updates.product_type = String(args.product_type).trim();
+        if (Object.keys(updates).length > 0) {
+          await supabase.from('products').update(updates).eq('id', found.id);
+        }
+        return { updated: true, id: found.id, name: found.name, note: 'Produto já existia — dados atualizados.' };
+      }
+
       const payload: any = { name: pname };
       if (args.description) payload.description = String(args.description).trim();
       if (args.product_type) payload.product_type = String(args.product_type).trim();
       const { data, error } = await supabase
-        .from('products')
-        .insert(payload)
-        .select('id, name')
-        .single();
+        .from('products').insert(payload).select('id, name').single();
       if (error) throw new Error(error.message);
       return { created: data };
     }
