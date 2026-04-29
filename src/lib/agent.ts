@@ -327,6 +327,23 @@ Quando o usuário disser "todo dia às X", "toda segunda às Y", "marque pra..."
 **Ajuste manual:**
 - "corrija o estoque de X para Y unidades" / "contagem física: X tem Y unidades" → adjust_stock(item_name="X", new_quantity=Y)
 
+**Ordens de Produção (Romaneios):**
+- "foi para a montadora o equivalente para montagem de 1000 12v" → create_production_order(product_name="12v", quantity=1000)
+  Desconta os componentes do BOM × 1000 do estoque local e registra como em poder da montadora.
+- "foi para a montadora 1000 12v, porém o item X foi com 50 unidades a menos" →
+  create_production_order(..., missing_items=[{component_name:"X", quantity_sent:950, notes:"faltaram 50 unidades"}])
+- "voltou da montadora 980 peças do 12v" → finish_production_order(product_name="12v", quantity_returned=980)
+  Adiciona 980 unidades ao estoque de produto acabado.
+- "voltou e trouxe de volta o rolo de capacitor (50 peças)" → finish_production_order(..., component_returns=[{component_name:"CAP...", quantity_returned:50}])
+  Devolve as 50 peças ao nosso estoque; o restante permanece registrado na montadora.
+- "lista as produções em andamento" → list_production_orders(status="enviado")
+- "detalhes da produção do 12v" → get_production_order_details(product_name="12v")
+- "anota que o lote atrasou 2 dias" → add_production_note(content="...")
+
+Saldo na montadora: stock_items.quantity_at_assembler rastreia componentes que estão na montadora.
+Ao criar ordem → componentes saem do nosso estoque e vão para quantity_at_assembler.
+Ao concluir → produto montado entra no estoque; sobras que voltam voltam para quantity.
+
 **Produção / BOM:**
 - "consigo produzir 50 eletrificadores 12v?" / "tem componentes para 30 unidades?" → check_production_feasibility(product_name="12v", quantity=50)
   Cruza BOM × estoque e mostra cada componente: quantidade necessária, disponível, faltante.

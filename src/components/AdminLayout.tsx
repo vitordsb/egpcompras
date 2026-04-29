@@ -63,16 +63,6 @@ const mainLinks: NavItem[] = [
         ),
       },
       {
-        to: '/admin/estoque',
-        label: 'Estoque',
-        description: 'Saldo e necessidade de compra',
-        icon: (
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-3.5 w-3.5">
-            <path strokeLinecap="round" strokeLinejoin="round" d="M20.25 7.5l-.625 10.632a2.25 2.25 0 0 1-2.247 2.118H6.622a2.25 2.25 0 0 1-2.247-2.118L3.75 7.5M10 11.25h4M3.375 7.5h17.25c.621 0 1.125-.504 1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125Z" />
-          </svg>
-        ),
-      },
-      {
         to: '/admin/falta-comprar',
         label: 'Falta Comprar',
         description: 'Itens faltantes nos pedidos',
@@ -130,6 +120,37 @@ const mainLinks: NavItem[] = [
         icon: (
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-3.5 w-3.5">
             <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 12h16.5m-16.5 3.75h16.5M3.75 19.5h16.5M5.625 4.5h12.75a1.875 1.875 0 0 1 0 3.75H5.625a1.875 1.875 0 0 1 0-3.75Z" />
+          </svg>
+        ),
+      },
+    ],
+  },
+  {
+    label: 'Produção',
+    description: 'Romaneios e montadora',
+    icon: (
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-4 w-4">
+        <path strokeLinecap="round" strokeLinejoin="round" d="M11.42 15.17 17.25 21A2.652 2.652 0 0 0 21 17.25l-5.877-5.877M11.42 15.17l2.496-3.03c.317-.384.74-.626 1.208-.766M11.42 15.17l-4.655 5.653a2.548 2.548 0 1 1-3.586-3.586l5.654-4.654m5.65-4.656 4.654-5.654a2.548 2.548 0 0 1 3.586 3.586l-5.654 4.654m-4.656 5.65-1.207.767a1.5 1.5 0 0 1-1.866-.252 1.5 1.5 0 0 1-.252-1.866l.767-1.207" />
+      </svg>
+    ),
+    children: [
+      {
+        to: '/admin/producao',
+        label: 'Ordens de Produção',
+        description: 'Romaneios e montadora',
+        icon: (
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-3.5 w-3.5">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 6.75h12M8.25 12h12m-12 5.25h12M3.75 6.75h.007v.008H3.75V6.75Zm.375 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0ZM3.75 12h.007v.008H3.75V12Zm.375 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm-.375 5.25h.007v.008H3.75v-.008Zm.375 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Z" />
+          </svg>
+        ),
+      },
+      {
+        to: '/admin/estoque',
+        label: 'Estoque',
+        description: 'Saldo e capacidade produtiva',
+        icon: (
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-3.5 w-3.5">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M20.25 7.5l-.625 10.632a2.25 2.25 0 0 1-2.247 2.118H6.622a2.25 2.25 0 0 1-2.247-2.118L3.75 7.5M10 11.25h4M3.375 7.5h17.25c.621 0 1.125-.504 1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125Z" />
           </svg>
         ),
       },
@@ -391,6 +412,7 @@ export default function AdminLayout() {
       '/admin/financeira/relatorio':     'Rel. Financeira',
       '/admin/falta-comprar':            'Falta Comprar',
       '/admin/estoque':                  'Estoque',
+      '/admin/producao':                 'Produção',
       '/admin/memorias':                 'Memórias',
       '/admin/procedimentos':            'Procedimentos',
       '/admin/consumo-ia':               'Consumo IA',

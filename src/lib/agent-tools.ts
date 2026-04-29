@@ -782,6 +782,100 @@ export const toolDeclarations = [
       },
     },
   },
+  // ── Ordens de Produção (Romaneios) ───────────────────────────────────────────
+  {
+    name: 'create_production_order',
+    description:
+      'Cria um romaneio de produção: registra que X unidades do produto Y foram enviadas para a montadora. Desconta automaticamente os componentes do BOM do estoque e marca como em poder da montadora. Aceita observações de itens faltantes.',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        product_name:    { type: 'STRING' as Type, description: 'Nome ou parte do nome do produto.' },
+        quantity:        { type: 'NUMBER' as Type, description: 'Quantidade de unidades enviadas para montagem.' },
+        assembler_name:  { type: 'STRING' as Type, description: 'Nome da montadora (opcional).' },
+        sent_at:         { type: 'STRING' as Type, description: 'Data de envio YYYY-MM-DD (opcional, default hoje).' },
+        notes:           { type: 'STRING' as Type, description: 'Observação geral.' },
+        missing_items: {
+          type: 'ARRAY' as Type,
+          description: 'Itens que foram com quantidade menor que o BOM prevê.',
+          items: {
+            type: 'OBJECT' as Type,
+            properties: {
+              component_name: { type: 'STRING' as Type },
+              quantity_sent:  { type: 'NUMBER' as Type, description: 'Quanto foi enviado de fato.' },
+              notes:          { type: 'STRING' as Type, description: 'Ex: "faltaram 50 unidades".' },
+            },
+            required: ['component_name'],
+          },
+        },
+      },
+      required: ['product_name', 'quantity'],
+    },
+  },
+  {
+    name: 'list_production_orders',
+    description: 'Lista ordens de produção. Filtros: status (rascunho/enviado/em_montagem/concluido/cancelado).',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        status: { type: 'STRING' as Type },
+        limit:  { type: 'NUMBER' as Type },
+      },
+    },
+  },
+  {
+    name: 'get_production_order_details',
+    description: 'Retorna detalhes completos de uma ordem: componentes enviados, saldo na montadora, retornos, observações.',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        order_id:     { type: 'STRING' as Type },
+        product_name: { type: 'STRING' as Type, description: 'Busca pela última ordem desse produto.' },
+      },
+    },
+  },
+  {
+    name: 'finish_production_order',
+    description:
+      'Registra a conclusão de uma ordem: quantidade de unidades montadas que voltaram, e o que aconteceu com os componentes restantes (voltaram para nós ou ficaram com a montadora). Atualiza estoque.',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        order_id:          { type: 'STRING' as Type },
+        product_name:      { type: 'STRING' as Type, description: 'Busca pela última ordem em andamento.' },
+        quantity_returned: { type: 'NUMBER' as Type, description: 'Unidades montadas devolvidas.' },
+        returned_at:       { type: 'STRING' as Type, description: 'Data de retorno YYYY-MM-DD.' },
+        component_returns: {
+          type: 'ARRAY' as Type,
+          description: 'Componentes que voltaram para o nosso estoque (sobras). Omitir = sobras ficaram com a montadora.',
+          items: {
+            type: 'OBJECT' as Type,
+            properties: {
+              component_name:    { type: 'STRING' as Type },
+              quantity_returned: { type: 'NUMBER' as Type, description: 'Quantidade que voltou para nós.' },
+            },
+            required: ['component_name', 'quantity_returned'],
+          },
+        },
+        notes: { type: 'STRING' as Type },
+      },
+      required: ['quantity_returned'],
+    },
+  },
+  {
+    name: 'add_production_note',
+    description: 'Adiciona uma observação a uma ordem de produção. Use para registrar problemas, atrasos, ajustes parciais.',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        order_id:     { type: 'STRING' as Type },
+        product_name: { type: 'STRING' as Type },
+        content:      { type: 'STRING' as Type, description: 'Texto da observação.' },
+        author:       { type: 'STRING' as Type },
+      },
+      required: ['content'],
+    },
+  },
   // ── Produção / BOM ───────────────────────────────────────────────────────────
   {
     name: 'check_production_feasibility',
@@ -2792,6 +2886,238 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
         }
       }
       return { deducted: results.filter((r) => r.deducted > 0).length, items: results };
+    }
+
+    // ── Ordens de Produção ────────────────────────────────────────────────────
+    case 'create_production_order': {
+      const productName = String(args.product_name ?? '').trim();
+      const qty = Number(args.quantity);
+      const sentAt = args.sent_at ? String(args.sent_at) : new Date().toISOString().slice(0, 10);
+
+      // Localiza produto
+      const { data: prods } = await supabase.from('products').select('id, name').ilike('name', `%${productName}%`).limit(1);
+      const product = (prods as any[])?.[0];
+      if (!product) throw new Error(`Produto "${productName}" não encontrado.`);
+
+      // Busca BOM
+      const { data: bom } = await supabase
+        .from('bom_items')
+        .select('quantity, component:components(id, name, sku, unit)')
+        .eq('product_id', product.id);
+      if (!bom?.length) throw new Error(`${product.name} não tem BOM cadastrado.`);
+
+      // Cria a ordem
+      const { data: order, error: orderErr } = await supabase
+        .from('production_orders')
+        .insert({
+          product_id: product.id, product_name: product.name,
+          quantity_ordered: qty, status: 'enviado',
+          assembler_name: args.assembler_name ? String(args.assembler_name) : null,
+          sent_at: sentAt,
+          notes: args.notes ? String(args.notes) : null,
+        })
+        .select('id').single();
+      if (orderErr) throw new Error(orderErr.message);
+      const orderId = order!.id;
+
+      // Monta overrides de itens faltantes
+      const missingMap: Record<string, { qty_sent: number; notes: string }> = {};
+      for (const m of (args.missing_items ?? []) as any[]) {
+        missingMap[m.component_name.toLowerCase()] = { qty_sent: Number(m.quantity_sent ?? 0), notes: m.notes ?? '' };
+      }
+
+      // Processa cada componente do BOM
+      const components: any[] = [];
+      for (const item of bom as any[]) {
+        const comp = item.component;
+        const qtyPerUnit = Number(item.quantity);
+        const totalNeeded = qtyPerUnit * qty;
+        const override = missingMap[comp.name.toLowerCase()];
+        const qtySent = override ? override.qty_sent : totalNeeded;
+        const itemNotes = override ? override.notes : null;
+        const qtyAtAssembler = qtySent; // começa tudo com a montadora
+
+        // Insere componente na ordem
+        await supabase.from('production_order_components').insert({
+          production_order_id: orderId,
+          component_id: comp.id,
+          component_name: comp.name,
+          component_sku: comp.sku,
+          quantity_sent: qtySent,
+          quantity_at_assembler: qtyAtAssembler,
+          notes: itemNotes,
+        });
+
+        // Desconta do estoque local e marca como em poder da montadora
+        let stockRow: any = null;
+        if (comp.id) {
+          const { data } = await supabase.from('stock_items').select('id, quantity, quantity_at_assembler').eq('component_id', comp.id).maybeSingle();
+          stockRow = data;
+        }
+        if (!stockRow && comp.sku) {
+          const { data } = await supabase.from('stock_items').select('id, quantity, quantity_at_assembler').ilike('item_code', comp.sku).maybeSingle();
+          stockRow = data;
+        }
+        if (stockRow) {
+          await supabase.from('stock_items').update({
+            quantity: Number(stockRow.quantity) - qtySent,
+            quantity_at_assembler: Number(stockRow.quantity_at_assembler) + qtyAtAssembler,
+            updated_at: new Date().toISOString(),
+          }).eq('id', stockRow.id);
+          await supabase.from('stock_movements').insert({
+            stock_item_id: stockRow.id, item_code: comp.sku ?? comp.name, item_name: comp.name,
+            quantity: -qtySent, type: 'saida', notes: `Produção #${orderId.slice(0, 8)} — ${product.name} ×${qty}`,
+          });
+        }
+        components.push({ component: comp.name, quantity_sent: qtySent, ok: !override });
+      }
+
+      return { created: true, order_id: orderId, product: product.name, quantity: qty, components_sent: components.length, components };
+    }
+
+    case 'list_production_orders': {
+      let q = supabase
+        .from('production_orders')
+        .select('id, product_name, quantity_ordered, quantity_returned, status, assembler_name, sent_at, returned_at, notes, created_at')
+        .order('created_at', { ascending: false })
+        .limit(Number(args.limit ?? 50));
+      if (args.status) q = q.eq('status', String(args.status));
+      const { data, error } = await q;
+      if (error) throw new Error(error.message);
+      return { orders: data ?? [] };
+    }
+
+    case 'get_production_order_details': {
+      let orderId = args.order_id ? String(args.order_id) : null;
+      if (!orderId && args.product_name) {
+        const { data } = await supabase
+          .from('production_orders')
+          .select('id')
+          .ilike('product_name', `%${String(args.product_name)}%`)
+          .in('status', ['enviado', 'em_montagem'])
+          .order('created_at', { ascending: false })
+          .limit(1);
+        orderId = (data as any[])?.[0]?.id ?? null;
+      }
+      if (!orderId) return { found: false, message: 'Ordem não encontrada.' };
+
+      const [orderRes, compsRes, notesRes] = await Promise.all([
+        supabase.from('production_orders').select('*').eq('id', orderId).single(),
+        supabase.from('production_order_components').select('*').eq('production_order_id', orderId),
+        supabase.from('production_order_notes').select('*').eq('production_order_id', orderId).order('created_at'),
+      ]);
+      return {
+        order: orderRes.data,
+        components: compsRes.data ?? [],
+        notes: notesRes.data ?? [],
+      };
+    }
+
+    case 'finish_production_order': {
+      let orderId = args.order_id ? String(args.order_id) : null;
+      if (!orderId && args.product_name) {
+        const { data } = await supabase
+          .from('production_orders')
+          .select('id, product_id, product_name')
+          .ilike('product_name', `%${String(args.product_name)}%`)
+          .in('status', ['enviado', 'em_montagem'])
+          .order('created_at', { ascending: false })
+          .limit(1);
+        orderId = (data as any[])?.[0]?.id ?? null;
+      }
+      if (!orderId) return { finished: false, message: 'Ordem não encontrada.' };
+
+      const qtyReturned = Number(args.quantity_returned);
+      const returnedAt = args.returned_at ? String(args.returned_at) : new Date().toISOString().slice(0, 10);
+
+      // Atualiza ordem
+      await supabase.from('production_orders').update({
+        status: 'concluido', quantity_returned: qtyReturned, returned_at: returnedAt,
+        notes: args.notes ? String(args.notes) : undefined,
+        updated_at: new Date().toISOString(),
+      }).eq('id', orderId);
+
+      // Busca componentes da ordem
+      const { data: comps } = await supabase
+        .from('production_order_components')
+        .select('*')
+        .eq('production_order_id', orderId);
+
+      // Mapa de retornos informados
+      const returnMap: Record<string, number> = {};
+      for (const r of (args.component_returns ?? []) as any[]) {
+        returnMap[r.component_name.toLowerCase()] = Number(r.quantity_returned);
+      }
+
+      // Processa cada componente
+      for (const comp of (comps ?? []) as any[]) {
+        const qtyBack = returnMap[comp.component_name.toLowerCase()] ?? 0;
+        const qtyStillAtAssembler = Math.max(0, comp.quantity_at_assembler - qtyBack);
+
+        await supabase.from('production_order_components').update({
+          quantity_returned: qtyBack,
+          quantity_at_assembler: qtyStillAtAssembler,
+        }).eq('id', comp.id);
+
+        if (qtyBack > 0) {
+          // Devolve ao nosso estoque
+          let stockRow: any = null;
+          if (comp.component_id) {
+            const { data } = await supabase.from('stock_items').select('id, quantity, quantity_at_assembler').eq('component_id', comp.component_id).maybeSingle();
+            stockRow = data;
+          }
+          if (!stockRow && comp.component_sku) {
+            const { data } = await supabase.from('stock_items').select('id, quantity, quantity_at_assembler').ilike('item_code', comp.component_sku).maybeSingle();
+            stockRow = data;
+          }
+          if (stockRow) {
+            await supabase.from('stock_items').update({
+              quantity: Number(stockRow.quantity) + qtyBack,
+              quantity_at_assembler: Math.max(0, Number(stockRow.quantity_at_assembler) - qtyBack),
+              updated_at: new Date().toISOString(),
+            }).eq('id', stockRow.id);
+            await supabase.from('stock_movements').insert({
+              stock_item_id: stockRow.id, item_code: comp.component_sku ?? comp.component_name, item_name: comp.component_name,
+              quantity: qtyBack, type: 'entrada', notes: `Retorno montagem #${orderId.slice(0, 8)}`,
+            });
+          }
+        }
+      }
+
+      // Adiciona produto montado ao estoque (como produto acabado)
+      const { data: orderRow } = await supabase.from('production_orders').select('product_name, product_id').eq('id', orderId).single();
+      if (orderRow && qtyReturned > 0) {
+        const productCode = (orderRow as any).product_name.toUpperCase().replace(/\s+/g, '_');
+        const { data: existing } = await supabase.from('stock_items').select('id, quantity').ilike('item_code', productCode).maybeSingle();
+        if (existing) {
+          await supabase.from('stock_items').update({ quantity: Number(existing.quantity) + qtyReturned, updated_at: new Date().toISOString() }).eq('id', existing.id);
+        } else {
+          await supabase.from('stock_items').insert({ item_code: productCode, item_name: (orderRow as any).product_name, quantity: qtyReturned, unit: 'un' });
+        }
+      }
+
+      if (args.notes) {
+        await supabase.from('production_order_notes').insert({ production_order_id: orderId, content: String(args.notes) });
+      }
+
+      return { finished: true, order_id: orderId, quantity_returned: qtyReturned, returned_at: returnedAt };
+    }
+
+    case 'add_production_note': {
+      let orderId = args.order_id ? String(args.order_id) : null;
+      if (!orderId && args.product_name) {
+        const { data } = await supabase.from('production_orders').select('id')
+          .ilike('product_name', `%${String(args.product_name)}%`)
+          .order('created_at', { ascending: false }).limit(1);
+        orderId = (data as any[])?.[0]?.id ?? null;
+      }
+      if (!orderId) return { added: false, message: 'Ordem não encontrada.' };
+      await supabase.from('production_order_notes').insert({
+        production_order_id: orderId,
+        content: String(args.content),
+        author: args.author ? String(args.author) : null,
+      });
+      return { added: true };
     }
 
     // ── Produção / BOM ────────────────────────────────────────────────────────
