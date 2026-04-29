@@ -27,6 +27,7 @@ interface ChatSummary {
   title: string;
   created_at: string;
   updated_at: string;
+  is_exclusive: boolean;
 }
 
 function todayIso(): string {
@@ -45,6 +46,9 @@ function shiftDay(iso: string, delta: number): string {
   d.setDate(d.getDate() + delta);
   return d.toISOString().slice(0, 10);
 }
+
+const RH_AUTHORIZED_EMAILS = ['vitor@grupoegp.com.br', 'joane@grupoegp.com.br'];
+const RH_TOOL_NAMES = new Set(['list_prestadores', 'get_prestador', 'update_prestador', 'create_prestador']);
 
 function formatDateLabel(iso: string): string {
   const today = todayIso();
@@ -72,7 +76,8 @@ function formatRelativeDate(iso: string): string {
 }
 
 export default function BuyerAgentPage() {
-  const { userLabel } = useInternalAuth();
+  const { userLabel, userEmail } = useInternalAuth();
+  const isRhUser = userEmail != null && RH_AUTHORIZED_EMAILS.includes(userEmail.toLowerCase());
   const provider = geminiProvider;
   const [providerStatus, setProviderStatus] = useState<{ ok: boolean; message?: string } | null>(null);
   const [chats, setChats] = useState<ChatSummary[]>([]);
@@ -169,13 +174,16 @@ export default function BuyerAgentPage() {
   async function loadChats(date?: string) {
     const d = date ?? selectedDate;
     const range = dateRange(d);
-    const { data, error } = await supabase
+    let q = supabase
       .from('ai_chats')
-      .select('id, title, created_at, updated_at')
+      .select('id, title, created_at, updated_at, is_exclusive')
       .gte('created_at', range.start)
       .lte('created_at', range.end)
       .order('created_at', { ascending: false })
       .limit(200);
+    // Não-autorizados nunca veem chats exclusivos
+    if (!isRhUser) q = q.eq('is_exclusive', false);
+    const { data, error } = await q;
     if (error) {
       console.error('[ai_chats] load failed:', error);
       return;
@@ -422,6 +430,10 @@ export default function BuyerAgentPage() {
           const ts = new Date().toISOString();
           const turn = { ...t, timestamp: ts };
           setHistory((prev) => [...prev, turn]);
+          // Se a ferramenta é de RH, marca o chat como exclusivo
+          if (t.toolCall && RH_TOOL_NAMES.has(t.toolCall.name) && chatId) {
+            supabase.from('ai_chats').update({ is_exclusive: true }).eq('id', chatId).then(() => {});
+          }
           const pos = nextPosition++;
           supabase
             .from('ai_messages')
@@ -556,44 +568,57 @@ export default function BuyerAgentPage() {
           </div>
         </div>
         <div className="flex-1 overflow-y-auto p-2">
-          {chats.length === 0 ? (
-            <p className="px-2 py-3 text-xs text-slate-500">Nenhuma conversa ainda.</p>
-          ) : (
-            <ul className="space-y-1">
-              {chats.map((c) => (
-                <li key={c.id} className="group relative">
-                  <button
-                    type="button"
-                    onClick={() => selectChat(c.id, c.created_at)}
-                    disabled={running}
-                    className={cn(
-                      'flex w-full flex-col rounded-md px-3 py-2 pr-8 text-left transition-colors',
-                      currentChatId === c.id
-                        ? 'bg-brand-50 text-brand-700'
-                        : 'text-slate-700 hover:bg-slate-100',
-                      running && 'cursor-not-allowed opacity-60'
-                    )}
-                  >
-                    <span className="line-clamp-1 text-sm font-medium">{c.title}</span>
-                    <span className="text-[11px] text-slate-400">
-                      {formatRelativeDate(c.updated_at)}
-                    </span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setConfirmDelete(c);
-                    }}
-                    aria-label="Excluir conversa"
-                    className="absolute right-2 top-2 rounded p-1 text-slate-400 hover:bg-white hover:text-red-600 md:hidden md:group-hover:block"
-                  >
-                    ×
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
+          {/* Chats regulares (não exclusivos) */}
+          {(() => {
+            const regular = chats.filter((c) => !c.is_exclusive);
+            const exclusive = chats.filter((c) => c.is_exclusive);
+            const renderList = (list: ChatSummary[], exclusive = false) => (
+              <ul className="space-y-1">
+                {list.map((c) => (
+                  <li key={c.id} className="group relative">
+                    <button
+                      type="button"
+                      onClick={() => selectChat(c.id, c.created_at)}
+                      disabled={running}
+                      className={cn(
+                        'flex w-full flex-col rounded-md px-3 py-2 pr-8 text-left transition-colors',
+                        currentChatId === c.id
+                          ? exclusive ? 'bg-violet-50 text-violet-700' : 'bg-brand-50 text-brand-700'
+                          : exclusive ? 'text-slate-700 hover:bg-violet-50' : 'text-slate-700 hover:bg-slate-100',
+                        running && 'cursor-not-allowed opacity-60'
+                      )}
+                    >
+                      <span className="line-clamp-1 text-sm font-medium">{c.title}</span>
+                      <span className="text-[11px] text-slate-400">{formatRelativeDate(c.updated_at)}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); setConfirmDelete(c); }}
+                      aria-label="Excluir conversa"
+                      className="absolute right-2 top-2 rounded p-1 text-slate-400 hover:bg-white hover:text-red-600 md:hidden md:group-hover:block"
+                    >×</button>
+                  </li>
+                ))}
+              </ul>
+            );
+            return (
+              <>
+                {regular.length === 0 && exclusive.length === 0 && (
+                  <p className="px-2 py-3 text-xs text-slate-500">Nenhuma conversa ainda.</p>
+                )}
+                {regular.length > 0 && renderList(regular)}
+                {isRhUser && exclusive.length > 0 && (
+                  <>
+                    <div className="mt-3 mb-1 flex items-center gap-2 px-2">
+                      <span className="text-[10px] font-semibold uppercase tracking-wider text-violet-500">Exclusivo</span>
+                      <div className="flex-1 border-t border-violet-100" />
+                    </div>
+                    {renderList(exclusive, true)}
+                  </>
+                )}
+              </>
+            );
+          })()}
         </div>
       </aside>
 

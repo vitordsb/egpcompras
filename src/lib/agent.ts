@@ -556,6 +556,29 @@ Anotações do comprador:
 - "anota que cobrei o fornecedor X sobre o item Y" → add_purchase_need_note(item_name="Y", content="Cobrado fornecedor X em [data]", author=[usuário])
 - Essas notas são a fonte de verdade para responder perguntas de status — sempre leia antes de dizer "não sei"
 
+## RH — ACESSO RESTRITO
+`;
+
+const RH_SYSTEM_SECTION = `
+
+## RH — Recursos Humanos (EXCLUSIVO)
+Esta seção é RESTRITA. Apenas os usuários **vitor@grupoegp.com.br** e **joane@grupoegp.com.br** podem acessar.
+
+Se o usuário logado NÃO for um desses dois emails, recuse QUALQUER pergunta relacionada a prestadores, pagamentos, salários, RH ou dados de colaboradores. Responda APENAS: "Esse conteúdo é restrito. Não tenho autorização para discutir esse assunto com você." — sem mais detalhes.
+
+Se o usuário for autorizado, use as tools abaixo:
+- "lista os prestadores" / "quem são os prestadores ativos?" → list_prestadores()
+- "dados do Robson" / "informações do Claudio" → get_prestador(name="...")
+- "atualiza o salário do Robson para R$2.100" → update_prestador(name="Robson", valor_prestacao=2100)
+- "cadastra novo prestador X" → create_prestador(nome="X", ...)
+- "desativa / finaliza o prestador X" → update_prestador(name="X", status="FINALIZADO")
+- Cálculos de pagamento: use os dados do get_prestador + as fórmulas:
+  - Valor/Dia = Salário ÷ dias do mês
+  - Transporte Total = Dias úteis × transporte diário do prestador
+  - Valor Trabalhado = Valor/Dia × dias trabalhados
+  - A EMITIR = Valor Trabalhado + Transporte Total + extras − descontos (exceto adiantamento)
+  - A RECEBER = A EMITIR − Adiantamento
+
 ## Tools extras de análise
 - "resumo financeiro / quanto saiu esse mês" → financial_summary
 - "histórico do cliente X" → client_history
@@ -681,6 +704,8 @@ async function loadProcedureCatalog(): Promise<{ name: string; description: stri
   return (data ?? []) as { name: string; description: string | null }[];
 }
 
+const RH_AUTHORIZED = ['vitor@grupoegp.com.br', 'joane@grupoegp.com.br'];
+
 function buildSystemInstruction(
   memories: { id: string; content: string }[],
   procedures: { name: string; description: string | null }[],
@@ -690,6 +715,9 @@ function buildSystemInstruction(
   if (currentUser) {
     out += `\n\n## Sessão atual\nUsuário logado: **${currentUser}**\nSempre que uma tool aceitar o campo "author", passe "${currentUser}". Isso registra internamente quem fez cada ação.`;
   }
+  // Injeta seção RH apenas para usuários autorizados
+  const isRhAuthorized = currentUser != null && RH_AUTHORIZED.includes(currentUser.toLowerCase());
+  out += isRhAuthorized ? RH_SYSTEM_SECTION : '\n\n## RH\nVocê NÃO tem acesso a dados de RH, prestadores ou pagamentos para este usuário. Se perguntado, responda apenas: "Esse conteúdo é restrito. Não tenho autorização para discutir esse assunto com você."';
   if (memories.length > 0) {
     out +=
       '\n\n## Coisas que você aprendeu (memórias persistentes — válidas em todas as conversas)\n' +

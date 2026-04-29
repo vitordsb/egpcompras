@@ -389,6 +389,73 @@ export const toolDeclarations = [
     },
   },
 
+  // ---------- RH — RESTRITO (vitor@grupoegp / joane@grupoegp) -----------
+  {
+    name: 'list_prestadores',
+    description: '[RH EXCLUSIVO] Lista prestadores. status="PRESTADOR" (ativos, default) ou "FINALIZADO" ou "todos".',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        status: { type: 'STRING' as Type, description: '"PRESTADOR" | "FINALIZADO" | "todos".' },
+      },
+    },
+  },
+  {
+    name: 'get_prestador',
+    description: '[RH EXCLUSIVO] Retorna dados completos de um prestador pelo nome (fuzzy).',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        name: { type: 'STRING' as Type, description: 'Nome ou parte do nome.' },
+      },
+      required: ['name'],
+    },
+  },
+  {
+    name: 'update_prestador',
+    description: '[RH EXCLUSIVO] Atualiza dados de um prestador (salário, transporte, banco, pix, status, etc.).',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        name:              { type: 'STRING' as Type, description: 'Nome (fuzzy match).' },
+        valor_prestacao:   { type: 'NUMBER' as Type },
+        conducao:          { type: 'NUMBER' as Type },
+        carro:             { type: 'NUMBER' as Type },
+        almoco_horario:    { type: 'STRING' as Type },
+        status:            { type: 'STRING' as Type, description: '"PRESTADOR" ou "FINALIZADO".' },
+        aniversario:       { type: 'STRING' as Type, description: 'YYYY-MM-DD.' },
+        cpf:               { type: 'STRING' as Type },
+        banco:             { type: 'STRING' as Type },
+        agencia:           { type: 'STRING' as Type },
+        conta:             { type: 'STRING' as Type },
+        pix:               { type: 'STRING' as Type },
+        observacoes:       { type: 'STRING' as Type },
+      },
+      required: ['name'],
+    },
+  },
+  {
+    name: 'create_prestador',
+    description: '[RH EXCLUSIVO] Cadastra um novo prestador.',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        nome:            { type: 'STRING' as Type },
+        valor_prestacao: { type: 'NUMBER' as Type },
+        conducao:        { type: 'NUMBER' as Type },
+        carro:           { type: 'NUMBER' as Type },
+        almoco_horario:  { type: 'STRING' as Type },
+        cpf:             { type: 'STRING' as Type },
+        banco:           { type: 'STRING' as Type },
+        agencia:         { type: 'STRING' as Type },
+        conta:           { type: 'STRING' as Type },
+        pix:             { type: 'STRING' as Type },
+        observacoes:     { type: 'STRING' as Type },
+      },
+      required: ['nome'],
+    },
+  },
+
   // ---------- FORNECEDORES POR COMPONENTE --------------------------------
   {
     name: 'get_component_suppliers',
@@ -3228,6 +3295,71 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
 
     // ---------- SAÍDAS / PEDIDOS ----------
     // ---------- MARCAS PRÓPRIAS ----------
+    // ---------- RH ----------
+    case 'list_prestadores': {
+      const st = String(args.status ?? 'PRESTADOR');
+      let q = supabase.from('prestadores')
+        .select('id, nome, valor_prestacao, conducao, carro, almoco_horario, status, aniversario, cpf, banco, agencia, conta, pix')
+        .order('nome');
+      if (st !== 'todos') q = q.eq('status', st);
+      const { data, error } = await q;
+      if (error) throw new Error(error.message);
+      return { prestadores: data ?? [], count: (data ?? []).length };
+    }
+
+    case 'get_prestador': {
+      const name = String(args.name ?? '').trim();
+      const { data, error } = await supabase.from('prestadores')
+        .select('*').ilike('nome', `%${name}%`).limit(1);
+      if (error) throw new Error(error.message);
+      const p = (data ?? [])[0];
+      if (!p) return { found: false, message: `Prestador "${name}" não encontrado.` };
+      return { found: true, prestador: p };
+    }
+
+    case 'update_prestador': {
+      const name = String(args.name ?? '').trim();
+      const { data: found } = await supabase.from('prestadores')
+        .select('id, nome').ilike('nome', `%${name}%`).limit(1);
+      const p = (found as any[])?.[0];
+      if (!p) throw new Error(`Prestador "${name}" não encontrado.`);
+      const fields: Record<string, unknown> = { updated_at: new Date().toISOString() };
+      if (args.valor_prestacao != null) fields.valor_prestacao  = Number(args.valor_prestacao);
+      if (args.conducao        != null) fields.conducao         = Number(args.conducao);
+      if (args.carro           != null) fields.carro            = Number(args.carro);
+      if (args.almoco_horario)          fields.almoco_horario   = String(args.almoco_horario).trim();
+      if (args.status)                  fields.status           = String(args.status).trim();
+      if (args.aniversario)             fields.aniversario      = String(args.aniversario).trim();
+      if (args.cpf)                     fields.cpf              = String(args.cpf).trim();
+      if (args.banco)                   fields.banco            = String(args.banco).trim();
+      if (args.agencia)                 fields.agencia          = String(args.agencia).trim();
+      if (args.conta)                   fields.conta            = String(args.conta).trim();
+      if (args.pix)                     fields.pix              = String(args.pix).trim();
+      if (args.observacoes)             fields.observacoes      = String(args.observacoes).trim();
+      const { error } = await supabase.from('prestadores').update(fields).eq('id', p.id);
+      if (error) throw new Error(error.message);
+      return { updated: true, nome: p.nome, changes: fields };
+    }
+
+    case 'create_prestador': {
+      const nome = String(args.nome ?? '').trim();
+      if (!nome) throw new Error('nome é obrigatório');
+      const payload: Record<string, unknown> = { nome, status: 'PRESTADOR' };
+      if (args.valor_prestacao != null) payload.valor_prestacao = Number(args.valor_prestacao);
+      if (args.conducao        != null) payload.conducao        = Number(args.conducao);
+      if (args.carro           != null) payload.carro           = Number(args.carro);
+      if (args.almoco_horario)          payload.almoco_horario  = String(args.almoco_horario).trim();
+      if (args.cpf)                     payload.cpf             = String(args.cpf).trim();
+      if (args.banco)                   payload.banco           = String(args.banco).trim();
+      if (args.agencia)                 payload.agencia         = String(args.agencia).trim();
+      if (args.conta)                   payload.conta           = String(args.conta).trim();
+      if (args.pix)                     payload.pix             = String(args.pix).trim();
+      if (args.observacoes)             payload.observacoes     = String(args.observacoes).trim();
+      const { data, error } = await supabase.from('prestadores').insert(payload).select('id, nome').single();
+      if (error) throw new Error(error.message);
+      return { created: data };
+    }
+
     case 'list_client_brands': {
       const activeOnly = args.active_only !== false;
       let q = supabase.from('client_brands')
