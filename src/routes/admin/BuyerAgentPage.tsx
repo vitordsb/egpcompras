@@ -25,7 +25,32 @@ const QUICK_SUGGESTIONS = [
 interface ChatSummary {
   id: string;
   title: string;
+  created_at: string;
   updated_at: string;
+}
+
+function todayIso(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function dateRange(iso: string): { start: string; end: string } {
+  return {
+    start: new Date(iso + 'T00:00:00').toISOString(),
+    end:   new Date(iso + 'T23:59:59.999').toISOString(),
+  };
+}
+
+function shiftDay(iso: string, delta: number): string {
+  const d = new Date(iso + 'T12:00:00');
+  d.setDate(d.getDate() + delta);
+  return d.toISOString().slice(0, 10);
+}
+
+function formatDateLabel(iso: string): string {
+  const today = todayIso();
+  if (iso === today) return 'Hoje';
+  if (iso === shiftDay(today, -1)) return 'Ontem';
+  return new Date(iso + 'T12:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' });
 }
 
 function formatMsgTime(iso: string): string {
@@ -61,6 +86,7 @@ export default function BuyerAgentPage() {
   const [error, setError] = useState<FriendlyError | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<ChatSummary | null>(null);
   const [chatsDrawerOpen, setChatsDrawerOpen] = useState(false);
+  const [selectedDate, setSelectedDate] = useState<string>(todayIso);
   const [runStartedAt, setRunStartedAt] = useState<number | null>(null);
   const [elapsedSec, setElapsedSec] = useState(0);
   const [retryStatus, setRetryStatus] = useState<RetryStatus | null>(null);
@@ -137,14 +163,18 @@ export default function BuyerAgentPage() {
     };
   }, [provider]);
 
-  // ---- Load lista de chats ---------------------------------------------
+  // ---- Load lista de chats (filtrada por dia) ---------------------------
 
-  async function loadChats() {
+  async function loadChats(date?: string) {
+    const d = date ?? selectedDate;
+    const range = dateRange(d);
     const { data, error } = await supabase
       .from('ai_chats')
-      .select('id, title, updated_at')
-      .order('updated_at', { ascending: false })
-      .limit(100);
+      .select('id, title, created_at, updated_at')
+      .gte('created_at', range.start)
+      .lte('created_at', range.end)
+      .order('created_at', { ascending: false })
+      .limit(200);
     if (error) {
       console.error('[ai_chats] load failed:', error);
       return;
@@ -153,7 +183,12 @@ export default function BuyerAgentPage() {
   }
 
   useEffect(() => {
-    loadChats();
+    loadChats(selectedDate);
+    inputRef.current?.focus();
+  }, [selectedDate]);
+
+  // Foco inicial
+  useEffect(() => {
     inputRef.current?.focus();
   }, []);
 
@@ -326,6 +361,8 @@ export default function BuyerAgentPage() {
     try {
       let chatId = currentChatId;
       if (!chatId) {
+        // Novo chat → garante que a sidebar mostra o dia de hoje
+        setSelectedDate(todayIso());
         const titleText = parsedsToSend.length > 0
           ? (message || parsedsToSend.map((p) => p.label).join(', '))
           : finalMessage;
@@ -432,25 +469,60 @@ export default function BuyerAgentPage() {
           chatsDrawerOpen ? 'translate-x-0 shadow-xl' : '-translate-x-full md:shadow-none'
         )}
       >
-        <div className="flex items-center justify-between gap-2 border-b border-slate-200 p-3">
-          <Button
-            type="button"
-            onClick={newChat}
-            disabled={running}
-            className="flex-1 justify-center"
-          >
-            + Nova conversa
-          </Button>
-          <button
-            type="button"
-            onClick={() => setChatsDrawerOpen(false)}
-            aria-label="Fechar lista de conversas"
-            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-slate-400 hover:bg-slate-100 hover:text-slate-700 md:hidden"
-          >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
-            </svg>
-          </button>
+        <div className="flex flex-col border-b border-slate-200">
+          <div className="flex items-center justify-between gap-2 p-3 pb-2">
+            <Button
+              type="button"
+              onClick={newChat}
+              disabled={running}
+              className="flex-1 justify-center"
+            >
+              + Nova conversa
+            </Button>
+            <button
+              type="button"
+              onClick={() => setChatsDrawerOpen(false)}
+              aria-label="Fechar lista de conversas"
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-slate-400 hover:bg-slate-100 hover:text-slate-700 md:hidden"
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+          {/* Navegador de data */}
+          <div className="flex items-center justify-between gap-1 px-3 pb-3">
+            <button
+              type="button"
+              onClick={() => setSelectedDate((d) => shiftDay(d, -1))}
+              className="flex h-7 w-7 items-center justify-center rounded text-slate-500 hover:bg-slate-100"
+              title="Dia anterior"
+            >
+              ‹
+            </button>
+            <button
+              type="button"
+              onClick={() => setSelectedDate(todayIso())}
+              className={cn(
+                'flex-1 rounded px-2 py-1 text-center text-xs font-medium transition-colors',
+                selectedDate === todayIso()
+                  ? 'text-brand-700 bg-brand-50'
+                  : 'text-slate-600 hover:bg-slate-100'
+              )}
+              title={selectedDate === todayIso() ? 'Hoje' : 'Clique para voltar a hoje'}
+            >
+              {formatDateLabel(selectedDate)}
+            </button>
+            <button
+              type="button"
+              onClick={() => setSelectedDate((d) => shiftDay(d, 1))}
+              disabled={selectedDate >= todayIso()}
+              className="flex h-7 w-7 items-center justify-center rounded text-slate-500 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-30"
+              title="Próximo dia"
+            >
+              ›
+            </button>
+          </div>
         </div>
         <div className="flex-1 overflow-y-auto p-2">
           {chats.length === 0 ? (
