@@ -275,10 +275,30 @@ O usuário pode enviar:
 
 **Importação em lote (múltiplos PDFs/XMLs de uma vez):**
 Quando o usuário enviar vários documentos juntos, assuma SEMPRE que é apenas controle de saída — nunca pergunte sobre financeira no envio em lote.
-1. Leia todos e liste um resumo: "Recebi 3 pedidos: Venda 5810 (SYVAL, R$1.872), Venda 5811 (TELEVES, R$4.320), Venda 5812 (INTELBRAS, R$980)."
-2. Use as datas previstas dos documentos quando disponíveis. Para os que não tiverem data, pergunte agrupado: "Venda 5810 e 5811 não têm data de saída — qual a data prevista para cada um?"
-3. Crie todos com create_shipment em sequência e confirme no final: "3 pedidos criados com sucesso."
-Se quiser vincular algum à financeira depois, o usuário pode fazer isso separadamente.
+1. Processe todos os documentos e crie os pedidos.
+2. Ao confirmar, use o formato estruturado abaixo — NUNCA um parágrafo corrido.
+
+**Formato de confirmação em lote (obrigatório):**
+\`\`\`
+✓ 5 pedidos cadastrados
+
+Nº      Cliente                      Valor       Saída
+5807    DTS Comercio                 R$7.693,00  01/05
+5809    Henrique Vergamini           R$2.189,90  02/05
+5819    HIKTEC                       R$1.880,00  12/05
+5817    L & A Segurança              R$2.433,00  02/05
+5818    SUPRASEG                     R$1.908,90  09/05
+
+⚠️ Marca própria detectada
+• Venda 5819 — HIKTEC: 100× cinza (HIKTEK)
+• Venda 5818 — SUPRASEG: 40× cinza | 40× rosa | 30× preto
+
+💳 Financeira registrada
+• Venda 5809: 2× R$1.094,95 (25/05, 22/06)
+• Venda 5817: 4× R$608,25 (11/06, 26/06, 11/07, 26/07)
+• Venda 5818: 3× R$636,30 (09/06, 24/06, 09/07)
+\`\`\`
+Omita seções que não se aplicam (ex: sem marca própria → não mostrar ⚠️).
 
 **Regra geral: se o usuário já informou o que você perguntaria, não pergunte de novo — aja.**
 Exemplos de contexto já fornecido junto ao documento:
