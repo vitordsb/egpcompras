@@ -86,6 +86,7 @@ export default function BuyerAgentPage() {
   const [error, setError] = useState<FriendlyError | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<ChatSummary | null>(null);
   const [chatsDrawerOpen, setChatsDrawerOpen] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [selectedDate, setSelectedDate] = useState<string>(todayIso);
   const [runStartedAt, setRunStartedAt] = useState<number | null>(null);
   const [elapsedSec, setElapsedSec] = useState(0);
@@ -202,10 +203,18 @@ export default function BuyerAgentPage() {
 
   // ---- Selecionar / criar / excluir chat -------------------------------
 
-  async function selectChat(id: string) {
+  const lastChatKey = `egp-last-chat-${userLabel}`;
+
+  async function selectChat(id: string, chatDate?: string) {
     if (running) return;
     setError(null);
     setCurrentChatId(id);
+    localStorage.setItem(lastChatKey, id);
+    // Se o chat é de outro dia, sincroniza a sidebar para esse dia
+    if (chatDate) {
+      const d = chatDate.slice(0, 10);
+      setSelectedDate(d);
+    }
     const { data, error } = await supabase
       .from('ai_messages')
       .select('payload')
@@ -222,8 +231,25 @@ export default function BuyerAgentPage() {
     inputRef.current?.focus();
   }
 
+  // Restaura o último chat aberto ao montar a página
+  useEffect(() => {
+    const saved = localStorage.getItem(lastChatKey);
+    if (!saved) return;
+    // Verifica se o chat ainda existe antes de restaurar
+    supabase
+      .from('ai_chats')
+      .select('id, created_at')
+      .eq('id', saved)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (data) selectChat(saved, (data as any).created_at);
+      });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lastChatKey]);
+
   function newChat() {
     if (running) return;
+    localStorage.removeItem(lastChatKey);
     setCurrentChatId(null);
     setHistory([]);
     setError(null);
@@ -461,12 +487,17 @@ export default function BuyerAgentPage() {
         />
       )}
 
-      {/* Sidebar de chats — drawer no mobile, fixa no desktop */}
+      {/* Sidebar de chats — drawer no mobile, colapsável no desktop */}
       <aside
         className={cn(
-          'fixed inset-y-0 left-0 z-40 flex w-72 flex-col border-r border-slate-200 bg-white transition-transform duration-200',
-          'md:relative md:inset-auto md:w-64 md:translate-x-0',
-          chatsDrawerOpen ? 'translate-x-0 shadow-xl' : '-translate-x-full md:shadow-none'
+          // Mobile: drawer sobre a tela
+          'fixed inset-y-0 left-0 z-40 flex w-72 flex-col border-r border-slate-200 bg-white transition-all duration-200',
+          // Desktop: inline, colapsa via largura 0
+          'md:relative md:inset-auto md:z-auto',
+          // Mobile open/close via transform
+          chatsDrawerOpen ? 'translate-x-0 shadow-xl' : '-translate-x-full md:translate-x-0',
+          // Desktop open/close via width
+          sidebarOpen ? 'md:w-64' : 'md:w-0 md:overflow-hidden md:border-r-0'
         )}
       >
         <div className="flex flex-col border-b border-slate-200">
@@ -533,7 +564,7 @@ export default function BuyerAgentPage() {
                 <li key={c.id} className="group relative">
                   <button
                     type="button"
-                    onClick={() => selectChat(c.id)}
+                    onClick={() => selectChat(c.id, c.created_at)}
                     disabled={running}
                     className={cn(
                       'flex w-full flex-col rounded-md px-3 py-2 pr-8 text-left transition-colors',
@@ -571,6 +602,7 @@ export default function BuyerAgentPage() {
         <header className="border-b border-slate-200 bg-white px-4 py-3 md:px-8 md:py-4">
           <div className="mx-auto flex max-w-3xl items-center justify-between gap-2 md:gap-3">
             <div className="flex min-w-0 items-center gap-2 md:gap-3">
+              {/* Mobile: abre drawer */}
               <button
                 type="button"
                 onClick={() => setChatsDrawerOpen(true)}
@@ -579,6 +611,18 @@ export default function BuyerAgentPage() {
               >
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-5 w-5">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 6.75h12M8.25 12h12m-12 5.25h12M3.75 6.75h.007v.008H3.75V6.75Zm.375 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0ZM3.75 12h.007v.008H3.75V12Zm.375 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm-.375 5.25h.007v.008H3.75v-.008Zm.375 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Z" />
+                </svg>
+              </button>
+              {/* Desktop: toggle sidebar */}
+              <button
+                type="button"
+                onClick={() => setSidebarOpen((v) => !v)}
+                aria-label={sidebarOpen ? 'Fechar histórico' : 'Abrir histórico'}
+                className="hidden md:flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-slate-600 hover:bg-slate-100"
+                title={sidebarOpen ? 'Fechar histórico' : 'Abrir histórico'}
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-5 w-5">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5M3.75 17.25h16.5" />
                 </svg>
               </button>
               <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-brand-600 text-white">
