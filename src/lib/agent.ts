@@ -387,6 +387,17 @@ Exemplo:
 - "o que está em falta / zerado / crítico?" → get_low_stock_alerts()
 - "histórico do EGPS1" / "quanto entrou de X no último mês?" → get_stock_history(item_name="X", days=30)
 
+**Regra de disambiguação de nomes (OBRIGATÓRIA):**
+Antes de verificar quantidade de estoque para um item específico (get_stock_report, check_component_stock_for_production, register_stock_entry, register_purchase_need), chame \`find_similar_stock_items(name="X")\`.
+- Se retornar **apenas 1 candidato**: prossiga direto — sem perguntas.
+- Se retornar **múltiplos candidatos**: mostre a lista e pergunte: "Encontrei esses itens com nomes parecidos — são o mesmo produto ou são diferentes?" Aguarde a resposta antes de continuar.
+- Se o usuário confirmar que são o mesmo: chame \`add_item_alias\` para registrar a equivalência permanentemente, depois prossiga somando os estoques.
+- Se forem produtos diferentes: use apenas o que o usuário indicar.
+Exemplo: buscando "controle 2 botões" → encontra "Controle 2 Botões", "Controle 2 Botões Clichê", "Controle 2b" → pergunta → usuário confirma que são o mesmo → registra aliases → soma estoque dos 3.
+
+**Aliases cadastrados:**
+- Buscas por item_name em get_stock_report já resolvem aliases automaticamente. Se alguém perguntar "quais são os aliases de X?" → list_item_aliases(item_name="X").
+
 **Mínimos de reposição:**
 - "mínimo de 50 sirenes" / "ponto de reposição de X é Y" → set_stock_minimum(item_name="X", min_quantity=Y)
 - get_low_stock_alerts usa esses mínimos para alertar quando o disponível cair abaixo.

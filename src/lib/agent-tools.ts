@@ -728,6 +728,42 @@ export const toolDeclarations = [
       required: ['component_name', 'finished_product_name'],
     },
   },
+  // ---------- ALIASES DE NOMES ----------------------------------------
+  {
+    name: 'find_similar_stock_items',
+    description:
+      'Busca itens no estoque com nomes parecidos ao termo informado. Use SEMPRE antes de verificar quantidade de estoque para um item específico — se retornar múltiplos candidatos, pergunte ao usuário quais são o mesmo produto antes de prosseguir.',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        name: { type: 'STRING' as Type, description: 'Nome ou parte do nome do item. Ex: "controle 2 botões".' },
+      },
+      required: ['name'],
+    },
+  },
+  {
+    name: 'add_item_alias',
+    description:
+      'Registra um nome alternativo (alias) para um item de estoque. Use quando o usuário confirmar que dois nomes se referem ao mesmo produto. Após registrar, buscas pelo alias vão encontrar o item canônico automaticamente.',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        canonical_item_name: { type: 'STRING' as Type, description: 'Nome canônico do item no estoque (como está cadastrado).' },
+        alias:               { type: 'STRING' as Type, description: 'Nome alternativo a registrar. Ex: "Controle 2 Botões Clichê".' },
+      },
+      required: ['canonical_item_name', 'alias'],
+    },
+  },
+  {
+    name: 'list_item_aliases',
+    description: 'Lista todos os aliases cadastrados. Útil para gerenciar ou verificar equivalências de nomes.',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        item_name: { type: 'STRING' as Type, description: 'Filtrar por nome do item canônico (opcional).' },
+      },
+    },
+  },
   {
     name: 'list_purchase_needs',
     description:
@@ -3116,7 +3152,22 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
         .select('id, item_code, item_name, quantity, unit, min_quantity')
         .order('item_name');
       if (args.item_code) q = q.ilike('item_code', `%${String(args.item_code)}%`);
-      if (args.item_name) q = q.ilike('item_name', `%${String(args.item_name)}%`);
+      if (args.item_name) {
+        const nameFilter = String(args.item_name);
+        // Busca direta por nome
+        q = q.ilike('item_name', `%${nameFilter}%`);
+        // Também resolve via aliases: se houver alias com esse nome, inclui o item canônico
+        const { data: aliasRows } = await supabase.from('item_aliases')
+          .select('stock_item_id').ilike('alias', `%${nameFilter}%`);
+        const aliasIds = ((aliasRows ?? []) as any[]).map((r) => r.stock_item_id as string);
+        if (aliasIds.length > 0) {
+          // Re-executa query com OR por ids canônicos
+          q = supabase.from('stock_items')
+            .select('id, item_code, item_name, quantity, unit, min_quantity')
+            .or(`item_name.ilike.%${nameFilter}%,id.in.(${aliasIds.join(',')})`)
+            .order('item_name');
+        }
+      }
       const { data: stock, error } = await q;
       if (error) throw new Error(error.message);
 
@@ -4006,6 +4057,86 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
       if (!item) throw new Error('Item não encontrado no estoque. Registre uma entrada primeiro.');
       await supabase.from('stock_items').update({ min_quantity: minQty, updated_at: new Date().toISOString() }).eq('id', item.id);
       return { updated: true, item_name: item.item_name, min_quantity: minQty };
+    }
+
+    // ---------- ALIASES DE NOMES ----------
+    case 'find_similar_stock_items': {
+      const name = String(args.name ?? '').trim();
+      if (!name) throw new Error('name é obrigatório');
+
+      // Palavras significativas (>= 3 chars, sem stopwords PT)
+      const stopwords = new Set(['de', 'da', 'do', 'das', 'dos', 'para', 'com', 'em', 'por', 'que', 'uma', 'uns', 'umas']);
+      const words = name.toLowerCase().split(/\s+/).filter((w) => w.length >= 3 && !stopwords.has(w));
+
+      if (!words.length) {
+        // Busca literal se não sobrou palavra significativa
+        const { data } = await supabase.from('stock_items')
+          .select('id, item_code, item_name, quantity, unit, min_quantity')
+          .ilike('item_name', `%${name}%`).limit(20);
+        return { query: name, candidates: data ?? [], count: (data ?? []).length };
+      }
+
+      // OR por cada palavra significativa
+      const orFilter = words.map((w) => `item_name.ilike.%${w}%`).join(',');
+      const { data, error } = await supabase.from('stock_items')
+        .select('id, item_code, item_name, quantity, unit, min_quantity')
+        .or(orFilter)
+        .order('item_name')
+        .limit(20);
+      if (error) throw new Error(error.message);
+
+      // Pontua por quantas palavras do termo coincidem no nome
+      const scored = ((data ?? []) as any[])
+        .map((item) => {
+          const lower = item.item_name.toLowerCase();
+          const matches = words.filter((w) => lower.includes(w)).length;
+          return { ...item, word_matches: matches };
+        })
+        .sort((a, b) => b.word_matches - a.word_matches);
+
+      return {
+        query: name,
+        candidates: scored,
+        count: scored.length,
+        has_multiple: scored.length > 1,
+      };
+    }
+
+    case 'add_item_alias': {
+      const canonicalName = String(args.canonical_item_name ?? '').trim();
+      const alias        = String(args.alias ?? '').trim();
+      if (!canonicalName || !alias) throw new Error('canonical_item_name e alias são obrigatórios');
+
+      // Localiza o item canônico
+      const { data: items } = await supabase.from('stock_items')
+        .select('id, item_name')
+        .ilike('item_name', `%${canonicalName}%`)
+        .limit(1);
+      const item = (items as any[])?.[0];
+      if (!item) throw new Error(`Item "${canonicalName}" não encontrado no estoque.`);
+
+      const { error } = await supabase.from('item_aliases')
+        .insert({ stock_item_id: item.id, alias });
+      // 23505 = unique_violation (alias já existe — ok, não é erro)
+      if (error && error.code !== '23505') throw new Error(error.message);
+
+      return { linked: alias, to: item.item_name, stock_item_id: item.id, already_existed: error?.code === '23505' };
+    }
+
+    case 'list_item_aliases': {
+      let q = supabase.from('item_aliases')
+        .select('id, alias, created_at, stock_item:stock_items(id, item_name)')
+        .order('created_at', { ascending: false });
+      if (args.item_name) {
+        // Filtra pelo nome canônico via subquery simulada: busca item primeiro
+        const { data: items } = await supabase.from('stock_items')
+          .select('id').ilike('item_name', `%${String(args.item_name)}%`).limit(1);
+        const itemId = (items as any[])?.[0]?.id;
+        if (itemId) q = q.eq('stock_item_id', itemId);
+      }
+      const { data, error } = await q.limit(200);
+      if (error) throw new Error(error.message);
+      return { aliases: data ?? [], count: (data ?? []).length };
     }
 
     case 'get_low_stock_alerts': {
