@@ -1522,27 +1522,39 @@ async function resolveShipmentId(
 > {
   if (args.shipment_id) return String(args.shipment_id);
 
+  if (!args.numero_nfe && !args.numero_venda && !args.client_name) {
+    throw new Error('Forneça shipment_id OU numero_nfe OU numero_venda OU client_name');
+  }
+
   let query = supabase
     .from('shipments')
     .select('id, client_name, numero_nfe, numero_venda, status')
     .order('created_at', { ascending: false })
     .limit(20);
-  if (args.numero_nfe) query = query.ilike('numero_nfe', `%${String(args.numero_nfe)}%`);
-  if (args.numero_venda) query = query.ilike('numero_venda', `%${String(args.numero_venda)}%`);
-  if (args.client_name) query = query.ilike('client_name', `%${String(args.client_name)}%`);
-  if (!args.numero_nfe && !args.numero_venda && !args.client_name) {
-    throw new Error('Forneça shipment_id OU numero_nfe OU numero_venda OU client_name');
+
+  // Quando um número é fornecido, busca nos DOIS campos (numero_nfe e numero_venda) com OR.
+  // Isso resolve o caso onde o usuário diz "pedido 5526" mas o número está só em numero_nfe.
+  const nfeVal  = args.numero_nfe    ? String(args.numero_nfe).trim()    : null;
+  const vendaVal = args.numero_venda ? String(args.numero_venda).trim()  : null;
+  const numVal  = nfeVal ?? vendaVal; // valor numérico que temos
+
+  if (numVal && !args.client_name) {
+    // Busca em ambos os campos simultaneamente
+    query = query.or(`numero_nfe.ilike.%${numVal}%,numero_venda.ilike.%${numVal}%`);
+  } else {
+    if (nfeVal)  query = query.ilike('numero_nfe',   `%${nfeVal}%`);
+    if (vendaVal && !nfeVal) query = query.ilike('numero_venda', `%${vendaVal}%`);
+    if (args.client_name) query = query.ilike('client_name', `%${String(args.client_name)}%`);
   }
+
   const { data, error } = await query;
   if (error) throw new Error(error.message);
   const matches = (data ?? []) as any[];
   if (matches.length === 0) {
     throw new Error(
-      `Nenhum pedido encontrado com${args.numero_nfe ? ` NFe "${args.numero_nfe}"` : ''}${
-        args.numero_venda ? ` venda "${args.numero_venda}"` : ''
-      }${
-        args.client_name ? ` cliente "${args.client_name}"` : ''
-      }.`
+      `Nenhum pedido encontrado com${nfeVal ? ` número "${nfeVal}"` : ''}${
+        vendaVal && !nfeVal ? ` venda "${vendaVal}"` : ''
+      }${args.client_name ? ` cliente "${args.client_name}"` : ''}.`
     );
   }
   if (matches.length === 1) return matches[0].id as string;
