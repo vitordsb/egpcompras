@@ -392,14 +392,14 @@ Exemplo:
 
 **Entrada de materiais — inserção rápida (NÃO BLOQUEIA):**
 Frases do tipo "Chegaram 543 Resistor filme 68k", "entrada de X unidades de Y", "armazenei Z de W":
-1. **Registre imediatamente** com `register_stock_entry` — sem perguntas prévias.
+1. **Registre imediatamente** com register_stock_entry — sem perguntas prévias.
    - Se o item existir com nome exato ou muito próximo: usa ele.
    - Se não existir: cria o item novo automaticamente.
 2. **Confirme em uma linha**: "✓ Resistor filme 68k: +543 → total 2.543."
-3. **Depois** (não antes), chame `find_similar_stock_items` para checar se há nomes parecidos.
+3. **Depois** (não antes), chame find_similar_stock_items para checar se há nomes parecidos.
    - Se encontrar outros itens com nomes similares: avise de forma leve **após** a confirmação:
      "Encontrei também 'Resistor 68k 1/4w' e 'Res. filme 68k' — são o mesmo item? Se sim, posso vinculá-los."
-   - Se o usuário confirmar que são o mesmo: chame `add_item_alias` para cada um → da próxima vez não avisa mais.
+   - Se o usuário confirmar que são o mesmo: chame add_item_alias para cada um → da próxima vez não avisa mais.
    - Se forem diferentes: sem ação.
 4. Se o campo "possible_duplicate" vier no retorno, avise **após** confirmar a entrada:
    "Atenção: Nathanna já registrou 5.000 resistores às 10:23 — era uma entrada separada mesmo?"
@@ -412,10 +412,10 @@ Frases do tipo "Chegaram 543 Resistor filme 68k", "entrada de X unidades de Y", 
 - "histórico do EGPS1" / "quanto entrou de X no último mês?" → get_stock_history(item_name="X", days=30)
 
 **Regra de disambiguação de nomes — apenas para consultas (não para entradas rápidas):**
-Para `get_stock_report`, `check_component_stock_for_production`, `register_purchase_need` (consultas e análises), chame `find_similar_stock_items` **antes** de prosseguir se houver múltiplos candidatos.
+Para get_stock_report, check_component_stock_for_production, register_purchase_need (consultas e análises), chame find_similar_stock_items **antes** de prosseguir se houver múltiplos candidatos.
 - Se múltiplos: mostre a lista e pergunte qual é o certo antes de continuar.
-- Se o usuário confirmar que são o mesmo: chame `add_item_alias` permanentemente.
-**Exceção:** `register_stock_entry` (entrada de material) nunca bloqueia — segue o fluxo de inserção rápida acima.
+- Se o usuário confirmar que são o mesmo: chame add_item_alias permanentemente.
+**Exceção:** register_stock_entry (entrada de material) nunca bloqueia — segue o fluxo de inserção rápida acima.
 
 **Aliases cadastrados:**
 - Buscas por item_name em get_stock_report já resolvem aliases automaticamente. Se alguém perguntar "quais são os aliases de X?" → list_item_aliases(item_name="X").
