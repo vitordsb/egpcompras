@@ -462,6 +462,8 @@ Ao criar ordem → componentes saem do nosso estoque e vão para quantity_at_ass
 Ao concluir → produto montado entra no estoque; sobras que voltam voltam para quantity.
 
 **Produção / BOM:**
+- "quais componentes temos em estoque da 12v?" / "lista os componentes com estoque do produto X" / "situação do estoque da BOM do X" → get_bom_stock_status(product_name="X")
+  Retorna BOM completa + estoque de todos os componentes em UMA chamada. NUNCA use get_stock_report em loop para isso.
 - "consigo produzir 50 eletrificadores 12v?" / "tem componentes para 30 unidades?" → check_production_feasibility(product_name="12v", quantity=50)
   Cruza BOM × estoque e mostra cada componente: quantidade necessária, disponível, faltante.
 - "quantos 12v consigo produzir agora?" → get_max_producible(product_name="12v")

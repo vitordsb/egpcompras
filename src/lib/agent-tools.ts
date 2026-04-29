@@ -1084,6 +1084,18 @@ export const toolDeclarations = [
   },
   // ── Produção / BOM ───────────────────────────────────────────────────────────
   {
+    name: 'get_bom_stock_status',
+    description:
+      'Retorna a BOM completa de um produto com o estoque atual de cada componente — em UMA única chamada eficiente. Use SEMPRE que o usuário perguntar "quais componentes temos em estoque para o produto X", "lista os componentes da 12v com estoque", "situação do estoque da BOM do produto Y". NÃO use get_stock_report em loop para isso.',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        product_name: { type: 'STRING' as Type, description: 'Nome ou parte do nome do produto (fuzzy).' },
+      },
+      required: ['product_name'],
+    },
+  },
+  {
     name: 'check_production_feasibility',
     description:
       'Verifica se há componentes em estoque suficientes para produzir X unidades de um produto. Cruza BOM × estoque e mostra o que falta. Use: "consigo produzir 50 eletrificadores 12v?", "tem componentes para o pedido de 30 unidades?".',
@@ -3972,6 +3984,57 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
     }
 
     // ── Produção / BOM ────────────────────────────────────────────────────────
+    case 'get_bom_stock_status': {
+      const productName = String(args.product_name ?? '').trim();
+      const product = await findProductByName(productName);
+      if (!product) return { error: `Produto "${productName}" não encontrado.` };
+
+      const { bom } = await getProductWithBom(product.id);
+      if (!bom.length) return { product: product.name, bom: [], message: 'Produto não tem BOM cadastrada.' };
+
+      const componentIds = bom.map((b) => b.component_id).filter(Boolean) as string[];
+
+      // Uma única query para todos os itens de estoque dos componentes da BOM
+      const { data: stockRows } = await supabase
+        .from('stock_items')
+        .select('component_id, item_name, quantity, reserved_quantity, unit, min_quantity')
+        .in('component_id', componentIds);
+
+      const stockByCompId: Record<string, any> = {};
+      for (const s of (stockRows ?? []) as any[]) {
+        if (s.component_id) stockByCompId[s.component_id] = s;
+      }
+
+      const result = bom.map((b) => {
+        const s = stockByCompId[b.component_id ?? ''];
+        const qty       = s ? Number(s.quantity) : 0;
+        const reserved  = s ? Number(s.reserved_quantity ?? 0) : 0;
+        const available = qty - reserved;
+        return {
+          component:        b.component_name,
+          qty_per_unit:     b.quantity,
+          stock:            qty,
+          reserved:         reserved,
+          available:        available,
+          unit:             s?.unit ?? null,
+          min_quantity:     s?.min_quantity ?? null,
+          below_minimum:    s?.min_quantity != null && available < Number(s.min_quantity),
+          has_stock:        qty > 0,
+        };
+      });
+
+      const withStock    = result.filter((r) => r.has_stock).length;
+      const withoutStock = result.filter((r) => !r.has_stock).length;
+
+      return {
+        product:        product.name,
+        total_components: result.length,
+        with_stock:     withStock,
+        without_stock:  withoutStock,
+        components:     result,
+      };
+    }
+
     case 'check_production_feasibility':
     case 'get_max_producible': {
       const productName = String(args.product_name ?? '').trim();
