@@ -87,11 +87,15 @@ function getMasterEmail() {
   return login.includes('@') ? login.trim().toLowerCase() : `${login.trim().toLowerCase()}@grupoegp.local`;
 }
 
+const HARDCODED_ADMIN_EMAILS = ['vitor@grupoegp.com.br', 'joane@grupoegp.com.br'];
+
 function isAccessAdminUser(user) {
   const email = user?.email?.toLowerCase();
   return Boolean(
     email &&
-      (email === getMasterEmail() || user?.app_metadata?.access_admin === true)
+      (email === getMasterEmail() ||
+       HARDCODED_ADMIN_EMAILS.includes(email) ||
+       user?.app_metadata?.access_admin === true)
   );
 }
 
