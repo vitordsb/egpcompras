@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { supabase } from '@/lib/supabase';
 import { cn } from '@/lib/utils';
 
@@ -53,6 +53,8 @@ export default function WhatsAppPage() {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingMsgs, setLoadingMsgs] = useState(false);
@@ -103,6 +105,16 @@ export default function WhatsAppPage() {
   }
 
   useEffect(() => { loadSessions(); }, []);
+
+  // Auto-scroll para a última mensagem quando lista mudar
+  useEffect(() => {
+    if (messages.length === 0) return;
+    const container = messagesContainerRef.current;
+    if (container) {
+      // Sem animação ao carregar conversa, smooth ao receber nova
+      container.scrollTop = container.scrollHeight;
+    }
+  }, [messages]);
 
   useEffect(() => {
     if (!selected) return;
@@ -197,7 +209,10 @@ export default function WhatsAppPage() {
           <div className="flex flex-1 overflow-hidden">
 
             {/* Mensagens */}
-            <div className="flex flex-1 flex-col overflow-y-auto px-4 py-4 gap-2">
+            <div
+              ref={messagesContainerRef}
+              className="flex flex-1 flex-col overflow-y-auto px-4 py-4 gap-2"
+            >
               {loadingMsgs ? (
                 <p className="text-center text-sm text-slate-400">Carregando…</p>
               ) : messages.length === 0 ? (
@@ -219,6 +234,7 @@ export default function WhatsAppPage() {
                   </div>
                 ))
               )}
+              <div ref={messagesEndRef} />
             </div>
 
             {/* Painel de pedidos */}
