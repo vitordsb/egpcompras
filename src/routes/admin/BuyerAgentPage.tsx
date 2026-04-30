@@ -415,6 +415,10 @@ export default function BuyerAgentPage() {
 
       let nextPosition = history.length;
 
+      // Estado para auto-anexar arquivos aos shipments criados pela IA
+      const remainingFiles = [...filesToSend];
+      let lastShipmentToolCall: { name: string; args: Record<string, unknown> } | null = null;
+
       await runAgent({
         provider,
         history,
@@ -435,6 +439,44 @@ export default function BuyerAgentPage() {
           // Se a ferramenta é de RH, marca o chat como exclusivo
           if (t.toolCall && RH_TOOL_NAMES.has(t.toolCall.name) && chatId) {
             supabase.from('ai_chats').update({ is_exclusive: true }).eq('id', chatId).then(() => {});
+          }
+          // Auto-anexar arquivos aos shipments criados via IA
+          if (t.toolCall?.name === 'create_shipment') {
+            lastShipmentToolCall = t.toolCall;
+          } else if (t.toolResponse?.name === 'create_shipment' && !t.toolResponse.error && lastShipmentToolCall) {
+            const result = (t.toolResponse.data ?? {}) as Record<string, unknown>;
+            const created = (result.created ?? result) as Record<string, unknown>;
+            const shipmentId = typeof created?.id === 'string' ? created.id : null;
+            const numeroNfe = String(lastShipmentToolCall.args?.numero_nfe ?? '');
+            const numeroVenda = String(lastShipmentToolCall.args?.numero_venda ?? '');
+            const callRef = lastShipmentToolCall;
+
+            if (shipmentId && remainingFiles.length > 0) {
+              // Tenta match por número NF-e ou venda; senão pega o primeiro
+              let idx = -1;
+              if (numeroNfe) {
+                idx = remainingFiles.findIndex((f) => f.name.includes(numeroNfe));
+              }
+              if (idx < 0 && numeroVenda) {
+                idx = remainingFiles.findIndex((f) => f.name.includes(numeroVenda));
+              }
+              if (idx < 0) idx = 0;
+
+              const file = remainingFiles[idx];
+              remainingFiles.splice(idx, 1);
+
+              import('@/lib/shipment-attachments').then(({ uploadShipmentAttachment, detectAttachmentType }) => {
+                uploadShipmentAttachment({
+                  shipmentId,
+                  fileName: file.name,
+                  mimeType: file.mimeType,
+                  data: file.data,
+                  type: detectAttachmentType(file.name, file.mimeType),
+                  uploadedBy: userLabel,
+                }).catch((err) => console.error('[auto-attach] falhou:', err, callRef));
+              });
+            }
+            lastShipmentToolCall = null;
           }
           const pos = nextPosition++;
           supabase
