@@ -1057,7 +1057,7 @@ export async function runAgent({
       let toolData: unknown = null;
       let toolError: string | undefined;
       try {
-        toolData = formatDatesInResult(await executeTool(call.name, call.args));
+        toolData = formatDatesInResult(await executeTool(call.name, call.args, { currentUser }));
       } catch (err) {
         toolError = err instanceof Error ? err.message : String(err);
       }

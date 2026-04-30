@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { supabase } from '@/lib/supabase';
 import { cn } from '@/lib/utils';
+import { useInternalAuth } from '@/lib/auth-context';
 
 interface Session {
   phone: string;
@@ -15,6 +16,7 @@ interface Message {
   phone: string;
   direction: 'in' | 'out';
   text: string;
+  sent_by: string | null;
   created_at: string;
 }
 
@@ -49,7 +51,17 @@ function fmtDateTime(iso: string) {
   });
 }
 
+// "vitor@grupoegp.com.br" → "Vitor"
+// "Nathanna" → "Nathanna"
+function senderDisplay(label: string): string {
+  const local = label.includes('@') ? label.split('@')[0] : label;
+  if (!local) return label;
+  return local.charAt(0).toUpperCase() + local.slice(1).toLowerCase();
+}
+
 export default function WhatsAppPage() {
+  const { userLabel, userRole } = useInternalAuth();
+  const isAdmin = userRole === 'admin';
   const [sessions, setSessions] = useState<Session[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -64,12 +76,24 @@ export default function WhatsAppPage() {
   const [loadingMsgs, setLoadingMsgs] = useState(false);
 
   async function loadSessions() {
-    const { data: sess } = await supabase
-      .from('whatsapp_sessions')
-      .select('phone, updated_at')
-      .order('updated_at', { ascending: false });
+    let phones: string[] | null = null;
+    if (!isAdmin) {
+      // Não-admin só vê conversas onde participou (mandou pelo menos 1 msg)
+      const { data: myMsgs } = await supabase
+        .from('whatsapp_messages')
+        .select('phone')
+        .eq('sent_by', userLabel)
+        .eq('direction', 'out');
+      phones = [...new Set(((myMsgs ?? []) as { phone: string }[]).map((m) => m.phone))];
+      if (phones.length === 0) { setSessions([]); setLoading(false); return; }
+    }
 
-    if (!sess?.length) { setLoading(false); return; }
+    let q = supabase.from('whatsapp_sessions').select('phone, updated_at')
+      .order('updated_at', { ascending: false });
+    if (phones) q = q.in('phone', phones);
+    const { data: sess } = await q;
+
+    if (!sess?.length) { setSessions([]); setLoading(false); return; }
 
     const enriched: Session[] = await Promise.all(
       (sess as Session[]).map(async (s) => {
@@ -98,7 +122,7 @@ export default function WhatsAppPage() {
       const res = await fetch(`${supabaseUrl}/functions/v1/whatsapp-send`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', apikey: anonKey, Authorization: `Bearer ${anonKey}` },
-        body: JSON.stringify({ to: selected, text }),
+        body: JSON.stringify({ to: selected, text, sender_label: userLabel }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error ?? 'Falha no envio');
@@ -125,7 +149,7 @@ export default function WhatsAppPage() {
     const [msgsRes, ordersRes] = await Promise.all([
       supabase
         .from('whatsapp_messages')
-        .select('id, phone, direction, text, created_at')
+        .select('id, phone, direction, text, sent_by, created_at')
         .eq('phone', phone)
         .order('created_at', { ascending: true })
         .limit(200),
@@ -266,12 +290,16 @@ export default function WhatsAppPage() {
                     <div className={cn(
                       'max-w-[75%] rounded-lg px-3 py-2 text-sm shadow-sm',
                       m.direction === 'out'
-                        // verde claro WhatsApp (#d9fdd3) com texto escuro
                         ? 'rounded-br-sm text-slate-800'
                         : 'rounded-bl-sm bg-white text-slate-800 border border-slate-100'
                     )}
                     style={m.direction === 'out' ? { backgroundColor: '#d9fdd3' } : undefined}
                     >
+                      {m.direction === 'out' && m.sent_by && (
+                        <p className="mb-0.5 text-[11px] font-semibold text-green-800">
+                          {senderDisplay(m.sent_by)}
+                        </p>
+                      )}
                       <p className="whitespace-pre-wrap leading-relaxed">{m.text}</p>
                       <p className="mt-1 text-right text-[10px] text-slate-500">
                         {fmtDateTime(m.created_at)}

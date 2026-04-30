@@ -2196,7 +2196,12 @@ async function checkMinStockAndCreateNeed(itemCode: string, itemName: string, av
   });
 }
 
-export async function executeTool(name: string, args: any): Promise<unknown> {
+export interface ToolContext {
+  /** Usuário logado — usado pra atribuir autoria de mensagens, etc. */
+  currentUser?: string;
+}
+
+export async function executeTool(name: string, args: any, ctx: ToolContext = {}): Promise<unknown> {
   switch (name) {
     // ---------- LEITURAS ----------
     case 'list_products': {
@@ -2744,6 +2749,7 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
         ? {
             to: whatsappPhone,
             text: `${customMsg}${args.notes ? `\n_Obs: ${args.notes}_` : ''}\n\n🔗 ${inviteUrl}\n*Prazo:* ${deadlineLabel}`,
+            sender_label: ctx.currentUser,
           }
         : {
             to: whatsappPhone,
@@ -2752,6 +2758,7 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
               language: 'pt_BR',
               params: [supplierName, inviteUrl, deadlineLabel],
             },
+            sender_label: ctx.currentUser,
           };
 
       const res = await fetch(`${supabaseUrl}/functions/v1/whatsapp-send`, {
@@ -3820,7 +3827,7 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
       const res = await fetch(`${supabaseUrl}/functions/v1/whatsapp-send`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', apikey: anonKey, Authorization: `Bearer ${anonKey}` },
-        body: JSON.stringify({ to: phone, text: message }),
+        body: JSON.stringify({ to: phone, text: message, sender_label: ctx.currentUser }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error ?? 'Falha ao enviar mensagem WhatsApp');
@@ -3898,9 +3905,9 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
               p.replace(/\{\{name\}\}/gi, r.name)
                .replace(/\{\{first_name\}\}/gi, (r.name.split(' ')[0] ?? r.name))
             );
-            body = { to: r.phone, template: { name: templateName, language: templateLang, params } };
+            body = { to: r.phone, template: { name: templateName, language: templateLang, params }, sender_label: ctx.currentUser };
           } else {
-            body = { to: r.phone, text: message };
+            body = { to: r.phone, text: message, sender_label: ctx.currentUser };
           }
           const res = await fetch(`${supabaseUrl}/functions/v1/whatsapp-send`, {
             method: 'POST',

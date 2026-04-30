@@ -13,7 +13,7 @@ const CORS = {
   'Access-Control-Allow-Headers': 'Content-Type, Authorization, apikey',
 };
 
-async function logMessage(phone: string, direction: 'in' | 'out', text: string) {
+async function logMessage(phone: string, direction: 'in' | 'out', text: string, sentBy: string | null) {
   await fetch(`${SUPA_URL}/rest/v1/whatsapp_messages`, {
     method: 'POST',
     headers: {
@@ -22,8 +22,18 @@ async function logMessage(phone: string, direction: 'in' | 'out', text: string) 
       'Content-Type': 'application/json',
       Prefer: 'return=minimal',
     },
-    body: JSON.stringify({ phone, direction, text }),
+    body: JSON.stringify({ phone, direction, text, sent_by: sentBy }),
   }).catch(() => {});
+}
+
+// Extrai o primeiro nome de um email/label e capitaliza.
+// "vitor@grupoegp.com.br" → "Vitor"
+// "Nathanna" → "Nathanna"
+function senderName(label: string | undefined | null): string | null {
+  if (!label) return null;
+  const local = label.includes('@') ? label.split('@')[0] : label;
+  if (!local) return null;
+  return local.charAt(0).toUpperCase() + local.slice(1).toLowerCase();
 }
 
 Deno.serve(async (req) => {
@@ -34,10 +44,12 @@ Deno.serve(async (req) => {
     to?: string;
     text?: string;
     template?: { name: string; language?: string; params?: string[] };
+    sender_label?: string;
   };
   try { body = await req.json(); } catch { return new Response('Invalid JSON', { status: 400, headers: CORS }); }
 
-  const { to, text, template } = body;
+  const { to, text, template, sender_label } = body;
+  const senderFirstName = senderName(sender_label);
   if (!to) return new Response(JSON.stringify({ error: 'to é obrigatório' }), { status: 400, headers: { ...CORS, 'Content-Type': 'application/json' } });
   if (!text && !template) return new Response(JSON.stringify({ error: 'text OU template é obrigatório' }), { status: 400, headers: { ...CORS, 'Content-Type': 'application/json' } });
 
@@ -65,13 +77,17 @@ Deno.serve(async (req) => {
     };
     logText = `[template:${template.name}] ${params.join(' | ')}`;
   } else {
+    // Prefixa "*Nome · EGP*" pra cliente saber quem está falando
+    const finalText = senderFirstName
+      ? `*${senderFirstName} · EGP*\n\n${text}`
+      : text!;
     payload = {
       messaging_product: 'whatsapp',
       to: phone,
       type: 'text',
-      text: { body: text },
+      text: { body: finalText },
     };
-    logText = text!;
+    logText = finalText;
   }
 
   const res = await fetch(`https://graph.facebook.com/v20.0/${WA_PHONE_ID}/messages`, {
@@ -88,7 +104,7 @@ Deno.serve(async (req) => {
     });
   }
 
-  await logMessage(phone, 'out', logText);
+  await logMessage(phone, 'out', logText, sender_label ?? null);
 
   return new Response(JSON.stringify({ sent: true, to: phone, message_id: json.messages?.[0]?.id }), {
     status: 200, headers: { ...CORS, 'Content-Type': 'application/json' },
