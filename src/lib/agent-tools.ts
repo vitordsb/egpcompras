@@ -2598,25 +2598,33 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
       if (invErr || !invite) throw new Error(invErr?.message ?? 'Falha ao criar convite');
       const inviteUrl = buildPublicQuoteUrl((invite as any).token);
 
-      // 5. Monta e envia mensagem WhatsApp (apenas texto + link, sem listar itens)
+      // 5. Monta e envia mensagem WhatsApp
+      // Por padrão usa o template aprovado `cotacao_egp` (funciona pra qualquer fornecedor, sem janela de 24h)
+      // Se custom_message for fornecido, manda como texto livre (só funciona dentro da janela de 24h)
       const deadlineLabel = new Date(deadline).toLocaleDateString('pt-BR');
-      const notesLine = args.notes ? `\n_Obs: ${args.notes}_` : '';
       const customMsg = args.custom_message ? String(args.custom_message).trim() : null;
-
-      const message = customMsg
-        ? `${customMsg}${notesLine}\n\n🔗 ${inviteUrl}\n*Prazo:* ${deadlineLabel}`
-        : `*Solicitação de Cotação — EGP Tecnologia*\n\n` +
-          `Olá! Segue o link com a lista de itens para cotação:\n\n` +
-          `🔗 ${inviteUrl}\n\n` +
-          `*Prazo para resposta:* ${deadlineLabel}${notesLine}\n\n` +
-          `_EGP Tecnologia_`;
 
       const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
       const anonKey     = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+
+      const sendBody = customMsg
+        ? {
+            to: whatsappPhone,
+            text: `${customMsg}${args.notes ? `\n_Obs: ${args.notes}_` : ''}\n\n🔗 ${inviteUrl}\n*Prazo:* ${deadlineLabel}`,
+          }
+        : {
+            to: whatsappPhone,
+            template: {
+              name: 'cotacao_egp',
+              language: 'pt_BR',
+              params: [supplierName, inviteUrl, deadlineLabel],
+            },
+          };
+
       const res = await fetch(`${supabaseUrl}/functions/v1/whatsapp-send`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', apikey: anonKey, Authorization: `Bearer ${anonKey}` },
-        body: JSON.stringify({ to: whatsappPhone, text: message }),
+        body: JSON.stringify(sendBody),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error ?? 'Falha ao enviar cotação WhatsApp');
