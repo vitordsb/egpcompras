@@ -112,7 +112,8 @@ export default function PedidosPage() {
     const { data, error } = await supabase
       .from('shipments')
       .select(
-        `id, client_name, numero_nfe, numero_venda, data_venda, status, data_prevista, data_saida, data_retorno,
+        `id, client_name, client_trade_name, numero_nfe, numero_venda, data_venda, status, data_prevista, data_saida, data_retorno,
+         tipo_nota, natureza_operacao,
          client_cnpj, client_phone, client_email, client_address,
          frete_tipo, frete_valor, total_produtos, valor_total, forma_pagamento, condicao_pagamento,
          notes, created_at, updated_at, observations:shipment_observations(id)`
@@ -563,8 +564,20 @@ export default function PedidosPage() {
                 {paginated.map((s) => (
                   <tr key={s.id} className="border-b border-slate-100 last:border-0">
                     <td className="px-5 py-3">
-                      <div className="font-medium text-slate-900">
-                        {s.client_trade_name ?? s.client_name}
+                      <div className="flex items-center gap-2">
+                        <div className="font-medium text-slate-900">
+                          {s.client_trade_name ?? s.client_name}
+                        </div>
+                        {s.tipo_nota && s.tipo_nota !== 'venda' && (
+                          <span className="rounded bg-orange-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-orange-700">
+                            {s.tipo_nota === 'retorno_conserto' ? 'Retorno' :
+                             s.tipo_nota === 'remessa_conserto' ? 'Remessa' :
+                             s.tipo_nota === 'remessa_demonstracao' ? 'Demo' :
+                             s.tipo_nota === 'rma' ? 'RMA' :
+                             s.tipo_nota === 'retorno_garantia' ? 'Garantia' :
+                             'Especial'}
+                          </span>
+                        )}
                       </div>
                       {s.client_trade_name && (
                         <div className="text-xs text-slate-500">{s.client_name}</div>

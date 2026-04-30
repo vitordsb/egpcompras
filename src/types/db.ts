@@ -177,6 +177,8 @@ export interface Shipment {
   client_email: string | null;
   client_address: string | null;
   status: ShipmentStatus;
+  tipo_nota?: 'venda' | 'retorno_conserto' | 'retorno_garantia' | 'remessa_demonstracao' | 'remessa_conserto' | 'remessa_industrializacao' | 'rma' | 'outro';
+  natureza_operacao?: string | null;
   data_prevista: string | null;
   data_saida: string | null;
   data_retorno: string | null;

@@ -2,12 +2,24 @@
 // Usa DOMParser nativo do browser — zero dependências externas.
 // Para ZIP, usa JSZip (importado pelo chamador).
 
+export type TipoNota =
+  | 'venda'
+  | 'retorno_conserto'
+  | 'retorno_garantia'
+  | 'remessa_demonstracao'
+  | 'remessa_conserto'
+  | 'remessa_industrializacao'
+  | 'rma'
+  | 'outro';
+
 export interface NFeData {
   tipo: 'nfe';
   numero_nfe: string;
   serie: string;
   chave_acesso: string;
   data_emissao: string;
+  natureza_operacao: string;
+  tipo_nota: TipoNota;
   client_name: string;
   client_trade_name: string | null;
   client_cnpj: string;
@@ -18,7 +30,7 @@ export interface NFeData {
   valor_total: number;
   frete_valor: number;
   frete_conta: string;
-  itens: Array<{ codigo: string; descricao: string; quantidade: number; valor_unitario: number; valor_total: number }>;
+  itens: Array<{ codigo: string; descricao: string; quantidade: number; valor_unitario: number; valor_total: number; cfop: string }>;
   duplicatas: Array<{ numero: string; vencimento: string; valor: number }>;
 }
 
@@ -68,6 +80,44 @@ function parseNum(s: string): number {
   return parseFloat(s.replace(',', '.')) || 0;
 }
 
+/**
+ * Detecta o tipo da nota a partir do CFOP do primeiro item + texto da natureza.
+ * CFOPs aplicáveis (saídas — 5xxx interestadual, 6xxx mesma UF):
+ *  5102/6102/5403/6403 → venda
+ *  5915/6915           → remessa para conserto
+ *  5916/6916           → retorno de mercadoria recebida para conserto
+ *  5912/6912           → remessa para demonstração
+ *  5913/6913           → retorno de remessa para demonstração
+ *  5901/6901           → remessa para industrialização
+ *  5949/6949           → outras saídas (texto da natureza define)
+ */
+export function detectTipoNota(cfop: string, natureza: string): TipoNota {
+  const c = cfop.replace(/\D/g, '');
+  const n = natureza.toLowerCase();
+
+  if (/^[56]916$/.test(c) || /retorno.*conserto/i.test(n)) return 'retorno_conserto';
+  if (/^[56]915$/.test(c) || /remessa.*conserto/i.test(n)) return 'remessa_conserto';
+  if (/^[56]912$/.test(c) || /remessa.*demonstra/i.test(n)) return 'remessa_demonstracao';
+  if (/^[56]913$/.test(c) || /retorno.*demonstra/i.test(n)) return 'remessa_demonstracao';
+  if (/^[56]901$/.test(c) || /industrializa/i.test(n))     return 'remessa_industrializacao';
+  if (/garantia|troca/i.test(n))                            return 'retorno_garantia';
+  if (/rma|return\s*merchandise/i.test(n))                  return 'rma';
+  if (/^[56](102|403|404|405|656)$/.test(c))               return 'venda';
+  if (/^[56]949$/.test(c) && /retorno|devoluç/i.test(n))   return 'retorno_garantia';
+  return 'venda';
+}
+
+export const TIPO_NOTA_LABEL: Record<TipoNota, string> = {
+  venda:                    'Venda',
+  retorno_conserto:         'Retorno de Conserto',
+  retorno_garantia:         'Retorno em Garantia',
+  remessa_demonstracao:     'Remessa Demonstração',
+  remessa_conserto:         'Remessa para Conserto',
+  remessa_industrializacao: 'Remessa Industrialização',
+  rma:                      'RMA',
+  outro:                    'Outro',
+};
+
 // ---- Parser NF-e -----------------------------------------------------------
 
 export function parseNFe(xml: string): NFeData | null {
@@ -105,7 +155,10 @@ export function parseNFe(xml: string): NFeData | null {
     const modFrete = getText(doc, 'modFrete');
     const frete_conta = { '0': '0-EMITENTE', '1': '1-DESTINATARIO', '2': '2-TERCEIRO', '3': '3-PROPRIO-REMETENTE', '4': '4-PROPRIO-DEST', '9': '9-SEM-FRETE' }[modFrete] ?? modFrete;
 
-    // Itens
+    // Natureza da operação + tipo da nota (detecta pelo texto e CFOP)
+    const natureza_operacao = getText(doc, 'natOp');
+
+    // Itens (com CFOP para detecção do tipo)
     const itens = Array.from(doc.getElementsByTagName('det')).map(det => {
       const prod = det.getElementsByTagName('prod')[0];
       return {
@@ -114,8 +167,13 @@ export function parseNFe(xml: string): NFeData | null {
         quantidade:    parseNum(prod ? getText(prod, 'qCom') : '0'),
         valor_unitario:parseNum(prod ? getText(prod, 'vUnCom'): '0'),
         valor_total:   parseNum(prod ? getText(prod, 'vProd') : '0'),
+        cfop:          prod ? getText(prod, 'CFOP') : '',
       };
     });
+
+    // Detecção de tipo: CFOP do primeiro item + texto da natureza
+    const cfop = itens[0]?.cfop ?? '';
+    const tipo_nota = detectTipoNota(cfop, natureza_operacao);
 
     // Duplicatas
     const duplicatas = Array.from(doc.getElementsByTagName('dup')).map(dup => ({
@@ -127,6 +185,7 @@ export function parseNFe(xml: string): NFeData | null {
     return {
       tipo: 'nfe',
       numero_nfe, serie, chave_acesso, data_emissao,
+      natureza_operacao, tipo_nota,
       client_name, client_trade_name, client_cnpj, client_phone, client_address,
       total_produtos, desconto, valor_total, frete_valor, frete_conta,
       itens, duplicatas,
