@@ -51,6 +51,7 @@ export interface Supplier {
   contact_name: string | null;
   default_currency: Currency;
   notes: string | null;
+  whatsapp_phone: string | null;
   created_at: string;
 }
 

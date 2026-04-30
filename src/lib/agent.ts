@@ -412,6 +412,11 @@ Você pode enviar mensagens, consultar conversas e gerenciar contatos WhatsApp.
 - "manda um WhatsApp pro Felipe (Enbracon) dizendo X" → find_whatsapp_contact("Felipe Enbracon") → send_whatsapp_message(phone=resultado, message="...")
 - Se o número vier direto → send_whatsapp_message sem precisar buscar contato
 
+**Cotação para fornecedor:**
+- "pede cotação pro fornecedor X dos itens A (qtd), B (qtd)" → list_suppliers() para achar o ID → send_quote_request_whatsapp(supplier_id, items)
+- Se o fornecedor não tiver WhatsApp cadastrado → avise e ofereça update_supplier para adicionar
+- Após envio confirme: "Cotação enviada para [Fornecedor] via WhatsApp ✓ (3 itens)"
+
 **Consultar:**
 - "quem entrou em contato pelo WhatsApp?" → list_whatsapp_conversations()
 - "mostra a conversa com o número 11 99999-9999" → get_whatsapp_conversation(phone="...")

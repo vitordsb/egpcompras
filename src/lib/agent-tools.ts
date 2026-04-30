@@ -351,7 +351,7 @@ export const toolDeclarations = [
   // ---------- ESCRITAS — FORNECEDORES ----------
   {
     name: 'create_supplier',
-    description: 'Cadastra um fornecedor. Nome é obrigatório; email, CNPJ e endereço são opcionais e podem ser informados depois.',
+    description: 'Cadastra um fornecedor. Nome é obrigatório; email, CNPJ, endereço e WhatsApp são opcionais.',
     parameters: {
       type: 'OBJECT' as Type,
       properties: {
@@ -360,6 +360,7 @@ export const toolDeclarations = [
         cnpj:             { type: 'STRING' as Type, description: 'CNPJ (opcional).' },
         address:          { type: 'STRING' as Type, description: 'Endereço (opcional).' },
         default_currency: { type: 'STRING' as Type, description: '"BRL" ou "USD". Default BRL.' },
+        whatsapp_phone:   { type: 'STRING' as Type, description: 'Número WhatsApp do contato comercial. Ex: "11 98765-4321".' },
       },
       required: ['name'],
     },
@@ -376,8 +377,34 @@ export const toolDeclarations = [
         cnpj:             { type: 'STRING' as Type },
         address:          { type: 'STRING' as Type },
         default_currency: { type: 'STRING' as Type },
+        whatsapp_phone:   { type: 'STRING' as Type, description: 'Número WhatsApp do contato comercial.' },
       },
       required: ['supplier_id'],
+    },
+  },
+  {
+    name: 'send_quote_request_whatsapp',
+    description: 'Envia pedido de cotação para um fornecedor via WhatsApp. Use quando o usuário disser "pede cotação pro fornecedor X dos itens Y" ou "manda pedido de cotação pro fulano". Busque o fornecedor em list_suppliers se não tiver o ID.',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        supplier_id: { type: 'STRING' as Type, description: 'ID do fornecedor (use list_suppliers para encontrar).' },
+        items: {
+          type: 'ARRAY' as Type,
+          description: 'Lista de itens para cotar.',
+          items: {
+            type: 'OBJECT' as Type,
+            properties: {
+              name:     { type: 'STRING' as Type, description: 'Nome do componente/material.' },
+              quantity: { type: 'NUMBER' as Type, description: 'Quantidade necessária.' },
+              unit:     { type: 'STRING' as Type, description: 'Unidade (ex: "un", "kg", "m"). Default "un".' },
+            },
+            required: ['name', 'quantity'],
+          },
+        },
+        notes: { type: 'STRING' as Type, description: 'Observações extras (prazo desejado, qualidade, etc.).' },
+      },
+      required: ['supplier_id', 'items'],
     },
   },
   {
@@ -2433,12 +2460,16 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
         if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)) throw new Error('email inválido');
         payload.email = e;
       }
-      if (args.cnpj)    payload.cnpj    = String(args.cnpj).trim();
-      if (args.address) payload.address = String(args.address).trim();
+      if (args.cnpj)           payload.cnpj           = String(args.cnpj).trim();
+      if (args.address)        payload.address        = String(args.address).trim();
+      if (args.whatsapp_phone) {
+        const d = String(args.whatsapp_phone).replace(/\D/g, '');
+        payload.whatsapp_phone = d.startsWith('55') ? d : `55${d}`;
+      }
       const { data, error } = await supabase
         .from('suppliers')
         .insert(payload)
-        .select('id, name, email, cnpj, address, default_currency')
+        .select('id, name, email, cnpj, address, default_currency, whatsapp_phone')
         .single();
       if (error) throw new Error(error.message);
       return { created: data };
@@ -2459,10 +2490,59 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
       if (args.default_currency) {
         payload.default_currency = args.default_currency === 'USD' ? 'USD' : 'BRL';
       }
+      if (args.whatsapp_phone) {
+        const d = String(args.whatsapp_phone).replace(/\D/g, '');
+        payload.whatsapp_phone = d.startsWith('55') ? d : `55${d}`;
+      }
       if (Object.keys(payload).length === 0) throw new Error('Nada a atualizar');
       const { error } = await supabase.from('suppliers').update(payload).eq('id', id);
       if (error) throw new Error(error.message);
       return { updated: true, id, changes: payload };
+    }
+
+    case 'send_quote_request_whatsapp': {
+      const supplierId = String(args.supplier_id ?? '');
+      if (!supplierId) throw new Error('supplier_id é obrigatório');
+      const items = (args.items ?? []) as Array<{ name: string; quantity: number; unit?: string }>;
+      if (!items.length) throw new Error('items não pode ser vazio');
+
+      const { data: supplier, error: suppErr } = await supabase
+        .from('suppliers')
+        .select('id, name, whatsapp_phone')
+        .eq('id', supplierId)
+        .single();
+      if (suppErr || !supplier) throw new Error('Fornecedor não encontrado');
+      if (!(supplier as any).whatsapp_phone) {
+        throw new Error(`Fornecedor "${(supplier as any).name}" não tem número WhatsApp cadastrado. Use update_supplier para adicionar.`);
+      }
+
+      const itemLines = items
+        .map((it, i) => `${i + 1}. *${it.name}* — ${it.quantity} ${it.unit ?? 'un'}`)
+        .join('\n');
+      const notes = args.notes ? `\n\n_Observações: ${args.notes}_` : '';
+      const message =
+        `*Solicitação de Cotação — EGP Tecnologia*\n\n` +
+        `Olá! Gostaríamos de solicitar cotação para os seguintes itens:\n\n` +
+        `${itemLines}${notes}\n\n` +
+        `Por favor, responda com *preço unitário* e *prazo de entrega* para cada item.\n\n` +
+        `Obrigado!\n_EGP Tecnologia_`;
+
+      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
+      const anonKey     = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+      const res = await fetch(`${supabaseUrl}/functions/v1/whatsapp-send`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', apikey: anonKey, Authorization: `Bearer ${anonKey}` },
+        body: JSON.stringify({ to: (supplier as any).whatsapp_phone, text: message }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error ?? 'Falha ao enviar cotação WhatsApp');
+      return {
+        sent: true,
+        supplier: (supplier as any).name,
+        phone: (supplier as any).whatsapp_phone,
+        items_count: items.length,
+        message_id: json.message_id,
+      };
     }
 
     case 'delete_supplier': {
