@@ -1,6 +1,7 @@
 import { useNavigate } from 'react-router-dom';
 import { cn } from '@/lib/utils';
 import { supabase } from '@/lib/supabase';
+import Logo from '@/components/Logo';
 import {
   type UIMode,
   readLastAdminRoute,
@@ -50,9 +51,7 @@ export default function Header({ mode, onMenuClick }: HeaderProps) {
             </svg>
           </button>
         )}
-        <div className="flex h-7 w-7 items-center justify-center rounded-md bg-brand-600 text-[11px] font-bold text-white">
-          EG
-        </div>
+        <Logo size={28} />
         <span className="hidden text-sm font-semibold text-slate-900 sm:inline">
           EGP Compras
         </span>

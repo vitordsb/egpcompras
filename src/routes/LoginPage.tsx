@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react';
 import { supabase } from '@/lib/supabase';
 import { Button } from '@/components/ui/Button';
 import { Input, Label } from '@/components/ui/Input';
+import Logo from '@/components/Logo';
 
 interface LoginPageProps {
   onMasterLogin?: () => void;
@@ -60,9 +61,7 @@ export default function LoginPage({ onMasterLogin }: LoginPageProps) {
         className="w-full max-w-sm rounded-lg border border-slate-200 bg-white p-6 shadow-sm"
       >
         <div className="mb-6">
-          <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-md bg-brand-600 text-sm font-bold text-white">
-            EG
-          </div>
+          <Logo size={48} className="mb-3" />
           <h1 className="text-lg font-semibold text-slate-900">Entrar no EGP Compras</h1>
           <p className="mt-1 text-sm text-slate-500">
             Acesso interno para usuários autorizados.

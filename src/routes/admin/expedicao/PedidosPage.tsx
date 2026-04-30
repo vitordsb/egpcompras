@@ -112,6 +112,8 @@ export default function PedidosPage() {
          frete_tipo, frete_valor, total_produtos, valor_total, forma_pagamento, condicao_pagamento,
          notes, created_at, updated_at, observations:shipment_observations(id)`
       )
+      // Atrasados primeiro (data_prevista ascendente), pedidos sem previsão por último
+      .order('data_prevista', { ascending: true, nullsFirst: false })
       .order('created_at', { ascending: false })
       .limit(200);
     if (error) setListError(friendlyDbError(error));
