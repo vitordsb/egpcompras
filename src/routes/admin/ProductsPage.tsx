@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { Label, Textarea } from '@/components/ui/Input';
 import { formatBRL } from '@/lib/utils';
+import { useBodyScrollLock } from '@/hooks/useBodyScrollLock';
 
 function priceFor(cost: number, mode: PricingMode, customPct: number | null): number | null {
   if (cost <= 0) return null;
@@ -37,6 +38,8 @@ export default function ProductsPage() {
   const [formError, setFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
+
+  useBodyScrollLock(!!form);
 
   async function loadProducts() {
     setLoading(true);

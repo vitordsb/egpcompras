@@ -7,6 +7,7 @@ import { Input, Label } from '@/components/ui/Input';
 import Pagination from '@/components/ui/Pagination';
 import { useToast } from '@/components/ui/Toast';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
+import { useBodyScrollLock } from '@/hooks/useBodyScrollLock';
 
 const PAGE_SIZE = 25;
 
@@ -35,6 +36,8 @@ export default function SuppliersPage() {
   const [saving, setSaving] = useState(false);
   const [page, setPage] = useState(1);
   const [confirm, setConfirm] = useState<{ message: string; onConfirm: () => void } | null>(null);
+
+  useBodyScrollLock(!!form || !!confirm);
 
   async function load() {
     setLoading(true);

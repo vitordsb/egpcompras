@@ -5,6 +5,7 @@ import { Input, Label } from '@/components/ui/Input';
 import { supabase } from '@/lib/supabase';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
 import { useToast } from '@/components/ui/Toast';
+import { useBodyScrollLock } from '@/hooks/useBodyScrollLock';
 import {
   type UserRole, type PageKey,
   ROLE_LABELS, HARDCODED_ADMINS, ALL_ROLES,
@@ -154,6 +155,8 @@ export default function AccessUsersPage() {
   const [resetPassword, setResetPassword] = useState('');
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<{ message: string; onConfirm: () => void } | null>(null);
+
+  useBodyScrollLock(!!resetUser || !!confirm);
 
   async function loadUsers() {
     setLoading(true);

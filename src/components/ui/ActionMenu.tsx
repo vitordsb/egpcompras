@@ -72,9 +72,9 @@ export default function ActionMenu({ items }: Props) {
       </button>
       {open && pos && createPortal(
         <>
-          <div className="fixed inset-0 z-[60]" onClick={() => setOpen(false)} />
+          <div className="fixed inset-0 z-[80]" onClick={() => setOpen(false)} />
           <div
-            className="fixed z-[61] w-44 rounded-lg border border-slate-200 bg-white py-1 shadow-lg"
+            className="fixed z-[81] w-44 rounded-lg border border-slate-200 bg-white py-1 shadow-lg"
             style={{ top: pos.top, left: pos.left }}
             role="menu"
           >

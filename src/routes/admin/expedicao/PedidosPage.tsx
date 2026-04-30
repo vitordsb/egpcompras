@@ -12,6 +12,7 @@ import Pagination from '@/components/ui/Pagination';
 import ActionMenu from '@/components/ui/ActionMenu';
 import ShipmentAttachmentsPanel from '@/components/ShipmentAttachmentsPanel';
 import { useInternalAuth } from '@/lib/auth-context';
+import { useBodyScrollLock } from '@/hooks/useBodyScrollLock';
 
 const PAGE_SIZE = 9;
 
@@ -101,6 +102,9 @@ export default function PedidosPage() {
   const [savingObs, setSavingObs] = useState(false);
 
   const [confirmDelete, setConfirmDelete] = useState<ShipmentRow | null>(null);
+
+  // Trava o scroll do body quando qualquer modal estiver aberto
+  useBodyScrollLock(!!form || !!detailId || !!confirmDelete);
   const [page, setPage] = useState(1);
 
   async function loadList() {

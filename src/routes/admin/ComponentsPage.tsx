@@ -7,6 +7,7 @@ import { Input, Label } from '@/components/ui/Input';
 import Pagination from '@/components/ui/Pagination';
 import { useToast } from '@/components/ui/Toast';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
+import { useBodyScrollLock } from '@/hooks/useBodyScrollLock';
 
 interface FormState {
   id: string | null;
@@ -30,6 +31,8 @@ export default function ComponentsPage() {
   const [form, setForm] = useState<FormState | null>(null); // null = modal fechado
   const [saving, setSaving] = useState(false);
   const [confirm, setConfirm] = useState<{ message: string; onConfirm: () => void } | null>(null);
+
+  useBodyScrollLock(!!form || !!confirm);
 
   async function load() {
     setLoading(true);

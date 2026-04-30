@@ -8,6 +8,7 @@ import { useToast } from '@/components/ui/Toast';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
 import { useInternalAuth } from '@/lib/auth-context';
 import ActionMenu from '@/components/ui/ActionMenu';
+import { useBodyScrollLock } from '@/hooks/useBodyScrollLock';
 
 const SEGMENT_LABELS: Record<CampaignSegment, string> = {
   all:            'Todos clientes',
@@ -55,6 +56,8 @@ export default function CampanhasPage() {
   const [saving, setSaving] = useState(false);
   const [confirmDel, setConfirmDel] = useState<MarketingCampaign | null>(null);
   const [testCampaign, setTestCampaign] = useState<MarketingCampaign | null>(null);
+
+  useBodyScrollLock(!!form || !!confirmDel || !!testCampaign);
   const [testPhone, setTestPhone] = useState('');
   const [testing, setTesting] = useState(false);
 
