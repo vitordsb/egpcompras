@@ -728,8 +728,8 @@ export default function AdminLayout() {
         </main>
       </div>
 
-      {/* Botão flutuante de chat IA (modo Manual) */}
-      {!quickChatOpen && (
+      {/* Botão flutuante de chat IA (modo Manual) — escondido em páginas com input no rodapé */}
+      {!quickChatOpen && location.pathname !== '/admin/whatsapp' && (
         <button
           type="button"
           onClick={() => setQuickChatOpen(true)}

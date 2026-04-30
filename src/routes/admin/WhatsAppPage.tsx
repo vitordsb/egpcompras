@@ -58,6 +58,7 @@ export default function WhatsAppPage() {
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingMsgs, setLoadingMsgs] = useState(false);
@@ -104,6 +105,8 @@ export default function WhatsAppPage() {
       setDraft('');
       // Recarrega histórico (a Edge Function loga no banco automaticamente)
       await loadConversation(selected);
+      // Mantém foco no input (UX igual ao WhatsApp)
+      inputRef.current?.focus();
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       // Mensagem amigável para o erro de janela 24h
@@ -155,6 +158,8 @@ export default function WhatsAppPage() {
     setDraft('');
     setSendError(null);
     loadConversation(selected);
+    // Focus no input ao abrir conversa
+    setTimeout(() => inputRef.current?.focus(), 50);
     // Polling a cada 10s para novas mensagens
     const id = setInterval(() => loadConversation(selected), 10000);
     return () => clearInterval(id);
@@ -287,17 +292,34 @@ export default function WhatsAppPage() {
               )}
               <div className="flex items-end gap-2">
                 <textarea
+                  ref={inputRef}
                   value={draft}
                   onChange={(e) => setDraft(e.target.value)}
                   onKeyDown={(e) => {
+                    // Ctrl+Enter (ou Cmd+Enter): quebra linha
+                    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                      e.preventDefault();
+                      const target = e.currentTarget;
+                      const start = target.selectionStart;
+                      const end   = target.selectionEnd;
+                      const next = draft.slice(0, start) + '\n' + draft.slice(end);
+                      setDraft(next);
+                      // Reposiciona cursor após a quebra
+                      requestAnimationFrame(() => {
+                        target.selectionStart = target.selectionEnd = start + 1;
+                      });
+                      return;
+                    }
+                    // Enter puro: envia
                     if (e.key === 'Enter' && !e.shiftKey) {
                       e.preventDefault();
                       sendManualMessage();
                     }
                   }}
-                  placeholder="Digite a mensagem… (Enter envia, Shift+Enter quebra linha)"
+                  placeholder="Digite a mensagem… (Enter envia · Ctrl+Enter quebra linha)"
                   rows={1}
                   disabled={sending}
+                  autoFocus
                   className="flex-1 resize-none rounded-2xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm focus:border-green-500 focus:outline-none focus:ring-1 focus:ring-green-500 disabled:opacity-60 max-h-32"
                   style={{ minHeight: 40 }}
                 />
