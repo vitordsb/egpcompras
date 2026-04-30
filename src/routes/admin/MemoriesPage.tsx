@@ -3,6 +3,7 @@ import { supabase } from '@/lib/supabase';
 import { Button } from '@/components/ui/Button';
 import { Card, CardBody } from '@/components/ui/Card';
 import { Textarea } from '@/components/ui/Input';
+import { useToast } from '@/components/ui/Toast';
 
 interface Memory {
   id: string;
@@ -12,6 +13,7 @@ interface Memory {
 }
 
 export default function MemoriesPage() {
+  const toast = useToast();
   const [list, setList] = useState<Memory[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -71,7 +73,7 @@ export default function MemoriesPage() {
     if (!confirmDelete) return;
     const { error } = await supabase.from('agent_memories').delete().eq('id', confirmDelete.id);
     if (error) {
-      alert(`Erro: ${error.message}`);
+      toast.error('Erro', error.message);
       return;
     }
     setConfirmDelete(null);

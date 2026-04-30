@@ -13,6 +13,7 @@ import { fetchUsdBrl } from '@/lib/currency';
 import { buildPublicQuoteUrl } from '@/lib/utils';
 import type { Type } from '@google/genai';
 
+
 // ===== Schemas (declarations) =============================================
 
 export const toolDeclarations = [
@@ -1946,6 +1947,25 @@ async function resolveBomItemId(
   };
 }
 
+// Verifica se item caiu abaixo do mínimo e cria purchase_need de reposição se não existir
+async function checkMinStockAndCreateNeed(itemCode: string, itemName: string, available: number, minQty: number) {
+  if (minQty <= 0 || available > minQty) return;
+  const { data: ex } = await supabase
+    .from('purchase_needs')
+    .select('id')
+    .is('shipment_id', null)
+    .ilike('item_name', `%${itemName}%`)
+    .in('status', ['pendente', 'pedido'])
+    .maybeSingle();
+  if (ex) return;
+  await supabase.from('purchase_needs').insert({
+    item_name: itemName,
+    item_code: itemCode || null,
+    quantity:  minQty,
+    status:    'pendente',
+  });
+}
+
 export async function executeTool(name: string, args: any): Promise<unknown> {
   switch (name) {
     // ---------- LEITURAS ----------
@@ -3399,8 +3419,7 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
       let q = supabase.from('shipment_items')
         .select(`id, item_name, item_code, brand_name, item_color, item_detail, quantity, unit_price,
                  shipment:shipments!inner(id, client_name, numero_venda, numero_nfe, data_prevista, status)`)
-        .eq('is_private_label', true)
-        .order('shipments.data_prevista', { ascending: true });
+        .eq('is_private_label', true);
       if (statusFilter !== 'all') {
         q = q.eq('shipments.status', statusFilter);
       }
@@ -3412,6 +3431,13 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
       }
       const { data, error } = await q.limit(200);
       if (error) throw new Error(error.message);
+
+      // Ordena por data_prevista do shipment (nulls por último)
+      (data ?? []).sort((a: any, b: any) => {
+        const da = a.shipment?.data_prevista ?? '';
+        const db = b.shipment?.data_prevista ?? '';
+        return da < db ? -1 : da > db ? 1 : 0;
+      });
 
       // Agrupa por cliente + marca
       const grouped: Record<string, {
@@ -3520,6 +3546,24 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
     case 'create_shipment': {
       const clientName = String(args.client_name ?? '').trim();
       if (!clientName) throw new Error('client_name é obrigatório');
+
+      // Previne duplicata: checa por numero_nfe ou numero_venda + cliente
+      const nfe   = args.numero_nfe    ? String(args.numero_nfe).trim()   : null;
+      const nvenda = args.numero_venda ? String(args.numero_venda).trim() : null;
+      if (nfe || nvenda) {
+        let dupQ = supabase.from('shipments').select('id, client_name, numero_venda, numero_nfe, status');
+        if (nfe)    dupQ = dupQ.eq('numero_nfe',    nfe);
+        else        dupQ = dupQ.eq('numero_venda',  nvenda!).ilike('client_name', `%${clientName}%`);
+        const { data: existing } = await dupQ.limit(1).maybeSingle();
+        if (existing) {
+          return {
+            already_exists: true,
+            shipment_id: (existing as any).id,
+            message: `Pedido já existe (${(existing as any).client_name} — ${nfe ? `NF-e ${nfe}` : `Venda #${nvenda}`}, status: ${(existing as any).status}). Nenhum novo registro criado.`,
+          };
+        }
+      }
+
       const payload: Record<string, unknown> = {
         client_name:         clientName,
         numero_nfe:          args.numero_nfe          ? String(args.numero_nfe).trim()        : null,
@@ -3591,6 +3635,46 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
           });
         }
       }
+      // Auto-registra purchase_needs para itens sem estoque suficiente
+      const needsAutoCreated: string[] = [];
+      for (const it of itemsAdded) {
+        const needed = Number(it.quantity ?? 0);
+        if (!(needed > 0)) continue;
+
+        // Verifica saldo em estoque
+        let stockAvail = 0;
+        if (it.item_code) {
+          const { data: stockRow } = await supabase
+            .from('stock_items')
+            .select('quantity, reserved_quantity')
+            .ilike('item_code', it.item_code)
+            .maybeSingle();
+          if (stockRow) stockAvail = Number((stockRow as any).quantity) - Number((stockRow as any).reserved_quantity);
+        }
+        const deficit = needed - stockAvail;
+        if (deficit <= 0) continue; // estoque cobre — não precisa comprar
+
+        // Verifica se já existe need não-cancelado para este item+pedido
+        const itemNameSearch = (it.item_name ?? it.item_code ?? '').trim();
+        const { data: existing } = await supabase
+          .from('purchase_needs')
+          .select('id')
+          .eq('shipment_id', shipmentId)
+          .ilike('item_name', `%${itemNameSearch}%`)
+          .neq('status', 'cancelado')
+          .maybeSingle();
+        if (existing) continue;
+
+        await supabase.from('purchase_needs').insert({
+          item_name:   itemNameSearch,
+          item_code:   it.item_code ?? null,
+          quantity:    deficit,
+          shipment_id: shipmentId,
+          status:      'pendente',
+        });
+        needsAutoCreated.push(`${deficit}x ${itemNameSearch}`);
+      }
+
       const privateLabelItems = itemsAdded.filter((i) => i.is_private_label);
       return {
         created,
@@ -3601,6 +3685,7 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
         private_label_alert: privateLabelsDetected > 0
           ? `⚠️ ${privateLabelsDetected} item(ns) com marca própria detectado(s): ${privateLabelItems.map((i) => `${i.quantity}x ${i.item_color ?? i.item_name} — ${i.brand_name}`).join(' | ')}`
           : null,
+        purchase_needs_auto_created: needsAutoCreated,
       };
     }
 
@@ -4117,6 +4202,8 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
         quantity: diff, type: 'ajuste', notes: args.notes ? String(args.notes) : null,
         created_by: args.author ?? null,
       });
+      const newAvail = newQty - Number(item.reserved_quantity ?? 0);
+      await checkMinStockAndCreateNeed(item.item_code, item.item_name, newAvail, Number(item.min_quantity ?? 0));
       return { adjusted: true, item_code: item.item_code, old_quantity: item.quantity, new_quantity: newQty };
     }
 
@@ -4154,6 +4241,11 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
             quantity: -qty, type: 'saida', shipment_id: shipmentId,
             created_by: args.author ?? null,
           });
+          // Se caiu abaixo do mínimo, registra need de reposição
+          const { data: fullItem } = await supabase.from('stock_items').select('item_name, min_quantity').eq('id', stockItem.id).single();
+          if (fullItem) {
+            await checkMinStockAndCreateNeed(code, (fullItem as any).item_name, newQty - newReserved, Number((fullItem as any).min_quantity ?? 0));
+          }
           deducted++;
         }
         // Item não encontrado no estoque: ignora silenciosamente.
@@ -5623,7 +5715,7 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
         numero_nfe:     args.numero_nfe     ? String(args.numero_nfe).trim()     : null,
         numero_venda:   args.numero_venda   ? String(args.numero_venda).trim()   : null,
         vencimento:     args.vencimento     ? String(args.vencimento)            : null,
-        data_entrada:   args.data_entrada   ? String(args.data_entrada)          : null,
+        data_entrada:   args.data_entrada   ? String(args.data_entrada)          : new Date().toISOString().slice(0, 10),
         notes:          args.notes          ? String(args.notes).trim()          : null,
       };
       const { data, error } = await supabase

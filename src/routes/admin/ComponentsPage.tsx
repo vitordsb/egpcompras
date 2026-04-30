@@ -4,6 +4,9 @@ import type { Component } from '@/types/db';
 import { Button } from '@/components/ui/Button';
 import { Card, CardBody } from '@/components/ui/Card';
 import { Input, Label } from '@/components/ui/Input';
+import Pagination from '@/components/ui/Pagination';
+import { useToast } from '@/components/ui/Toast';
+import { ConfirmModal } from '@/components/ui/ConfirmModal';
 
 interface FormState {
   id: string | null;
@@ -15,16 +18,18 @@ const emptyForm: FormState = {
   name: '',
 };
 
-const PAGE_SIZE = 14;
+const PAGE_SIZE = 25;
 
 export default function ComponentsPage() {
+  const toast = useToast();
   const [components, setComponents] = useState<Component[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
-  const [page, setPage] = useState(0);
+  const [page, setPage] = useState(1);
   const [form, setForm] = useState<FormState | null>(null); // null = modal fechado
   const [saving, setSaving] = useState(false);
+  const [confirm, setConfirm] = useState<{ message: string; onConfirm: () => void } | null>(null);
 
   async function load() {
     setLoading(true);
@@ -80,28 +85,28 @@ export default function ComponentsPage() {
   }
 
   async function remove(c: Component) {
-    if (!confirm(`Remover componente "${c.name}"?`)) return;
-    const { error } = await supabase.from('components').delete().eq('id', c.id);
-    if (error) {
-      // Provável FK violation se já estiver em alguma BOM/cotação.
-      alert(`Não foi possível remover: ${error.message}`);
-      return;
-    }
-    await load();
+    setConfirm({
+      message: `Remover componente "${c.name}"?`,
+      onConfirm: async () => {
+        setConfirm(null);
+        const { error } = await supabase.from('components').delete().eq('id', c.id);
+        if (error) {
+          // Provável FK violation se já estiver em alguma BOM/cotação.
+          toast.error('Erro', `Não foi possível remover: ${error.message}`);
+          return;
+        }
+        await load();
+      },
+    });
   }
 
   const filtered = search.trim()
     ? components.filter((c) => c.name.toLowerCase().includes(search.toLowerCase()))
     : components;
 
-  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
-  const safePage = Math.min(page, totalPages - 1);
-  const visible = filtered.slice(safePage * PAGE_SIZE, safePage * PAGE_SIZE + PAGE_SIZE);
+  const visible = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
-  // Reseta página ao mudar busca
-  useEffect(() => {
-    setPage(0);
-  }, [search]);
+  useEffect(() => { setPage(1); }, [search]);
 
   return (
     <div className="p-8">
@@ -175,31 +180,20 @@ export default function ComponentsPage() {
                 ))}
               </tbody>
             </table>
+            <Pagination total={filtered.length} page={page} pageSize={PAGE_SIZE} onChange={setPage} className="px-5" />
           </Card>
-          {totalPages > 1 && (
-            <div className="mt-3 flex items-center justify-end gap-2 text-xs text-slate-600">
-              <button
-                type="button"
-                onClick={() => setPage((p) => Math.max(0, p - 1))}
-                disabled={safePage === 0}
-                className="rounded border border-slate-300 px-2 py-1 hover:bg-slate-50 disabled:opacity-40"
-              >
-                ‹
-              </button>
-              <span>
-                Página {safePage + 1} de {totalPages}
-              </span>
-              <button
-                type="button"
-                onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
-                disabled={safePage >= totalPages - 1}
-                className="rounded border border-slate-300 px-2 py-1 hover:bg-slate-50 disabled:opacity-40"
-              >
-                ›
-              </button>
-            </div>
-          )}
         </>
+      )}
+
+      {confirm && (
+        <ConfirmModal
+          title="Confirmar ação"
+          description={confirm.message}
+          confirmLabel="Confirmar"
+          variant="danger"
+          onConfirm={confirm.onConfirm}
+          onCancel={() => setConfirm(null)}
+        />
       )}
 
       {form && (

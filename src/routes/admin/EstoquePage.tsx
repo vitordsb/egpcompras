@@ -4,6 +4,9 @@ import { Card, CardBody } from '@/components/ui/Card';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 import { cn } from '@/lib/utils';
+import Pagination from '@/components/ui/Pagination';
+
+const PAGE_SIZE = 25;
 
 interface StockItem {
   id: string;
@@ -80,6 +83,8 @@ export default function EstoquePage() {
   const [needs, setNeeds] = useState<NeedRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
+  const [stockPage, setStockPage] = useState(1);
+  const [histPage, setHistPage] = useState(1);
 
   // Aba Capacidade
   const [products, setProducts] = useState<Product[]>([]);
@@ -89,12 +94,29 @@ export default function EstoquePage() {
   const [maxProducible, setMaxProducible] = useState<{ max: number; limiting: string } | null>(null);
   const [checking, setChecking] = useState(false);
 
+  const [consumptionRates, setConsumptionRates] = useState<Record<string, number>>({}); // item_code → unidades/dia
+
   async function loadStock() {
-    const { data } = await supabase
-      .from('stock_items')
-      .select('*')
-      .order('item_name');
-    setStock((data ?? []) as StockItem[]);
+    const [stockRes, movRes] = await Promise.all([
+      supabase.from('stock_items').select('*').order('item_name'),
+      supabase
+        .from('stock_movements')
+        .select('item_code, quantity, type, created_at')
+        .eq('type', 'saida')
+        .gte('created_at', new Date(Date.now() - 90 * 86400000).toISOString()),
+    ]);
+    setStock((stockRes.data ?? []) as StockItem[]);
+    // Calcula consumo médio diário por item_code (últimos 90 dias)
+    const totals: Record<string, number> = {};
+    for (const m of (movRes.data ?? []) as any[]) {
+      const code = (m.item_code ?? '').toUpperCase();
+      totals[code] = (totals[code] ?? 0) + Math.abs(Number(m.quantity));
+    }
+    const rates: Record<string, number> = {};
+    for (const [code, total] of Object.entries(totals)) {
+      rates[code] = total / 90;
+    }
+    setConsumptionRates(rates);
   }
 
   async function loadMovements() {
@@ -104,6 +126,18 @@ export default function EstoquePage() {
       .order('created_at', { ascending: false })
       .limit(100);
     setMovements((data ?? []) as unknown as Movement[]);
+  }
+
+  function reorderForecast(s: StockItem): { label: string; cls: string } | null {
+    if (Number(s.min_quantity) <= 0) return null;
+    const available = Number(s.quantity) - Number(s.reserved_quantity);
+    if (available <= Number(s.min_quantity)) return { label: 'Repor agora', cls: 'text-red-700 font-semibold' };
+    const rate = consumptionRates[(s.item_code ?? '').toUpperCase()];
+    if (!rate || rate === 0) return { label: 'Sem histórico', cls: 'text-slate-400' };
+    const days = Math.floor((available - Number(s.min_quantity)) / rate);
+    if (days <= 7)  return { label: `Em ~${days}d`, cls: 'text-red-600 font-medium' };
+    if (days <= 30) return { label: `Em ~${days}d`, cls: 'text-amber-600' };
+    return { label: `Em ~${days}d`, cls: 'text-slate-400' };
   }
 
   async function loadNeeds() {
@@ -222,6 +256,12 @@ export default function EstoquePage() {
     s.item_code.toLowerCase().includes(search.toLowerCase())
   );
 
+  useEffect(() => { setStockPage(1); }, [search]);
+  useEffect(() => { setHistPage(1); }, [tab]);
+
+  const pagedStock = filteredStock.slice((stockPage - 1) * PAGE_SIZE, stockPage * PAGE_SIZE);
+  const pagedMovements = movements.slice((histPage - 1) * PAGE_SIZE, histPage * PAGE_SIZE);
+
   const shortages = needs.filter((n) => n.to_buy > 0);
 
   const TABS = [
@@ -293,11 +333,12 @@ export default function EstoquePage() {
                       <th className="px-5 py-3 text-right">Reservado</th>
                       <th className="px-5 py-3 text-right">Disponível</th>
                       <th className="px-5 py-3 text-right">Mín.</th>
+                      <th className="px-5 py-3">Repor em</th>
                       <th className="px-5 py-3">Atualizado</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredStock.map((s) => {
+                    {pagedStock.map((s) => {
                       const available = Number(s.quantity) - Number(s.reserved_quantity);
                       const low = available <= Number(s.min_quantity) && Number(s.min_quantity) > 0;
                       const negative = available < 0;
@@ -317,6 +358,9 @@ export default function EstoquePage() {
                           <td className="px-5 py-3 text-right text-slate-400 tabular-nums">
                             {Number(s.min_quantity) > 0 ? fmtQty(s.min_quantity, s.unit) : '—'}
                           </td>
+                          <td className="px-5 py-3 text-xs">
+                            {(() => { const f = reorderForecast(s); return f ? <span className={f.cls}>{f.label}</span> : <span className="text-slate-300">—</span>; })()}
+                          </td>
                           <td className="px-5 py-3 text-xs text-slate-400">{fmtDate(s.updated_at)}</td>
                         </tr>
                       );
@@ -324,6 +368,7 @@ export default function EstoquePage() {
                   </tbody>
                 </table>
               </div>
+              <Pagination total={filteredStock.length} page={stockPage} pageSize={PAGE_SIZE} onChange={setStockPage} className="px-5" />
             </Card>
           )}
         </>
@@ -510,7 +555,7 @@ export default function EstoquePage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {movements.map((m) => (
+                  {pagedMovements.map((m) => (
                     <tr key={m.id} className="border-b border-slate-100 last:border-0">
                       <td className="px-5 py-2 text-xs text-slate-400 whitespace-nowrap">{fmtDate(m.created_at)}</td>
                       <td className="px-5 py-2">
@@ -537,6 +582,7 @@ export default function EstoquePage() {
                   ))}
                 </tbody>
               </table>
+              <Pagination total={movements.length} page={histPage} pageSize={PAGE_SIZE} onChange={setHistPage} className="px-5" />
             </div>
           )}
         </Card>

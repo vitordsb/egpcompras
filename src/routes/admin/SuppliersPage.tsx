@@ -4,6 +4,11 @@ import type { Currency, Supplier } from '@/types/db';
 import { Button } from '@/components/ui/Button';
 import { Card, CardBody } from '@/components/ui/Card';
 import { Input, Label } from '@/components/ui/Input';
+import Pagination from '@/components/ui/Pagination';
+import { useToast } from '@/components/ui/Toast';
+import { ConfirmModal } from '@/components/ui/ConfirmModal';
+
+const PAGE_SIZE = 25;
 
 interface FormState {
   id: string | null;
@@ -20,11 +25,14 @@ const emptyForm: FormState = {
 };
 
 export default function SuppliersPage() {
+  const toast = useToast();
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [form, setForm] = useState<FormState | null>(null);
   const [saving, setSaving] = useState(false);
+  const [page, setPage] = useState(1);
+  const [confirm, setConfirm] = useState<{ message: string; onConfirm: () => void } | null>(null);
 
   async function load() {
     setLoading(true);
@@ -89,13 +97,18 @@ export default function SuppliersPage() {
   }
 
   async function remove(s: Supplier) {
-    if (!confirm(`Remover fornecedor "${s.name}"?`)) return;
-    const { error } = await supabase.from('suppliers').delete().eq('id', s.id);
-    if (error) {
-      alert(`Não foi possível remover: ${error.message}`);
-      return;
-    }
-    await load();
+    setConfirm({
+      message: `Remover fornecedor "${s.name}"?`,
+      onConfirm: async () => {
+        setConfirm(null);
+        const { error } = await supabase.from('suppliers').delete().eq('id', s.id);
+        if (error) {
+          toast.error('Erro', `Não foi possível remover: ${error.message}`);
+          return;
+        }
+        await load();
+      },
+    });
   }
 
   return (
@@ -136,7 +149,7 @@ export default function SuppliersPage() {
               </tr>
             </thead>
             <tbody>
-              {suppliers.map((s) => (
+              {suppliers.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE).map((s) => (
                 <tr key={s.id} className="border-b border-slate-100 last:border-0">
                   <td className="px-5 py-3 font-medium text-slate-900">{s.name}</td>
                   <td className="px-5 py-3 text-slate-600">{s.email}</td>
@@ -161,7 +174,19 @@ export default function SuppliersPage() {
               ))}
             </tbody>
           </table>
+          <Pagination total={suppliers.length} page={page} pageSize={PAGE_SIZE} onChange={setPage} className="px-5" />
         </Card>
+      )}
+
+      {confirm && (
+        <ConfirmModal
+          title="Confirmar ação"
+          description={confirm.message}
+          confirmLabel="Confirmar"
+          variant="danger"
+          onConfirm={confirm.onConfirm}
+          onCancel={() => setConfirm(null)}
+        />
       )}
 
       {form && (

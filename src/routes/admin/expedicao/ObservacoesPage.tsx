@@ -6,6 +6,8 @@ import { Button } from '@/components/ui/Button';
 import { cn } from '@/lib/utils';
 import { STATUS_LABEL, STATUS_PILL, formatDateTime } from './shared';
 import type { ShipmentStatus } from '@/types/db';
+import { useToast } from '@/components/ui/Toast';
+import { ConfirmModal } from '@/components/ui/ConfirmModal';
 
 interface ObservationRow {
   id: string;
@@ -21,10 +23,12 @@ interface ObservationRow {
 }
 
 export default function ObservacoesPage() {
+  const toast = useToast();
   const [list, setList] = useState<ObservationRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
+  const [confirm, setConfirm] = useState<{ message: string; onConfirm: () => void } | null>(null);
 
   async function load() {
     setLoading(true);
@@ -52,13 +56,18 @@ export default function ObservacoesPage() {
     : list;
 
   async function deleteObservation(id: string) {
-    if (!confirm('Apagar essa observação?')) return;
-    const { error } = await supabase.from('shipment_observations').delete().eq('id', id);
-    if (error) {
-      alert(`Erro: ${error.message}`);
-      return;
-    }
-    setList((prev) => prev.filter((o) => o.id !== id));
+    setConfirm({
+      message: 'Apagar essa observação?',
+      onConfirm: async () => {
+        setConfirm(null);
+        const { error } = await supabase.from('shipment_observations').delete().eq('id', id);
+        if (error) {
+          toast.error('Erro', error.message);
+          return;
+        }
+        setList((prev) => prev.filter((o) => o.id !== id));
+      },
+    });
   }
 
   return (
@@ -158,6 +167,17 @@ export default function ObservacoesPage() {
             </Card>
           ))}
         </div>
+      )}
+
+      {confirm && (
+        <ConfirmModal
+          title="Confirmar ação"
+          description={confirm.message}
+          confirmLabel="Confirmar"
+          variant="danger"
+          onConfirm={confirm.onConfirm}
+          onCancel={() => setConfirm(null)}
+        />
       )}
     </div>
   );

@@ -25,6 +25,8 @@ import ComNotaPage from '@/routes/admin/financeira/ComNotaPage';
 import SemNotaPage from '@/routes/admin/financeira/SemNotaPage';
 import RelatorioFinanceiraPage from '@/routes/admin/financeira/RelatorioFinanceiraPage';
 import SupplierQuotePage from '@/routes/public/SupplierQuotePage';
+import WhatsAppPage from '@/routes/admin/WhatsAppPage';
+import NotFoundPage from '@/routes/NotFoundPage';
 import PrestadoresPage from '@/routes/admin/rh/PrestadoresPage';
 import CalculosPage from '@/routes/admin/rh/CalculosPage';
 import HistoricoRhPage from '@/routes/admin/rh/HistoricoRhPage';
@@ -106,7 +108,7 @@ export default function App() {
     return (
       <Routes>
         <Route path="/cotacao/:token" element={<SupplierQuotePage />} />
-        <Route path="*" element={<div className="p-6">404</div>} />
+        <Route path="*" element={<NotFoundPage />} />
       </Routes>
     );
   }
@@ -260,6 +262,7 @@ function AuthenticatedApp() {
           path="acessos"
           element={isAccessAdmin ? <AccessUsersPage /> : <Navigate to="/admin/produtos" replace />}
         />
+        <Route path="whatsapp" element={<WhatsAppPage />} />
         <Route path="rh" element={<Navigate to="/admin/rh/prestadores" replace />} />
         <Route path="rh/prestadores" element={isRhUser ? <PrestadoresPage /> : <Navigate to="/admin" replace />} />
         <Route path="rh/calculos"    element={isRhUser ? <CalculosPage />    : <Navigate to="/admin" replace />} />
@@ -268,7 +271,7 @@ function AuthenticatedApp() {
 
       {/* Fallback pra desenvolvimento local: /cotacao/:token continua funcionando */}
       <Route path="/cotacao/:token" element={<SupplierQuotePage />} />
-      <Route path="*" element={<div className="p-6">404</div>} />
+      <Route path="*" element={<NotFoundPage />} />
     </Routes>
     </InternalAuthProvider>
   );

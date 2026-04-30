@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/Button';
 import { Card, CardBody } from '@/components/ui/Card';
 import { Input, Label, Textarea } from '@/components/ui/Input';
 import { formatBRL } from '@/lib/utils';
+import { useToast } from '@/components/ui/Toast';
 
 const BOM_PAGE_SIZE = 5;
 
@@ -31,6 +32,7 @@ const emptyForm: FormState = {
 };
 
 export default function CostsPage() {
+  const toast = useToast();
   const [products, setProducts] = useState<ProductWithCost[]>([]);
   const [loading, setLoading] = useState(true);
   const [listError, setListError] = useState<string | null>(null);
@@ -204,7 +206,7 @@ export default function CostsPage() {
     const { error } = await supabase.from('products').delete().eq('id', confirmDelete.id);
     setDeleting(false);
     if (error) {
-      alert(`Não foi possível excluir: ${error.message}`);
+      toast.error('Erro', `Não foi possível excluir: ${error.message}`);
       return;
     }
     setConfirmDelete(null);

@@ -6,6 +6,7 @@ import { Card, CardBody, CardHeader, CardTitle } from '@/components/ui/Card';
 import { Input, Label, Textarea } from '@/components/ui/Input';
 import { fetchUsdBrl } from '@/lib/currency';
 import { formatBRL, buildPublicQuoteUrl } from '@/lib/utils';
+import { useToast } from '@/components/ui/Toast';
 
 interface QuotationListItem {
   id: string;
@@ -76,6 +77,7 @@ const statusLabel: Record<string, string> = {
 };
 
 export default function QuotationsPage() {
+  const toast = useToast();
   const [list, setList] = useState<QuotationListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [listError, setListError] = useState<string | null>(null);
@@ -175,7 +177,7 @@ export default function QuotationsPage() {
     const { error } = await supabase.from('quotations').delete().eq('id', confirmDelete.id);
     setDeletingId(null);
     if (error) {
-      alert(`Não foi possível excluir: ${error.message}`);
+      toast.error('Erro', `Não foi possível excluir: ${error.message}`);
       return;
     }
     setConfirmDelete(null);

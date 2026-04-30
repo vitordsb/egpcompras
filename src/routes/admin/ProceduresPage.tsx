@@ -3,6 +3,7 @@ import { supabase } from '@/lib/supabase';
 import { Button } from '@/components/ui/Button';
 import { Card, CardBody, CardHeader, CardTitle } from '@/components/ui/Card';
 import { Input, Label, Textarea } from '@/components/ui/Input';
+import { useToast } from '@/components/ui/Toast';
 
 interface Procedure {
   id: string;
@@ -23,6 +24,7 @@ interface FormState {
 const emptyForm: FormState = { id: null, name: '', description: '', steps: '' };
 
 export default function ProceduresPage() {
+  const toast = useToast();
   const [list, setList] = useState<Procedure[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -101,7 +103,7 @@ export default function ProceduresPage() {
       .delete()
       .eq('id', confirmDelete.id);
     if (error) {
-      alert(`Erro: ${error.message}`);
+      toast.error('Erro', error.message);
       return;
     }
     setConfirmDelete(null);

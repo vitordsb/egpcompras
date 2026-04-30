@@ -2,6 +2,9 @@ import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '@/lib/supabase';
 import { Card } from '@/components/ui/Card';
 import { cn } from '@/lib/utils';
+import Pagination from '@/components/ui/Pagination';
+
+const PAGE_SIZE = 25;
 
 interface Row {
   id: string;
@@ -32,6 +35,7 @@ export default function ComNotaPage() {
   const [rows, setRows] = useState<Row[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
+  const [page, setPage] = useState(1);
 
   useEffect(() => {
     (async () => {
@@ -54,6 +58,10 @@ export default function ComNotaPage() {
       `${r.client_name} ${r.numero_nfe ?? ''} ${r.numero_venda ?? ''}`.toLowerCase().includes(q)
     );
   }, [rows, search]);
+
+  useEffect(() => { setPage(1); }, [search]);
+
+  const paginated = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
   const totalAberto = rows.reduce((acc, r) => {
     return acc + r.titulos.filter((t) => t.status === 'aberto').reduce((s, t) => s + Number(t.valor), 0);
@@ -103,7 +111,7 @@ export default function ComNotaPage() {
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((r) => (
+                {paginated.map((r) => (
                   <tr key={r.id} className="border-b border-slate-100 last:border-0">
                     <td className="px-5 py-3 font-medium text-slate-900">{r.client_name}</td>
                     <td className="px-5 py-3 text-slate-600">
@@ -138,6 +146,7 @@ export default function ComNotaPage() {
               </tbody>
             </table>
           </div>
+          <Pagination total={filtered.length} page={page} pageSize={PAGE_SIZE} onChange={setPage} className="px-5" />
         </Card>
       )}
     </div>

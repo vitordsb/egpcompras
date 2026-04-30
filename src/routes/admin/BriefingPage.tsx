@@ -29,6 +29,21 @@ interface MemoryHealth {
   level: 'ok' | 'warning' | 'critical';
 }
 
+interface WhatsAppConv {
+  phone: string;
+  updated_at: string;
+  lastMsg: string;
+}
+
+interface CriticalStock {
+  item_code: string;
+  item_name: string;
+  quantity: number;
+  reserved_quantity: number;
+  min_quantity: number;
+  unit: string;
+}
+
 interface OverdueTitle {
   id: string;
   client_name: string;
@@ -64,11 +79,20 @@ function greeting(): string {
   return 'Boa noite';
 }
 
+function fmtPhone(p: string) {
+  const d = p.replace(/\D/g, '');
+  if (d.length === 13) return `(${d.slice(2, 4)}) ${d.slice(4, 9)}-${d.slice(9)}`;
+  if (d.length === 12) return `(${d.slice(2, 4)}) ${d.slice(4, 8)}-${d.slice(8)}`;
+  return p;
+}
+
 export default function BriefingPage() {
   const [runs, setRuns] = useState<TaskRun[]>([]);
   const [lateShipments, setLateShipments] = useState<LateShipment[]>([]);
   const [overdueTitles, setOverdueTitles] = useState<OverdueTitle[]>([]);
   const [memoryHealth, setMemoryHealth] = useState<MemoryHealth | null>(null);
+  const [whatsappConvs, setWhatsappConvs] = useState<WhatsAppConv[]>([]);
+  const [criticalStock, setCriticalStock] = useState<CriticalStock[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -76,7 +100,7 @@ export default function BriefingPage() {
       const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
       const today = new Date().toISOString().slice(0, 10);
 
-      const [runsRes, shipmentsRes, titlesRes, memoriesRes] = await Promise.all([
+      const [runsRes, shipmentsRes, titlesRes, memoriesRes, waRes, stockRes] = await Promise.all([
         supabase
           .from('scheduled_task_runs')
           .select('id, started_at, completed_at, status, result, task:scheduled_tasks(name)')
@@ -103,6 +127,21 @@ export default function BriefingPage() {
           .limit(20),
 
         supabase.from('agent_memories').select('id', { count: 'exact', head: true }),
+
+        // WhatsApp — conversas das últimas 48h
+        supabase
+          .from('whatsapp_sessions')
+          .select('phone, updated_at')
+          .gte('updated_at', new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString())
+          .order('updated_at', { ascending: false })
+          .limit(5),
+
+        // Estoque crítico — abaixo do mínimo
+        supabase
+          .from('stock_items')
+          .select('item_code, item_name, quantity, reserved_quantity, min_quantity, unit')
+          .gt('min_quantity', 0)
+          .limit(50),
       ]);
 
       setRuns((runsRes.data ?? []) as unknown as TaskRun[]);
@@ -113,12 +152,44 @@ export default function BriefingPage() {
         count: memCount,
         level: memCount >= 80 ? 'critical' : memCount >= 50 ? 'warning' : 'ok',
       });
+
+      // WhatsApp — busca última mensagem de cada conversa
+      const sessions = (waRes.data ?? []) as any[];
+      const convs: WhatsAppConv[] = await Promise.all(
+        sessions.map(async (s) => {
+          const { data: msgs } = await supabase
+            .from('whatsapp_messages')
+            .select('text, direction')
+            .eq('phone', s.phone)
+            .order('created_at', { ascending: false })
+            .limit(1);
+          const last = msgs?.[0] as any;
+          return {
+            phone: s.phone,
+            updated_at: s.updated_at,
+            lastMsg: last ? `${last.direction === 'in' ? '👤 ' : '🤖 '}${last.text?.slice(0, 70)}` : '',
+          };
+        })
+      );
+      setWhatsappConvs(convs);
+
+      // Estoque crítico
+      const stockItems = (stockRes.data ?? []) as CriticalStock[];
+      setCriticalStock(
+        stockItems
+          .filter((s) => (Number(s.quantity) - Number(s.reserved_quantity)) <= Number(s.min_quantity))
+          .sort((a, b) => (Number(a.quantity) - Number(a.reserved_quantity)) - (Number(b.quantity) - Number(b.reserved_quantity)))
+          .slice(0, 10)
+      );
+
       setLoading(false);
     }
     load();
+    const id = setInterval(load, 60000);
+    return () => clearInterval(id);
   }, []);
 
-  const allClear = !loading && runs.length === 0 && lateShipments.length === 0 && overdueTitles.length === 0;
+  const allClear = !loading && runs.length === 0 && lateShipments.length === 0 && overdueTitles.length === 0 && criticalStock.length === 0;
 
   return (
     <div className="p-6 md:p-8">
@@ -319,6 +390,99 @@ export default function BriefingPage() {
               </div>
             )}
           </section>
+
+          {/* ---- WhatsApp ---- */}
+          {whatsappConvs.length > 0 && (
+            <section>
+              <div className="mb-3 flex items-center justify-between">
+                <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500">
+                  WhatsApp — últimas 48h
+                  <span className="ml-2 rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-700">
+                    {whatsappConvs.length}
+                  </span>
+                </h2>
+                <Link to="/admin/whatsapp" className="text-xs text-brand-600 hover:underline">
+                  ver conversas
+                </Link>
+              </div>
+              <div className="space-y-2">
+                {whatsappConvs.map((c) => (
+                  <Link
+                    key={c.phone}
+                    to="/admin/whatsapp"
+                    className="flex items-start gap-3 rounded-lg border border-slate-200 bg-white px-4 py-3 hover:bg-slate-50 transition-colors"
+                  >
+                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-green-100 text-sm">
+                      💬
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-sm font-medium text-slate-900">{fmtPhone(c.phone)}</span>
+                        <span className="text-[11px] text-slate-400 shrink-0">
+                          {new Date(c.updated_at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                        </span>
+                      </div>
+                      {c.lastMsg && <p className="mt-0.5 truncate text-xs text-slate-500">{c.lastMsg}</p>}
+                    </div>
+                  </Link>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {/* ---- Estoque crítico ---- */}
+          {criticalStock.length > 0 && (
+            <section>
+              <div className="mb-3 flex items-center justify-between">
+                <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500">
+                  Estoque crítico
+                  <span className="ml-2 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700">
+                    {criticalStock.length}
+                  </span>
+                </h2>
+                <Link to="/admin/estoque" className="text-xs text-brand-600 hover:underline">
+                  ver estoque
+                </Link>
+              </div>
+              <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
+                <table className="w-full text-sm">
+                  <thead className="border-b border-slate-100 bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
+                    <tr>
+                      <th className="px-4 py-2.5">Item</th>
+                      <th className="px-4 py-2.5 text-right">Disponível</th>
+                      <th className="px-4 py-2.5 text-right">Mínimo</th>
+                      <th className="px-4 py-2.5 text-center">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {criticalStock.map((s) => {
+                      const avail = Number(s.quantity) - Number(s.reserved_quantity);
+                      const negative = avail < 0;
+                      return (
+                        <tr key={s.item_code} className={cn('border-b border-slate-100 last:border-0', negative && 'bg-red-50/40')}>
+                          <td className="px-4 py-2.5">
+                            <div className="font-medium text-slate-900">{s.item_name}</div>
+                            <div className="font-mono text-[11px] text-slate-400">{s.item_code}</div>
+                          </td>
+                          <td className={cn('px-4 py-2.5 text-right font-semibold tabular-nums', negative ? 'text-red-700' : 'text-amber-700')}>
+                            {avail} {s.unit}
+                          </td>
+                          <td className="px-4 py-2.5 text-right tabular-nums text-slate-500">
+                            {Number(s.min_quantity)} {s.unit}
+                          </td>
+                          <td className="px-4 py-2.5 text-center">
+                            <span className={cn('rounded-full px-2 py-0.5 text-[11px] font-medium', negative ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700')}>
+                              {negative ? 'Negativo' : 'Abaixo do mín.'}
+                            </span>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          )}
 
           {/* Saúde do sistema — só aparece quando há algo a dizer */}
           {memoryHealth && memoryHealth.level !== 'ok' && (

@@ -8,6 +8,28 @@ import { geminiProvider } from '@/lib/providers/gemini';
 import type { AgentProvider, ProviderResponse, ProviderRunArgs } from '@/lib/providers/types';
 import type { ChatTurn } from '@/lib/agent-types';
 
+// Converte recursivamente todas as strings ISO date/datetime num objeto para DD/MM/YYYY ou DD/MM/YYYY HH:mm
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})?)?$/;
+function formatDatesInResult(value: unknown): unknown {
+  if (typeof value === 'string' && ISO_DATE_RE.test(value)) {
+    const [datePart, timePart] = value.split('T');
+    const [y, m, d] = datePart.split('-');
+    const base = `${d}/${m}/${y}`;
+    if (timePart) {
+      const hm = timePart.slice(0, 5);
+      return `${base} ${hm}`;
+    }
+    return base;
+  }
+  if (Array.isArray(value)) return value.map(formatDatesInResult);
+  if (value !== null && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([k, v]) => [k, formatDatesInResult(v)])
+    );
+  }
+  return value;
+}
+
 export interface FriendlyError {
   title: string;
   description: string;
@@ -250,6 +272,7 @@ Se não tiver como desfazer completamente (ex: ação sem rollback direto), avis
    - Quando o usuário pedir pra cadastrar vários componentes de uma vez, SEMPRE use bulk_create_components com a lista completa (uma chamada só). NÃO use create_component em loop.
 6. Sempre que possível, agrupe info de retorno num formato fácil de ler: para cotações criadas, mostre o link público em destaque e a lista de invites nominais.
 7. Responda em português do Brasil, conciso. Use markdown leve (negrito, listas) quando ajudar.
+8. **Datas:** sempre escreva datas no formato DD/MM/YYYY. Nunca escreva datas no formato ISO (YYYY-MM-DD) no texto da resposta. Para calcular datas futuras, use a data atual do contexto (variável currentDate).
 
 ## Estilo de resposta
 **Por padrão: CURTO E DIRETO.** Pense como Slack, não como ensaio.
@@ -349,6 +372,18 @@ Consultas de marca própria:
 - "quais controles têm marca própria pendente?" / "lista de clichê" / "o que tem de marca própria?" → get_private_label_orders()
 - "cadastra a marca HIKTEK" → register_client_brand(brand_name="HIKTEK", client_name="HIKTEC")
 - "lista as marcas cadastradas" → list_client_brands()
+
+**Fluxo de gravação (GLK) — NÃO é uma saída de pedido:**
+Os controles de marca própria precisam ser gravados (estampados) pela GLK antes de serem entregues ao cliente.
+- "Mandei os clichês para a GLK" / "enviei pra GLK gravar" / "os clichês foram pra GLK" → significa que o Vitor ENVIOU OS CLICHÊS para a GLK processar. NÃO é saída do pedido.
+  Ações obrigatórias (faça TODAS):
+  1. Chame get_private_label_orders() para identificar os pedidos de marca própria pendentes dos clientes mencionados.
+  2. Para cada pedido encontrado: adicione observação "Clichês enviados para gravação na GLK em DD/MM/YYYY. Previsão de retorno: DD/MM/YYYY."
+  3. Para cada pedido encontrado: chame update_purchase_need_status (ou register_purchase_need) para marcar os controles desse pedido como status="pedido" no Falta Comprar — isso indica que estão em produção/encomendados. Use o item_name do controle e o shipment_id do pedido.
+  4. NÃO marque o pedido como "saiu".
+- "Voltou da GLK" / "GLK entregou" → adicione observação de retorno. O pedido ainda NÃO saiu. Atualize o purchase_need para status="chegou".
+- O pedido só deve ser marcado como "saiu" quando os controles GRAVADOS forem despachados para o cliente final.
+- Analogia: é igual ao fluxo da montadora — você manda material para processar e ele volta. A entrega ao cliente é uma etapa separada.
 
 Exceção para lote: faça as duas verificações para cada documento.
 
@@ -711,7 +746,10 @@ function buildSystemInstruction(
   procedures: { name: string; description: string | null }[],
   currentUser?: string
 ): string {
+  const hoje = new Date().toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'America/Sao_Paulo' });
+  const hojeISO = new Date().toLocaleDateString('sv-SE', { timeZone: 'America/Sao_Paulo' }); // YYYY-MM-DD para cálculos internos
   let out = SYSTEM_INSTRUCTION;
+  out += `\n\n## Data atual\nHoje é **${hoje}** (${hojeISO}). Use esse valor para qualquer cálculo de prazo, "daqui a X dias", "5 dias úteis", etc.`;
   if (currentUser) {
     out += `\n\n## Sessão atual\nUsuário logado: **${currentUser}**\nSempre que uma tool aceitar o campo "author", passe "${currentUser}". Isso registra internamente quem fez cada ação.`;
   }
@@ -872,7 +910,7 @@ export async function runAgent({
       let toolData: unknown = null;
       let toolError: string | undefined;
       try {
-        toolData = await executeTool(call.name, call.args);
+        toolData = formatDatesInResult(await executeTool(call.name, call.args));
       } catch (err) {
         toolError = err instanceof Error ? err.message : String(err);
       }

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase';
 import { Card, CardBody } from '@/components/ui/Card';
 import { cn } from '@/lib/utils';
+import { ConfirmModal } from '@/components/ui/ConfirmModal';
 
 interface Task {
   id: string;
@@ -34,6 +35,7 @@ export default function TarefasPage() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [runs, setRuns] = useState<Run[]>([]);
   const [loading, setLoading] = useState(true);
+  const [confirm, setConfirm] = useState<{ message: string; onConfirm: () => void } | null>(null);
 
   async function load() {
     const [tasksRes, runsRes] = await Promise.all([
@@ -56,9 +58,14 @@ export default function TarefasPage() {
   }
 
   async function deleteTask(task: Task) {
-    if (!window.confirm(`Remover a tarefa "${task.name}"?`)) return;
-    await supabase.from('scheduled_tasks').delete().eq('id', task.id);
-    setTasks((prev) => prev.filter((t) => t.id !== task.id));
+    setConfirm({
+      message: `Remover a tarefa "${task.name}"?`,
+      onConfirm: async () => {
+        setConfirm(null);
+        await supabase.from('scheduled_tasks').delete().eq('id', task.id);
+        setTasks((prev) => prev.filter((t) => t.id !== task.id));
+      },
+    });
   }
 
   return (
@@ -157,6 +164,17 @@ export default function TarefasPage() {
             </Card>
           ))}
         </div>
+      )}
+
+      {confirm && (
+        <ConfirmModal
+          title="Confirmar ação"
+          description={confirm.message}
+          confirmLabel="Confirmar"
+          variant="danger"
+          onConfirm={confirm.onConfirm}
+          onCancel={() => setConfirm(null)}
+        />
       )}
 
       {/* Histórico de execuções */}

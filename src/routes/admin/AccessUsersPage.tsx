@@ -3,6 +3,7 @@ import { Button } from '@/components/ui/Button';
 import { Card, CardBody, CardHeader, CardTitle } from '@/components/ui/Card';
 import { Input, Label } from '@/components/ui/Input';
 import { supabase } from '@/lib/supabase';
+import { ConfirmModal } from '@/components/ui/ConfirmModal';
 
 interface AccessUser {
   id: string;
@@ -40,6 +41,7 @@ export default function AccessUsersPage() {
   const [resetUser, setResetUser] = useState<AccessUser | null>(null);
   const [resetPassword, setResetPassword] = useState('');
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [confirm, setConfirm] = useState<{ message: string; onConfirm: () => void } | null>(null);
 
   async function loadUsers() {
     setLoading(true);
@@ -104,22 +106,27 @@ export default function AccessUsersPage() {
   }
 
   async function deleteUser(user: AccessUser) {
-    if (!window.confirm(`Remover acesso de ${user.email}?`)) return;
-    setDeletingId(user.id);
-    setError(null);
-    try {
-      await readJson(
-        await fetch(`/api/master-users?id=${encodeURIComponent(user.id)}`, {
-          method: 'DELETE',
-          headers: await authHeaders(),
-        })
-      );
-      await loadUsers();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setDeletingId(null);
-    }
+    setConfirm({
+      message: `Remover acesso de ${user.email}?`,
+      onConfirm: async () => {
+        setConfirm(null);
+        setDeletingId(user.id);
+        setError(null);
+        try {
+          await readJson(
+            await fetch(`/api/master-users?id=${encodeURIComponent(user.id)}`, {
+              method: 'DELETE',
+              headers: await authHeaders(),
+            })
+          );
+          await loadUsers();
+        } catch (err) {
+          setError(err instanceof Error ? err.message : String(err));
+        } finally {
+          setDeletingId(null);
+        }
+      },
+    });
   }
 
   return (
@@ -232,6 +239,17 @@ export default function AccessUsersPage() {
           )}
         </Card>
       </div>
+
+      {confirm && (
+        <ConfirmModal
+          title="Confirmar ação"
+          description={confirm.message}
+          confirmLabel="Confirmar"
+          variant="danger"
+          onConfirm={confirm.onConfirm}
+          onCancel={() => setConfirm(null)}
+        />
+      )}
 
       {resetUser && (
         <div
