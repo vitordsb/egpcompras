@@ -22,3 +22,4 @@ _sessions/
 !src/**/*.png
 .vercel
 .env*.local
+supabase/.temp/
