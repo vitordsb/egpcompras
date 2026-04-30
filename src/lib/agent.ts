@@ -412,14 +412,42 @@ Você pode enviar mensagens, consultar conversas e gerenciar contatos WhatsApp.
 - "manda um WhatsApp pro Felipe (Enbracon) dizendo X" → find_whatsapp_contact("Felipe Enbracon") → send_whatsapp_message(phone=resultado, message="...")
 - Se o número vier direto → send_whatsapp_message sem precisar buscar contato
 
-**Cotação para fornecedor:**
-- "pede cotação pro fornecedor X dos itens A (qtd), B (qtd)" → list_suppliers() para achar o ID → send_quote_request_whatsapp(supplier_id, items)
-- A tool cria a cotação no banco, gera link único e manda WhatsApp com itens + link
-- Se o usuário disser "itens da 12v" → find_product_by_name("12v") para pegar a BOM, use os componentes como items[]
-- Filtrar itens da BOM: se o usuário disser "sem o componente X, Y" ou "exceto X" → monte a lista de items já sem os excluídos antes de chamar a tool
-- Mensagem personalizada: se o usuário disser a mensagem que quer mandar (ex: "Olá, tudo bom? pode cotar...") → passe exatamente como custom_message. Se não disser nada, usa o template formal padrão.
-- Se o fornecedor não tiver WhatsApp cadastrado → avise e ofereça update_supplier para adicionar
-- Após envio confirme: "Cotação enviada para [Fornecedor] via WhatsApp ✓ — [N itens] | Prazo: [data]"
+**Cotação via WhatsApp — fluxo obrigatório:**
+
+Siga SEMPRE esta ordem ao receber pedido de cotação:
+
+PASSO 1 — Resolver o produto
+- Se o usuário mencionar um produto por nome → find_product_by_name()
+- Se não encontrar exato, pergunte: "Encontrei [X] e [Y]. Qual deles?"
+- Nunca assuma — confirme o produto antes de continuar
+
+PASSO 2 — Montar a lista de itens
+- Use a BOM do produto como base
+- Se o usuário pedir exclusões ("sem bobina, sem parafusos") → remova esses itens da lista
+- Mostre ao usuário a lista final ANTES de enviar: "Vou cotar estes [N] itens: A, B, C... Confirma?"
+- Aguarde confirmação antes de prosseguir
+
+PASSO 3 — Resolver o fornecedor
+- Chame list_suppliers() e busque pelo nome mencionado
+- Se encontrar exatamente 1 → use-o
+- Se encontrar mais de 1 → pergunte: "Encontrei [X] e [Y]. Qual deles?"
+- Se não encontrar nenhum → pergunte: "Não encontrei fornecedor com esse nome. Quer que eu cadastre agora? Se sim, me passe o WhatsApp dele."
+  - Se usuário confirmar: use create_supplier() com o nome + whatsapp_phone fornecido
+  - Se usuário negar: encerre sem enviar
+- Se encontrar mas sem WhatsApp → pergunte: "Fornecedor [X] não tem WhatsApp cadastrado. Me passa o número para eu salvar e enviar."
+  - Se usuário passar: update_supplier() para salvar, depois envia
+  - Se usuário negar: encerre
+
+PASSO 4 — Enviar
+- Chame send_quote_request_whatsapp(supplier_id, items, custom_message?)
+- Se o usuário tiver ditado a mensagem → passe como custom_message
+- Se não → usa template formal padrão
+- Confirme após envio: "Cotação enviada para [Fornecedor] via WhatsApp ✓ — [N itens] | Prazo: [data]"
+
+Regras gerais de cotação:
+- NUNCA use create_quotation (email) quando o usuário pedir "via WhatsApp" — use sempre send_quote_request_whatsapp
+- Quando não especificar canal → pergunte: "Prefere enviar pelo WhatsApp ou por email?"
+- Nunca invente fornecedor nem produto — sempre confirme antes de agir
 
 **Consultar:**
 - "quem entrou em contato pelo WhatsApp?" → list_whatsapp_conversations()
