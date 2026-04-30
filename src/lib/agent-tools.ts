@@ -683,6 +683,42 @@ export const toolDeclarations = [
     },
   },
 
+  // ---------- WHATSAPP (envio e consulta via agente interno) ----------
+  {
+    name: 'send_whatsapp_message',
+    description: 'Envia uma mensagem de texto pelo WhatsApp para um número específico. Use quando o usuário pedir para avisar, notificar ou responder um cliente pelo WhatsApp.',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        phone:   { type: 'STRING' as Type, description: 'Número do destinatário. Pode ser com ou sem DDI — ex: "11 93957-2807" ou "5511939572807".' },
+        message: { type: 'STRING' as Type, description: 'Texto da mensagem a enviar. Pode usar formatação WhatsApp (*negrito*, _itálico_).' },
+      },
+      required: ['phone', 'message'],
+    },
+  },
+  {
+    name: 'list_whatsapp_conversations',
+    description: 'Lista as conversas WhatsApp recentes com prévia da última mensagem. Use para ver quem entrou em contato ou antes de enviar uma mensagem.',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        limit: { type: 'NUMBER' as Type, description: 'Máximo de conversas (padrão 10).' },
+      },
+    },
+  },
+  {
+    name: 'get_whatsapp_conversation',
+    description: 'Retorna o histórico completo de mensagens de um número específico.',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        phone: { type: 'STRING' as Type, description: 'Número do contato.' },
+        limit: { type: 'NUMBER' as Type, description: 'Últimas N mensagens (padrão 20).' },
+      },
+      required: ['phone'],
+    },
+  },
+
   // ---------- MARCAS PRÓPRIAS (CLICHÊS) ----------
   {
     name: 'list_client_brands',
@@ -3378,6 +3414,75 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
       const { data, error } = await supabase.from('prestadores').insert(payload).select('id, nome').single();
       if (error) throw new Error(error.message);
       return { created: data };
+    }
+
+    case 'send_whatsapp_message': {
+      const phone   = String(args.phone ?? '').replace(/\D/g, '');
+      const message = String(args.message ?? '').trim();
+      if (!phone) throw new Error('phone é obrigatório');
+      if (!message) throw new Error('message é obrigatório');
+
+      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
+      const anonKey     = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+
+      const res = await fetch(`${supabaseUrl}/functions/v1/whatsapp-send`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', apikey: anonKey, Authorization: `Bearer ${anonKey}` },
+        body: JSON.stringify({ to: phone, text: message }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error ?? 'Falha ao enviar mensagem WhatsApp');
+      return { sent: true, to: phone, message_id: json.message_id };
+    }
+
+    case 'list_whatsapp_conversations': {
+      const limit = Number(args.limit ?? 10);
+      const { data: sessions } = await supabase
+        .from('whatsapp_sessions')
+        .select('phone, updated_at')
+        .order('updated_at', { ascending: false })
+        .limit(limit);
+
+      const convs = await Promise.all(
+        ((sessions ?? []) as any[]).map(async (s) => {
+          const { data: msgs } = await supabase
+            .from('whatsapp_messages')
+            .select('direction, text, created_at')
+            .eq('phone', s.phone)
+            .order('created_at', { ascending: false })
+            .limit(1);
+          const last = (msgs as any[])?.[0];
+          return {
+            phone: s.phone,
+            last_activity: s.updated_at,
+            last_message: last?.text?.slice(0, 100),
+            last_direction: last?.direction,
+          };
+        })
+      );
+      return { total: convs.length, conversations: convs };
+    }
+
+    case 'get_whatsapp_conversation': {
+      const phone = String(args.phone ?? '').replace(/\D/g, '');
+      if (!phone) throw new Error('phone é obrigatório');
+      const limit = Number(args.limit ?? 20);
+
+      const { data: msgs } = await supabase
+        .from('whatsapp_messages')
+        .select('direction, text, created_at')
+        .eq('phone', phone)
+        .order('created_at', { ascending: false })
+        .limit(limit);
+
+      return {
+        phone,
+        messages: ((msgs ?? []) as any[]).reverse().map((m) => ({
+          from: m.direction === 'in' ? 'cliente' : 'egp',
+          text: m.text,
+          time: m.created_at,
+        })),
+      };
     }
 
     case 'list_client_brands': {
