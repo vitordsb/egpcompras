@@ -719,7 +719,7 @@ export const toolDeclarations = [
   // ---------- WHATSAPP (envio e consulta via agente interno) ----------
   {
     name: 'save_whatsapp_contact',
-    description: 'Salva contato WhatsApp (nome ↔ número). Se o nome já existir, atualiza o número.',
+    description: 'Salva ou atualiza contato WhatsApp. Se já existir contato com o mesmo NÚMERO, atualiza o nome (caso "atualiza o contato do número X para Y"). Se já existir com mesmo NOME, atualiza o número. Senão cria novo. Use também para "atualiza o contato do número 11 93957-2807 para Felipe da Enbracon".',
     parameters: {
       type: 'OBJECT' as Type,
       properties: {
@@ -3769,28 +3769,44 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
       if (!rawPhone) throw new Error('phone é obrigatório');
       const phone = rawPhone.startsWith('55') ? rawPhone : `55${rawPhone}`;
 
-      // upsert por nome (case-insensitive)
-      const { data: existing } = await supabase
+      // 1) Tenta achar por número primeiro (atualizar nome do contato existente)
+      const { data: byPhone } = await supabase
+        .from('whatsapp_contacts')
+        .select('id, name')
+        .eq('phone', phone)
+        .maybeSingle();
+      if (byPhone) {
+        const { error } = await supabase
+          .from('whatsapp_contacts')
+          .update({ name, notes, updated_at: new Date().toISOString() })
+          .eq('id', byPhone.id);
+        if (error) throw new Error(error.message);
+        return { updated: true, name, phone, message: `Contato do número ${phone} atualizado: "${(byPhone as any).name}" → "${name}"` };
+      }
+
+      // 2) Se não existe pelo número, tenta achar pelo nome (compat com fluxo antigo)
+      const { data: byName } = await supabase
         .from('whatsapp_contacts')
         .select('id')
         .ilike('name', name)
         .limit(1)
         .maybeSingle();
 
-      if (existing) {
+      if (byName) {
         const { error } = await supabase
           .from('whatsapp_contacts')
           .update({ phone, notes, updated_at: new Date().toISOString() })
-          .eq('id', existing.id);
+          .eq('id', byName.id);
         if (error) throw new Error(error.message);
         return { updated: true, name, phone, message: `Contato "${name}" atualizado → ${phone}` };
-      } else {
-        const { error } = await supabase
-          .from('whatsapp_contacts')
-          .insert({ name, phone, notes });
-        if (error) throw new Error(error.message);
-        return { created: true, name, phone, message: `Contato "${name}" cadastrado → ${phone}` };
       }
+
+      // 3) Cria novo
+      const { error } = await supabase
+        .from('whatsapp_contacts')
+        .insert({ name, phone, notes });
+      if (error) throw new Error(error.message);
+      return { created: true, name, phone, message: `Contato "${name}" cadastrado → ${phone}` };
     }
 
     case 'find_whatsapp_contact': {

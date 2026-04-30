@@ -74,6 +74,54 @@ export default function WhatsAppPage() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingMsgs, setLoadingMsgs] = useState(false);
+  // Contatos: phone (5511...) → name
+  const [contactByPhone, setContactByPhone] = useState<Record<string, string>>({});
+  const [editingContact, setEditingContact] = useState(false);
+  const [contactDraft, setContactDraft] = useState('');
+  const [savingContact, setSavingContact] = useState(false);
+
+  async function loadContacts() {
+    const { data } = await supabase
+      .from('whatsapp_contacts')
+      .select('name, phone');
+    const map: Record<string, string> = {};
+    for (const c of (data ?? []) as { name: string; phone: string }[]) {
+      map[c.phone] = c.name;
+    }
+    setContactByPhone(map);
+  }
+
+  async function saveContactName() {
+    if (!selected) return;
+    const name = contactDraft.trim();
+    if (!name) return;
+    setSavingContact(true);
+    try {
+      const existingName = contactByPhone[selected];
+      // Verifica se já existe contato pelo número
+      const { data: existing } = await supabase
+        .from('whatsapp_contacts')
+        .select('id')
+        .eq('phone', selected)
+        .maybeSingle();
+      if (existing) {
+        await supabase
+          .from('whatsapp_contacts')
+          .update({ name, updated_at: new Date().toISOString() })
+          .eq('id', (existing as any).id);
+      } else {
+        await supabase.from('whatsapp_contacts').insert({ name, phone: selected });
+      }
+      setContactByPhone((prev) => ({ ...prev, [selected]: name }));
+      setEditingContact(false);
+      // Pequeno feedback no console (toast ja existe em outras pages)
+      console.log('Contato salvo:', existingName ? `${existingName} → ${name}` : `Novo: ${name}`);
+    } catch (err) {
+      console.error('Erro ao salvar contato:', err);
+    } finally {
+      setSavingContact(false);
+    }
+  }
 
   async function loadSessions() {
     let phones: string[] | null = null;
@@ -165,7 +213,10 @@ export default function WhatsAppPage() {
     setLoadingMsgs(false);
   }
 
-  useEffect(() => { loadSessions(); }, []);
+  useEffect(() => {
+    loadContacts();
+    loadSessions();
+  }, []);
 
   // Auto-scroll para a última mensagem quando lista mudar
   useEffect(() => {
@@ -181,6 +232,7 @@ export default function WhatsAppPage() {
     if (!selected) return;
     setDraft('');
     setSendError(null);
+    setEditingContact(false);
     loadConversation(selected);
     // Focus no input ao abrir conversa
     setTimeout(() => inputRef.current?.focus(), 50);
@@ -228,7 +280,14 @@ export default function WhatsAppPage() {
                 )}
               >
                 <div className="flex items-center justify-between gap-2">
-                  <span className="text-sm font-medium text-slate-900">{fmtPhone(s.phone)}</span>
+                  <div className="min-w-0">
+                    <span className="block truncate text-sm font-medium text-slate-900">
+                      {contactByPhone[s.phone] ?? fmtPhone(s.phone)}
+                    </span>
+                    {contactByPhone[s.phone] && (
+                      <span className="block text-[10px] text-slate-400">{fmtPhone(s.phone)}</span>
+                    )}
+                  </div>
                   <span className="text-[10px] text-slate-400 shrink-0">{fmtTime(s.updated_at)}</span>
                 </div>
                 {s.lastMsg && (
@@ -256,10 +315,26 @@ export default function WhatsAppPage() {
 
           {/* Header */}
           <div className="shrink-0 border-b border-slate-200 bg-white px-5 py-3">
-            <div className="flex items-center justify-between">
-              <div>
-                <h2 className="text-sm font-semibold text-slate-900">{fmtPhone(selected)}</h2>
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2">
+                  <h2 className="truncate text-sm font-semibold text-slate-900">
+                    {contactByPhone[selected] ?? fmtPhone(selected)}
+                  </h2>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setContactDraft(contactByPhone[selected] ?? '');
+                      setEditingContact(true);
+                    }}
+                    className="text-[11px] text-brand-600 hover:underline"
+                    title="Editar nome do contato"
+                  >
+                    {contactByPhone[selected] ? 'editar' : '+ adicionar nome'}
+                  </button>
+                </div>
                 <p className="text-xs text-slate-400">
+                  {contactByPhone[selected] && <span>{fmtPhone(selected)} · </span>}
                   Última atividade: {selectedSession ? fmtDateTime(selectedSession.updated_at) : '—'}
                 </p>
               </div>
@@ -269,6 +344,39 @@ export default function WhatsAppPage() {
                 </span>
               )}
             </div>
+
+            {/* Form inline para editar nome */}
+            {editingContact && (
+              <div className="mt-3 flex items-center gap-2">
+                <input
+                  type="text"
+                  value={contactDraft}
+                  onChange={(e) => setContactDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') saveContactName();
+                    if (e.key === 'Escape') setEditingContact(false);
+                  }}
+                  placeholder="Nome do contato (ex: Felipe Enbracon)"
+                  className="flex-1 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm focus:border-green-500 focus:outline-none focus:ring-1 focus:ring-green-500"
+                  autoFocus
+                />
+                <button
+                  type="button"
+                  onClick={saveContactName}
+                  disabled={!contactDraft.trim() || savingContact}
+                  className="rounded-md bg-green-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-green-700 disabled:opacity-50"
+                >
+                  {savingContact ? '…' : 'Salvar'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setEditingContact(false)}
+                  className="rounded-md border border-slate-200 px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-50"
+                >
+                  Cancelar
+                </button>
+              </div>
+            )}
           </div>
 
           <div className="flex flex-1 overflow-hidden">
