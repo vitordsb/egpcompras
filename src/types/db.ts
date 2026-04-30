@@ -108,6 +108,29 @@ export interface QuotationResponseItem {
 
 export type ShipmentStatus = 'pending' | 'shipped' | 'returned' | 'cancelled';
 
+export interface ClientContact {
+  id: string;
+  name: string;
+  trade_name: string | null;
+  cnpj: string | null;
+  phone: string | null;
+  whatsapp_phone: string | null;
+  email: string | null;
+  address: string | null;
+  first_purchase_at: string | null;
+  last_purchase_at: string | null;
+  total_orders: number;
+  total_spent: number;
+  tags: string[];
+  notes: string | null;
+  opt_in_promo: boolean;
+  opt_in_catalog: boolean;
+  opt_in_at: string | null;
+  opt_out_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface Shipment {
   id: string;
   numero_nfe: string | null;

@@ -26,6 +26,7 @@ import SemNotaPage from '@/routes/admin/financeira/SemNotaPage';
 import RelatorioFinanceiraPage from '@/routes/admin/financeira/RelatorioFinanceiraPage';
 import SupplierQuotePage from '@/routes/public/SupplierQuotePage';
 import WhatsAppPage from '@/routes/admin/WhatsAppPage';
+import ClientesPage from '@/routes/admin/ClientesPage';
 import NotFoundPage from '@/routes/NotFoundPage';
 import PrestadoresPage from '@/routes/admin/rh/PrestadoresPage';
 import CalculosPage from '@/routes/admin/rh/CalculosPage';
@@ -264,6 +265,7 @@ function AuthenticatedApp() {
           element={isAccessAdmin ? <AccessUsersPage /> : <Navigate to="/admin/produtos" replace />}
         />
         <Route path="whatsapp" element={<WhatsAppPage />} />
+        <Route path="clientes" element={<ClientesPage />} />
         <Route path="rh" element={<Navigate to="/admin/rh/prestadores" replace />} />
         <Route path="rh/prestadores" element={isRhUser ? <PrestadoresPage /> : <Navigate to="/admin" replace />} />
         <Route path="rh/calculos"    element={isRhUser ? <CalculosPage />    : <Navigate to="/admin" replace />} />
