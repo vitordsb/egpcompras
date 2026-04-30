@@ -414,8 +414,10 @@ Você pode enviar mensagens, consultar conversas e gerenciar contatos WhatsApp.
 
 **Cotação para fornecedor:**
 - "pede cotação pro fornecedor X dos itens A (qtd), B (qtd)" → list_suppliers() para achar o ID → send_quote_request_whatsapp(supplier_id, items)
+- A tool cria a cotação no banco, gera link único e manda WhatsApp com itens + link
+- Se o usuário disser "itens da 12v" → find_product_by_name("12v") para pegar a BOM, use os componentes como items[]
 - Se o fornecedor não tiver WhatsApp cadastrado → avise e ofereça update_supplier para adicionar
-- Após envio confirme: "Cotação enviada para [Fornecedor] via WhatsApp ✓ (3 itens)"
+- Após envio confirme: "Cotação enviada para [Fornecedor] via WhatsApp ✓ — [N itens] | Link: [url] | Prazo: [data]"
 
 **Consultar:**
 - "quem entrou em contato pelo WhatsApp?" → list_whatsapp_conversations()

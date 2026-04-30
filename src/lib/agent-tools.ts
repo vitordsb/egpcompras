@@ -384,7 +384,7 @@ export const toolDeclarations = [
   },
   {
     name: 'send_quote_request_whatsapp',
-    description: 'Envia pedido de cotação para um fornecedor via WhatsApp. Use quando o usuário disser "pede cotação pro fornecedor X dos itens Y" ou "manda pedido de cotação pro fulano". Busque o fornecedor em list_suppliers se não tiver o ID.',
+    description: 'Cria uma cotação no sistema, gera link único para o fornecedor preencher e envia via WhatsApp com lista de itens + link. Use quando o usuário pedir cotação para um fornecedor específico. Busque o fornecedor em list_suppliers se não tiver o ID.',
     parameters: {
       type: 'OBJECT' as Type,
       properties: {
@@ -402,7 +402,9 @@ export const toolDeclarations = [
             required: ['name', 'quantity'],
           },
         },
-        notes: { type: 'STRING' as Type, description: 'Observações extras (prazo desejado, qualidade, etc.).' },
+        notes:         { type: 'STRING' as Type, description: 'Observações extras (prazo desejado, qualidade, etc.).' },
+        deadline_days: { type: 'NUMBER' as Type, description: 'Prazo em dias para resposta. Default 5.' },
+        title:         { type: 'STRING' as Type, description: 'Título da cotação. Se omitido, gerado automaticamente.' },
       },
       required: ['supplier_id', 'items'],
     },
@@ -2506,6 +2508,7 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
       const items = (args.items ?? []) as Array<{ name: string; quantity: number; unit?: string }>;
       if (!items.length) throw new Error('items não pode ser vazio');
 
+      // 1. Busca fornecedor
       const { data: supplier, error: suppErr } = await supabase
         .from('suppliers')
         .select('id, name, whatsapp_phone')
@@ -2516,16 +2519,64 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
         throw new Error(`Fornecedor "${(supplier as any).name}" não tem número WhatsApp cadastrado. Use update_supplier para adicionar.`);
       }
 
+      // 2. Cria cotação no banco
+      const deadlineDays = args.deadline_days ? Number(args.deadline_days) : 5;
+      const deadline = new Date(Date.now() + deadlineDays * 86400000).toISOString();
+      const title = args.title
+        ? String(args.title)
+        : `Cotação ${(supplier as any).name} — ${new Date().toLocaleDateString('pt-BR')}`;
+
+      let usdRate: number | null = null;
+      try { const fx = await fetchUsdBrl(); usdRate = fx.rate; } catch {}
+
+      const { data: q, error: qErr } = await supabase
+        .from('quotations')
+        .insert({ title, status: 'sent', context_type: 'purchase_list', usd_brl_rate: usdRate, deadline })
+        .select('id, public_token')
+        .single();
+      if (qErr || !q) throw new Error(qErr?.message ?? 'Falha ao criar cotação');
+      const quotationId = (q as any).id as string;
+
+      // 3. Insere itens (resolve component_id se possível)
+      const itemsPayload: any[] = [];
+      for (let i = 0; i < items.length; i++) {
+        const it = items[i];
+        const { data: comps } = await supabase
+          .from('components').select('id').ilike('name', `%${it.name}%`).limit(1);
+        const comp = (comps as any[])?.[0];
+        itemsPayload.push({
+          quotation_id:        quotationId,
+          component_id:        comp?.id ?? null,
+          component_name_free: comp ? null : it.name,
+          quantity:            it.quantity,
+          position:            i,
+        });
+      }
+      await supabase.from('quotation_items').insert(itemsPayload);
+
+      // 4. Cria convite único para este fornecedor → gera token
+      const { data: invite, error: invErr } = await supabase
+        .from('quotation_invites')
+        .insert({ quotation_id: quotationId, supplier_id: supplierId, status: 'sent', sent_at: new Date().toISOString() })
+        .select('token')
+        .single();
+      if (invErr || !invite) throw new Error(invErr?.message ?? 'Falha ao criar convite');
+      const inviteUrl = buildPublicQuoteUrl((invite as any).token);
+
+      // 5. Monta e envia mensagem WhatsApp
+      const deadlineLabel = new Date(deadline).toLocaleDateString('pt-BR');
       const itemLines = items
         .map((it, i) => `${i + 1}. *${it.name}* — ${it.quantity} ${it.unit ?? 'un'}`)
         .join('\n');
-      const notes = args.notes ? `\n\n_Observações: ${args.notes}_` : '';
+      const notesLine = args.notes ? `\n\n_Obs: ${args.notes}_` : '';
       const message =
         `*Solicitação de Cotação — EGP Tecnologia*\n\n` +
         `Olá! Gostaríamos de solicitar cotação para os seguintes itens:\n\n` +
-        `${itemLines}${notes}\n\n` +
-        `Por favor, responda com *preço unitário* e *prazo de entrega* para cada item.\n\n` +
-        `Obrigado!\n_EGP Tecnologia_`;
+        `${itemLines}${notesLine}\n\n` +
+        `Acesse o link abaixo para preencher sua proposta:\n` +
+        `🔗 ${inviteUrl}\n\n` +
+        `*Prazo para resposta:* ${deadlineLabel}\n\n` +
+        `_EGP Tecnologia_`;
 
       const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
       const anonKey     = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
@@ -2536,11 +2587,15 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error ?? 'Falha ao enviar cotação WhatsApp');
+
       return {
         sent: true,
         supplier: (supplier as any).name,
         phone: (supplier as any).whatsapp_phone,
+        quotation_id: quotationId,
+        invite_url: inviteUrl,
         items_count: items.length,
+        deadline: deadlineLabel,
         message_id: json.message_id,
       };
     }
