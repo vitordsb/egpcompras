@@ -7,6 +7,12 @@ const WA_PHONE_ID = Deno.env.get('WA_PHONE_ID') ?? '';
 const SUPA_URL    = Deno.env.get('SUPABASE_URL') ?? '';
 const SUPA_JWT    = Deno.env.get('SUPA_SERVICE_JWT') ?? '';
 
+const CORS = {
+  'Access-Control-Allow-Origin':  '*',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization, apikey',
+};
+
 async function logMessage(phone: string, direction: 'in' | 'out', text: string) {
   await fetch(`${SUPA_URL}/rest/v1/whatsapp_messages`, {
     method: 'POST',
@@ -21,13 +27,14 @@ async function logMessage(phone: string, direction: 'in' | 'out', text: string) 
 }
 
 Deno.serve(async (req) => {
-  if (req.method !== 'POST') return new Response('Method not allowed', { status: 405 });
+  if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS });
+  if (req.method !== 'POST') return new Response('Method not allowed', { status: 405, headers: CORS });
 
   let body: { to?: string; text?: string };
-  try { body = await req.json(); } catch { return new Response('Invalid JSON', { status: 400 }); }
+  try { body = await req.json(); } catch { return new Response('Invalid JSON', { status: 400, headers: CORS }); }
 
   const { to, text } = body;
-  if (!to || !text) return new Response(JSON.stringify({ error: 'to e text são obrigatórios' }), { status: 400 });
+  if (!to || !text) return new Response(JSON.stringify({ error: 'to e text são obrigatórios' }), { status: 400, headers: { ...CORS, 'Content-Type': 'application/json' } });
 
   // Normaliza número: remove não-dígitos, garante código BR se não tiver DDI
   const digits = to.replace(/\D/g, '');
@@ -48,13 +55,13 @@ Deno.serve(async (req) => {
 
   if (!res.ok) {
     return new Response(JSON.stringify({ error: json.error?.message ?? 'Falha ao enviar', details: json }), {
-      status: 400, headers: { 'Content-Type': 'application/json' },
+      status: 400, headers: { ...CORS, 'Content-Type': 'application/json' },
     });
   }
 
   await logMessage(phone, 'out', text);
 
   return new Response(JSON.stringify({ sent: true, to: phone, message_id: json.messages?.[0]?.id }), {
-    status: 200, headers: { 'Content-Type': 'application/json' },
+    status: 200, headers: { ...CORS, 'Content-Type': 'application/json' },
   });
 });
