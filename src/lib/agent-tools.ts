@@ -384,7 +384,7 @@ export const toolDeclarations = [
   },
   {
     name: 'send_quote_request_whatsapp',
-    description: 'Cria uma cotação no sistema, gera link único e envia via WhatsApp. Aceita supplier_id OU phone direto. SEMPRE use list_suppliers para buscar fornecedor por nome — NUNCA use find_whatsapp_contact para cotações. Se o usuário fornecer um número de telefone diretamente, passe como phone.',
+    description: 'Cria cotação no banco, gera link do fornecedor e envia via WhatsApp. Aceita supplier_id (de list_suppliers) OU phone direto. Para cotações, NUNCA use find_whatsapp_contact — use list_suppliers.',
     parameters: {
       type: 'OBJECT' as Type,
       properties: {
@@ -503,7 +503,7 @@ export const toolDeclarations = [
   },
   {
     name: 'set_component_supplier',
-    description: 'Vincula um fornecedor a um componente. Use quando o usuário disser "o ideal é comprar esse componente no fornecedor X" ou quiser registrar de onde comprar. is_preferred=true marca como preferido (só pode haver um preferido por componente).',
+    description: 'Vincula fornecedor a componente. is_preferred=true = fornecedor padrão para esse componente (um por componente).',
     parameters: {
       type: 'OBJECT' as Type,
       properties: {
@@ -531,7 +531,7 @@ export const toolDeclarations = [
   // ---------- COTAÇÃO DE LISTA LIVRE -------------------------------------
   {
     name: 'create_quotation_from_list',
-    description: 'Cria uma cotação a partir de uma lista livre de componentes (não vinculada a um produto). Use quando o usuário pedir cotação dos itens do "falta comprar" ou de uma lista avulsa. Se auto_invite_preferred=true, convida automaticamente o fornecedor preferido de cada componente.',
+    description: 'Cotação de lista avulsa de componentes (falta comprar, lista livre). auto_invite_preferred=true convida o fornecedor preferido de cada item automaticamente.',
     parameters: {
       type: 'OBJECT' as Type,
       properties: {
@@ -564,7 +564,7 @@ export const toolDeclarations = [
   // ---------- ANÁLISE DE COTAÇÕES ----------------------------------------
   {
     name: 'analyze_quotation_responses',
-    description: 'Analisa as respostas de uma cotação. mode="full" → tabela completa todos fornecedores × todos componentes. mode="best_price" → lista resumida com menor preço por componente + segundo menor preço e fornecedor.',
+    description: 'Analisa respostas de cotação. mode="full" = todos fornecedores × itens. mode="best_price" = menor preço por item + segundo melhor.',
     parameters: {
       type: 'OBJECT' as Type,
       properties: {
@@ -588,7 +588,7 @@ export const toolDeclarations = [
   },
   {
     name: 'check_expired_quotations',
-    description: 'Verifica cotações com prazo vencido que ainda têm convites sem resposta. Retorna lista de fornecedores que não responderam e cria notas de follow-up nos purchase_needs vinculados.',
+    description: 'Lista cotações vencidas sem resposta e cria notas de follow-up nos purchase_needs.',
     parameters: { type: 'OBJECT' as Type, properties: {} },
   },
 
@@ -718,7 +718,7 @@ export const toolDeclarations = [
   // ---------- WHATSAPP (envio e consulta via agente interno) ----------
   {
     name: 'save_whatsapp_contact',
-    description: 'Salva ou atualiza um contato WhatsApp (nome ↔ número). Use quando o usuário disser "cadastra o contato X pelo número Y" ou "adiciona o Felipe da Enbracon com número ...". Se já existir contato com mesmo nome, atualiza o número.',
+    description: 'Salva contato WhatsApp (nome ↔ número). Se o nome já existir, atualiza o número.',
     parameters: {
       type: 'OBJECT' as Type,
       properties: {
@@ -817,7 +817,7 @@ export const toolDeclarations = [
   },
   {
     name: 'get_private_label_orders',
-    description: 'Retorna lista de produção de controles com marca própria — agrupada por cliente, marca, modelo e cor. Use para responder "quais controles precisam de clichê?", "lista de marca própria pendente", "o que tem de controle personalizado pra separar?".',
+    description: 'Lista pedidos de controles com marca própria (clichê), agrupados por cliente/marca/modelo. Filtro por status (default: pending).',
     parameters: {
       type: 'OBJECT' as Type,
       properties: {
@@ -1470,7 +1470,7 @@ export const toolDeclarations = [
   },
   {
     name: 'set_stock_minimum',
-    description: 'Define a quantidade mínima de reposição de um item. Quando o saldo cair abaixo, o sistema marca como "baixo". Use: "mínimo de 50 sirenes EGPS1", "ponto de reposição do cabo CABOD31 é 30".',
+    description: 'Define estoque mínimo de um item. Abaixo desse valor o item aparece como crítico.',
     parameters: {
       type: 'OBJECT' as Type,
       properties: {
@@ -1483,7 +1483,7 @@ export const toolDeclarations = [
   },
   {
     name: 'get_low_stock_alerts',
-    description: 'Lista itens com saldo crítico: negativos, zerados ou abaixo do mínimo configurado. Use para "o que está em falta?", "itens críticos de estoque", ou em tarefas agendadas de monitoramento.',
+    description: 'Lista itens com saldo negativo, zerado ou abaixo do mínimo. Use para "o que está em falta?" ou monitoramento.',
     parameters: {
       type: 'OBJECT' as Type,
       properties: {
@@ -1505,7 +1505,7 @@ export const toolDeclarations = [
   },
   {
     name: 'generate_purchase_list',
-    description: 'Gera uma lista de compras formatada para enviar ao fornecedor (WhatsApp, e-mail). Cruza estoque atual + reservas + pedidos pendentes e calcula o que falta. Retorna texto pronto para copiar.',
+    description: 'Gera lista de compras cruzando estoque + reservas + pedidos pendentes. Retorna texto pronto para enviar ao fornecedor.',
     parameters: {
       type: 'OBJECT' as Type,
       properties: {
