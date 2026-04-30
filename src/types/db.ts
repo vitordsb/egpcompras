@@ -108,6 +108,40 @@ export interface QuotationResponseItem {
 
 export type ShipmentStatus = 'pending' | 'shipped' | 'returned' | 'cancelled';
 
+export type CampaignSegment = 'all' | 'active' | 'inactive' | 'no_whatsapp' | 'opt_in_promo' | 'opt_in_catalog' | 'tag';
+export type CampaignSendStatus = 'pending' | 'sent' | 'delivered' | 'read' | 'failed' | 'opted_out';
+
+export interface MarketingCampaign {
+  id: string;
+  name: string;
+  description: string | null;
+  template_name: string;
+  template_lang: string;
+  template_params: Record<string, string>;
+  segment_filter: CampaignSegment;
+  segment_tag: string | null;
+  schedule_cron: string | null;
+  next_run_at: string | null;
+  max_per_run: number;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+  created_by: string | null;
+}
+
+export interface MarketingSend {
+  id: string;
+  campaign_id: string;
+  client_id: string | null;
+  whatsapp_phone: string;
+  status: CampaignSendStatus;
+  message_id: string | null;
+  error: string | null;
+  sent_at: string | null;
+  responded_at: string | null;
+  created_at: string;
+}
+
 export interface ClientContact {
   id: string;
   name: string;
