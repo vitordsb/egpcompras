@@ -38,16 +38,37 @@ export default function MarkdownText({ text }: Props) {
               {children}
             </pre>
           ),
-          a: ({ href, children }) => (
-            <a
-              href={href}
-              target="_blank"
-              rel="noreferrer"
-              className="text-brand-600 underline hover:text-brand-700"
-            >
-              {children}
-            </a>
-          ),
+          a: ({ href, children }) => {
+            const isQuoteLink = href && /\/cotacao\//.test(href);
+            if (isQuoteLink) {
+              return (
+                <a
+                  href={href}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="my-2 flex items-center gap-3 rounded-xl border border-green-200 bg-green-50 px-4 py-3 no-underline transition-colors hover:bg-green-100 active:bg-green-200"
+                >
+                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-green-600 text-white shadow-sm">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M13.19 8.688a4.5 4.5 0 0 1 1.242 7.244l-4.5 4.5a4.5 4.5 0 0 1-6.364-6.364l1.757-1.757m13.35-.622 1.757-1.757a4.5 4.5 0 0 0-6.364-6.364l-4.5 4.5a4.5 4.5 0 0 0 1.242 7.244" />
+                    </svg>
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-sm font-semibold text-green-800">Abrir formulário de cotação</span>
+                    <span className="block truncate text-xs text-green-600">{href}</span>
+                  </span>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4 shrink-0 text-green-500">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 6H5.25A2.25 2.25 0 0 0 3 8.25v10.5A2.25 2.25 0 0 0 5.25 21h10.5A2.25 2.25 0 0 0 18 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" />
+                  </svg>
+                </a>
+              );
+            }
+            return (
+              <a href={href} target="_blank" rel="noreferrer" className="text-brand-600 underline hover:text-brand-700">
+                {children}
+              </a>
+            );
+          },
           h1: ({ children }) => (
             <h1 className="mb-2 text-base font-semibold text-slate-900">{children}</h1>
           ),

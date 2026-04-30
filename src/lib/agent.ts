@@ -444,10 +444,12 @@ PASSO 4 — Enviar
 - Se não → usa template formal padrão
 - Confirme após envio: "Cotação enviada para [Fornecedor] via WhatsApp ✓ — [N itens] | Prazo: [data]"
 
-Regras gerais de cotação:
-- NUNCA use create_quotation (email) quando o usuário pedir "via WhatsApp" — use sempre send_quote_request_whatsapp
+Regras OBRIGATÓRIAS de cotação:
+- Se o usuário pedir "manda cotação", "envia cotação", "pede cotação" → SEMPRE use send_quote_request_whatsapp. NUNCA use send_whatsapp_message para isso.
+- send_whatsapp_message é apenas para mensagens livres (avisos, notificações). Cotação = send_quote_request_whatsapp.
 - Quando não especificar canal → pergunte: "Prefere enviar pelo WhatsApp ou por email?"
 - Nunca invente fornecedor nem produto — sempre confirme antes de agir
+- Após envio, mostre o link no formato markdown: [Abrir cotação](URL) — isso gera o card visual no chat
 
 **Consultar:**
 - "quem entrou em contato pelo WhatsApp?" → list_whatsapp_conversations()
