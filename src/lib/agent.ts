@@ -806,6 +806,8 @@ export interface RunOptions {
   currentUser?: string;
   /** Cargo do usuário — filtra as tools disponíveis */
   userRole?: import('@/lib/roles').UserRole;
+  /** Seções permitidas (vem do DB) — quando presente, substitui o filtro por cargo */
+  allowedPageKeys?: import('@/lib/roles').PageKey[] | '*';
   /** PDF único (legado) */
   userInlineData?: { mimeType: string; data: string; fileName?: string };
   /** Múltiplos PDFs enviados de uma vez */
@@ -824,7 +826,8 @@ export async function runAgent({
   history,
   userMessage,
   currentUser,
-  userRole,
+  userRole: _userRole,
+  allowedPageKeys,
   userInlineData,
   userInlineDataList,
   onTurn,
@@ -881,12 +884,13 @@ export async function runAgent({
   const [memories, procedures] = await Promise.all([loadMemories(), loadProcedureCatalog()]);
   const fullSystemInstruction = buildSystemInstruction(memories, procedures, currentUser);
 
-  // Filtra tools pelo cargo do usuário
-  const { getToolNamesForRole } = await import('@/lib/roles');
-  const allowedTools = userRole ? getToolNamesForRole(userRole) : '*';
-  const filteredTools = allowedTools === '*'
-    ? toolDeclarations
-    : toolDeclarations.filter((t) => (allowedTools as Set<string>).has(t.name));
+  // Filtra tools: usa allowedPageKeys (DB) se disponível, senão cai no role hardcoded
+  const { getToolsForPageKeys } = await import('@/lib/roles');
+  let filteredTools = toolDeclarations;
+  if (allowedPageKeys && allowedPageKeys !== '*') {
+    const allowed = getToolsForPageKeys(allowedPageKeys as import('@/lib/roles').PageKey[]);
+    filteredTools = toolDeclarations.filter((t) => allowed.has(t.name));
+  }
 
   const MAX_STEPS = 25;
   for (let step = 0; step < MAX_STEPS; step++) {

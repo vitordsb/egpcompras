@@ -5,7 +5,7 @@ import { cn } from '@/lib/utils';
 import Header from '@/components/Header';
 import QuickChatDrawer from '@/components/QuickChatDrawer';
 import { useInternalAuth } from '@/lib/auth-context';
-import { canAccessPage } from '@/lib/roles';
+import { canAccessPath, type PageKey } from '@/lib/roles';
 import {
   writeUIMode,
   writeLastAdminRoute,
@@ -412,21 +412,25 @@ export default function AdminLayout() {
   const location = useLocation();
   const navigate = useNavigate();
   const mode = useUIMode();
-  const { userEmail, userRole } = useInternalAuth();
+  const { userEmail, userRole, allowedPageKeys } = useInternalAuth();
   const isRhUser = userEmail != null && RH_EMAILS.includes(userEmail.toLowerCase());
+  const isAdmin = userRole === 'admin';
+  const pageKeys = allowedPageKeys === '*' ? null : (allowedPageKeys ?? []) as PageKey[];
 
-  // Filtra seções do nav pelo cargo do usuário
+  function pathAllowed(path: string): boolean {
+    if (isAdmin || pageKeys === null) return true;
+    return canAccessPath(pageKeys, path);
+  }
+
   function sectionVisible(item: NavItem): boolean {
-    if (userRole === 'admin') return true;
-    if (item.children) {
-      return item.children.some((c) => c.to && canAccessPage(userRole, c.to));
-    }
-    return item.to ? canAccessPage(userRole, item.to) : false;
+    if (isAdmin) return true;
+    if (item.children) return item.children.some((c) => !c.to || pathAllowed(c.to));
+    return item.to ? pathAllowed(item.to) : false;
   }
 
   function filterChildren(item: NavItem): NavItem {
     if (!item.children) return item;
-    return { ...item, children: item.children.filter((c) => !c.to || canAccessPage(userRole, c.to)) };
+    return { ...item, children: item.children.filter((c) => !c.to || pathAllowed(c.to)) };
   }
   const [mobileOpen, setMobileOpen] = useState(false);
   const [configOpen, setConfigOpen] = useState(false);

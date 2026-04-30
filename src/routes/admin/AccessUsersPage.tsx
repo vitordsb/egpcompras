@@ -5,7 +5,11 @@ import { Input, Label } from '@/components/ui/Input';
 import { supabase } from '@/lib/supabase';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
 import { useToast } from '@/components/ui/Toast';
-import { type UserRole, ROLE_LABELS, HARDCODED_ADMINS } from '@/lib/roles';
+import {
+  type UserRole, type PageKey,
+  ROLE_LABELS, HARDCODED_ADMINS, ALL_ROLES,
+  PAGE_DEFINITIONS, groupedPageKeys,
+} from '@/lib/roles';
 
 interface AccessUser {
   id: string;
@@ -30,6 +34,95 @@ const ROLE_COLORS: Record<UserRole, string> = {
   financeiro:'bg-red-100 text-red-700',
   producao:  'bg-slate-100 text-slate-700',
 };
+
+// ===== Componente de permissões =====
+function PermissionsMatrix() {
+  const toast = useToast();
+  // role → Set<page_key>
+  const [perms, setPerms] = useState<Record<string, Set<string>> | null>(null);
+  const groups = groupedPageKeys();
+
+  useEffect(() => {
+    supabase.from('role_page_permissions').select('role, page_key').then(({ data }) => {
+      const map: Record<string, Set<string>> = {};
+      for (const role of ALL_ROLES) map[role] = new Set();
+      for (const row of (data ?? []) as { role: string; page_key: string }[]) {
+        if (map[row.role]) map[row.role].add(row.page_key);
+      }
+      setPerms(map);
+    });
+  }, []);
+
+  async function toggle(role: UserRole, key: PageKey) {
+    if (!perms) return;
+    const has = perms[role].has(key);
+    // Optimistic update
+    setPerms((prev) => {
+      if (!prev) return prev;
+      const next = { ...prev, [role]: new Set(prev[role]) };
+      has ? next[role].delete(key) : next[role].add(key);
+      return next;
+    });
+    const { error } = has
+      ? await supabase.from('role_page_permissions').delete().eq('role', role).eq('page_key', key)
+      : await supabase.from('role_page_permissions').insert({ role, page_key: key });
+    if (error) {
+      // Reverte
+      setPerms((prev) => {
+        if (!prev) return prev;
+        const next = { ...prev, [role]: new Set(prev[role]) };
+        has ? next[role].add(key) : next[role].delete(key);
+        return next;
+      });
+      toast.error('Erro', error.message);
+    }
+  }
+
+  if (!perms) return <p className="text-sm text-slate-500 p-5">Carregando...</p>;
+
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-sm">
+        <thead className="border-b border-slate-200 bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
+          <tr>
+            <th className="px-5 py-3 w-40">Seção</th>
+            {ALL_ROLES.map((r) => (
+              <th key={r} className="px-3 py-3 text-center">{ROLE_LABELS[r]}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {groups.map(({ group, keys }) => (
+            <>
+              <tr key={`g-${group}`} className="border-b border-slate-100 bg-slate-50/50">
+                <td colSpan={ALL_ROLES.length + 1} className="px-5 py-1.5 text-xs font-semibold uppercase tracking-wide text-slate-400">
+                  {group}
+                </td>
+              </tr>
+              {keys.map((key) => (
+                <tr key={key} className="border-b border-slate-100 last:border-0 hover:bg-slate-50">
+                  <td className="px-5 py-2.5 text-slate-700 font-medium">
+                    {PAGE_DEFINITIONS[key].label}
+                  </td>
+                  {ALL_ROLES.map((role) => (
+                    <td key={role} className="px-3 py-2.5 text-center">
+                      <input
+                        type="checkbox"
+                        checked={perms[role]?.has(key) ?? false}
+                        onChange={() => toggle(role, key)}
+                        className="h-4 w-4 rounded border-slate-300 text-brand-600 cursor-pointer"
+                      />
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
 
 async function readJson(res: Response) {
   const data = await res.json().catch(() => ({}));
@@ -342,6 +435,21 @@ export default function AccessUsersPage() {
               </table>
             </div>
           )}
+        </Card>
+      </div>
+
+      {/* Matriz de permissões por cargo */}
+      <div className="mt-6">
+        <Card>
+          <CardHeader>
+            <div>
+              <CardTitle>Permissões por cargo</CardTitle>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Marque quais seções cada cargo pode acessar. Administradores sempre têm acesso total.
+              </p>
+            </div>
+          </CardHeader>
+          <PermissionsMatrix />
         </Card>
       </div>
 
