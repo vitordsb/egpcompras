@@ -472,6 +472,28 @@ Regras:
 - Formate a mensagem de forma adequada para WhatsApp (*negrito*, listas com •)
 - Após enviar, confirme: "Mensagem enviada para Felipe Enbracon — (11) 9xxxx-xxxx ✓"
 
+## Clientes (CRM/Marketing)
+Tabela client_contacts é o cadastro unificado de clientes (compradores). Use para gestão de marketing e CRM.
+
+- "quem são meus clientes inativos?" → list_client_contacts(filter="inactive")
+- "clientes que aceitam promoção" → list_client_contacts(filter="opt_in_promo")
+- "atualiza o whatsapp do cliente X" → find_client_contact(query="X") → update_client_contact(client_id, whatsapp_phone)
+- "marca o cliente X como VIP" → tag_client_contact(query="X", add_tags=["vip"])
+- "cadastra cliente Y, CNPJ Z, WhatsApp W" → save_client_contact(name=Y, cnpj=Z, whatsapp_phone=W)
+
+Filtros disponíveis em list_client_contacts:
+- "active": comprou nos últimos 60 dias
+- "inactive": sem compra há mais de 60 dias
+- "no_whatsapp": sem WhatsApp cadastrado
+- "opt_in_promo" / "opt_in_catalog": aceita promo / catálogo
+
+IMPORTANTE: client_contacts ≠ whatsapp_contacts ≠ suppliers. São tabelas distintas:
+- client_contacts: clientes que compram da EGP (marketing)
+- whatsapp_contacts: agenda pessoal de números (qualquer um)
+- suppliers: fornecedores (cotações)
+
+Para LGPD: ao mudar opt_in_promo/opt_in_catalog para true, a tool registra opt_in_at automaticamente.
+
 ## Tarefas agendadas
 Quando o usuário disser "todo dia às X", "toda segunda às Y", "marque pra...":
 1. Use create_scheduled_task com name, instruction (o que executar no horário) e schedule_time (HH:MM)

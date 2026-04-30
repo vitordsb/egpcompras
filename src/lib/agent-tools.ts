@@ -780,6 +780,97 @@ export const toolDeclarations = [
     },
   },
 
+  // ---------- CLIENTES (CRM/Marketing) ----------
+  {
+    name: 'list_client_contacts',
+    description: 'Lista clientes cadastrados com filtros opcionais. Use para "quem são meus clientes inativos?", "clientes que aceitam promo", etc.',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        filter:        { type: 'STRING' as Type, description: '"all" (default), "active" (≤60d), "inactive" (>60d), "no_whatsapp", "opt_in_promo", "opt_in_catalog".' },
+        tag:           { type: 'STRING' as Type, description: 'Filtra por tag específica.' },
+        limit:         { type: 'NUMBER' as Type, description: 'Máximo de resultados (default 50).' },
+      },
+    },
+  },
+  {
+    name: 'find_client_contact',
+    description: 'Busca um cliente por nome, CNPJ ou WhatsApp (fuzzy). Retorna o melhor match e candidatos.',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        query: { type: 'STRING' as Type, description: 'Nome, CNPJ ou WhatsApp do cliente.' },
+      },
+      required: ['query'],
+    },
+  },
+  {
+    name: 'save_client_contact',
+    description: 'Cadastra um cliente novo. Para atualizar existente, use update_client_contact.',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        name:           { type: 'STRING' as Type, description: 'Razão social (obrigatório).' },
+        trade_name:     { type: 'STRING' as Type, description: 'Nome fantasia.' },
+        cnpj:           { type: 'STRING' as Type },
+        whatsapp_phone: { type: 'STRING' as Type, description: 'Número WhatsApp (com ou sem DDI).' },
+        phone:          { type: 'STRING' as Type, description: 'Telefone fixo / contato geral.' },
+        email:          { type: 'STRING' as Type },
+        address:        { type: 'STRING' as Type },
+        notes:          { type: 'STRING' as Type, description: 'Observações internas.' },
+        tags:           { type: 'ARRAY' as Type, items: { type: 'STRING' as Type }, description: 'Lista de tags (vip, varejo, etc).' },
+        opt_in_promo:   { type: 'BOOLEAN' as Type, description: 'Aceita receber promoções.' },
+        opt_in_catalog: { type: 'BOOLEAN' as Type, description: 'Aceita receber catálogo.' },
+      },
+      required: ['name'],
+    },
+  },
+  {
+    name: 'update_client_contact',
+    description: 'Atualiza dados de um cliente existente. Identifique pelo client_id (preferido) ou query (nome/CNPJ/WhatsApp).',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        client_id:      { type: 'STRING' as Type, description: 'ID do cliente (use find_client_contact para obter).' },
+        query:          { type: 'STRING' as Type, description: 'Alternativa ao client_id: nome, CNPJ ou WhatsApp.' },
+        name:           { type: 'STRING' as Type },
+        trade_name:     { type: 'STRING' as Type },
+        cnpj:           { type: 'STRING' as Type },
+        whatsapp_phone: { type: 'STRING' as Type },
+        phone:          { type: 'STRING' as Type },
+        email:          { type: 'STRING' as Type },
+        address:        { type: 'STRING' as Type },
+        notes:          { type: 'STRING' as Type },
+        opt_in_promo:   { type: 'BOOLEAN' as Type },
+        opt_in_catalog: { type: 'BOOLEAN' as Type },
+      },
+    },
+  },
+  {
+    name: 'tag_client_contact',
+    description: 'Adiciona ou remove tags de um cliente. Use para segmentação ("marca como VIP", "remove tag inativo").',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        query:      { type: 'STRING' as Type, description: 'Nome, CNPJ ou WhatsApp do cliente.' },
+        client_id:  { type: 'STRING' as Type, description: 'Alternativa ao query.' },
+        add_tags:   { type: 'ARRAY' as Type, items: { type: 'STRING' as Type }, description: 'Tags a adicionar.' },
+        remove_tags:{ type: 'ARRAY' as Type, items: { type: 'STRING' as Type }, description: 'Tags a remover.' },
+      },
+    },
+  },
+  {
+    name: 'delete_client_contact',
+    description: 'Remove um cliente da lista de contatos. Histórico de pedidos é mantido.',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        client_id: { type: 'STRING' as Type },
+        query:     { type: 'STRING' as Type, description: 'Alternativa ao client_id.' },
+      },
+    },
+  },
+
   // ---------- MARCAS PRÓPRIAS (CLICHÊS) ----------
   {
     name: 'list_client_brands',
@@ -3743,6 +3834,165 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
           time: m.created_at,
         })),
       };
+    }
+
+    // ---------- CLIENTES (CRM/Marketing) ----------
+    case 'list_client_contacts': {
+      const filter = String(args.filter ?? 'all');
+      const tag    = args.tag ? String(args.tag).trim() : null;
+      const limit  = Number(args.limit ?? 50);
+
+      let q = supabase.from('client_contacts')
+        .select('id, name, trade_name, cnpj, whatsapp_phone, email, last_purchase_at, total_orders, total_spent, tags, opt_in_promo, opt_in_catalog')
+        .order('last_purchase_at', { ascending: false, nullsFirst: false })
+        .limit(limit);
+
+      const cutoff60 = new Date(Date.now() - 60 * 86400000).toISOString();
+      if (filter === 'active')          q = q.gte('last_purchase_at', cutoff60);
+      else if (filter === 'inactive')   q = q.lt('last_purchase_at', cutoff60);
+      else if (filter === 'no_whatsapp') q = q.is('whatsapp_phone', null);
+      else if (filter === 'opt_in_promo')   q = q.eq('opt_in_promo', true);
+      else if (filter === 'opt_in_catalog') q = q.eq('opt_in_catalog', true);
+
+      if (tag) q = q.contains('tags', [tag]);
+
+      const { data, error } = await q;
+      if (error) throw new Error(error.message);
+      return { count: (data ?? []).length, filter, clients: data ?? [] };
+    }
+
+    case 'find_client_contact': {
+      const query = String(args.query ?? '').trim();
+      if (!query) throw new Error('query é obrigatório');
+      const digits = query.replace(/\D/g, '');
+      const phoneNorm = digits.length >= 10 ? (digits.startsWith('55') ? digits : `55${digits}`) : null;
+
+      let q = supabase.from('client_contacts')
+        .select('id, name, trade_name, cnpj, whatsapp_phone, email, total_orders, total_spent, last_purchase_at, tags, opt_in_promo, opt_in_catalog')
+        .limit(10);
+
+      if (phoneNorm) {
+        q = q.eq('whatsapp_phone', phoneNorm);
+      } else if (/^\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}$/.test(query) || digits.length === 14) {
+        q = q.eq('cnpj', query);
+      } else {
+        q = q.or(`name.ilike.%${query}%,trade_name.ilike.%${query}%`);
+      }
+
+      const { data, error } = await q;
+      if (error) throw new Error(error.message);
+      const list = (data ?? []) as any[];
+      if (list.length === 0) return { found: 0, message: `Nenhum cliente encontrado para "${query}"` };
+      return {
+        found: list.length,
+        best_match: list[0],
+        candidates: list.slice(1, 5),
+      };
+    }
+
+    case 'save_client_contact': {
+      const name = String(args.name ?? '').trim();
+      if (!name) throw new Error('name é obrigatório');
+      const wppDigits = args.whatsapp_phone ? String(args.whatsapp_phone).replace(/\D/g, '') : '';
+      const wpp = wppDigits ? (wppDigits.startsWith('55') ? wppDigits : `55${wppDigits}`) : null;
+      const optIn = !!(args.opt_in_promo || args.opt_in_catalog);
+      const payload: Record<string, unknown> = {
+        name,
+        trade_name:     args.trade_name     ? String(args.trade_name).trim() : null,
+        cnpj:           args.cnpj           ? String(args.cnpj).trim()       : null,
+        whatsapp_phone: wpp,
+        phone:          args.phone          ? String(args.phone).trim()      : null,
+        email:          args.email          ? String(args.email).trim().toLowerCase() : null,
+        address:        args.address        ? String(args.address).trim()    : null,
+        notes:          args.notes          ? String(args.notes).trim()      : null,
+        tags:           Array.isArray(args.tags) ? args.tags.map((t: any) => String(t).trim()).filter(Boolean) : [],
+        opt_in_promo:   args.opt_in_promo === true,
+        opt_in_catalog: args.opt_in_catalog === true,
+        opt_in_at:      optIn ? new Date().toISOString() : null,
+      };
+      const { data, error } = await supabase
+        .from('client_contacts').insert(payload)
+        .select('id, name, whatsapp_phone, cnpj').single();
+      if (error) throw new Error(error.message);
+      return { created: data };
+    }
+
+    case 'update_client_contact': {
+      let clientId = args.client_id ? String(args.client_id) : null;
+      if (!clientId && args.query) {
+        const query = String(args.query).trim();
+        const digits = query.replace(/\D/g, '');
+        const phoneNorm = digits.length >= 10 ? (digits.startsWith('55') ? digits : `55${digits}`) : null;
+        let q = supabase.from('client_contacts').select('id').limit(1);
+        if (phoneNorm) q = q.eq('whatsapp_phone', phoneNorm);
+        else if (digits.length === 14) q = q.eq('cnpj', query);
+        else q = q.or(`name.ilike.%${query}%,trade_name.ilike.%${query}%`);
+        const { data: found } = await q;
+        clientId = (found?.[0] as any)?.id ?? null;
+      }
+      if (!clientId) throw new Error('Cliente não encontrado. Use client_id ou query.');
+
+      const patch: Record<string, unknown> = {};
+      if (args.name !== undefined)       patch.name = String(args.name).trim();
+      if (args.trade_name !== undefined) patch.trade_name = args.trade_name ? String(args.trade_name).trim() : null;
+      if (args.cnpj !== undefined)       patch.cnpj = args.cnpj ? String(args.cnpj).trim() : null;
+      if (args.phone !== undefined)      patch.phone = args.phone ? String(args.phone).trim() : null;
+      if (args.email !== undefined)      patch.email = args.email ? String(args.email).trim().toLowerCase() : null;
+      if (args.address !== undefined)    patch.address = args.address ? String(args.address).trim() : null;
+      if (args.notes !== undefined)      patch.notes = args.notes ? String(args.notes).trim() : null;
+      if (args.whatsapp_phone !== undefined) {
+        const d = String(args.whatsapp_phone).replace(/\D/g, '');
+        patch.whatsapp_phone = d ? (d.startsWith('55') ? d : `55${d}`) : null;
+      }
+      if (args.opt_in_promo !== undefined)   { patch.opt_in_promo = !!args.opt_in_promo; if (args.opt_in_promo) patch.opt_in_at = new Date().toISOString(); }
+      if (args.opt_in_catalog !== undefined) { patch.opt_in_catalog = !!args.opt_in_catalog; if (args.opt_in_catalog) patch.opt_in_at = new Date().toISOString(); }
+
+      if (Object.keys(patch).length === 0) throw new Error('Nada a atualizar');
+
+      const { data, error } = await supabase
+        .from('client_contacts').update(patch).eq('id', clientId)
+        .select('id, name, whatsapp_phone, cnpj').single();
+      if (error) throw new Error(error.message);
+      return { updated: true, client: data, changes: patch };
+    }
+
+    case 'tag_client_contact': {
+      let clientId = args.client_id ? String(args.client_id) : null;
+      if (!clientId && args.query) {
+        const query = String(args.query).trim();
+        const { data: found } = await supabase.from('client_contacts')
+          .select('id, tags')
+          .or(`name.ilike.%${query}%,trade_name.ilike.%${query}%,cnpj.eq.${query}`)
+          .limit(1);
+        clientId = (found?.[0] as any)?.id ?? null;
+      }
+      if (!clientId) throw new Error('Cliente não encontrado.');
+
+      const { data: current } = await supabase.from('client_contacts')
+        .select('tags').eq('id', clientId).single();
+      const currentTags = ((current as any)?.tags ?? []) as string[];
+      const addTags = Array.isArray(args.add_tags) ? args.add_tags.map((t: any) => String(t).trim()).filter(Boolean) : [];
+      const removeTags = Array.isArray(args.remove_tags) ? args.remove_tags.map((t: any) => String(t).trim()).filter(Boolean) : [];
+
+      const newTags = [...new Set([...currentTags, ...addTags])].filter((t) => !removeTags.includes(t));
+
+      const { error } = await supabase.from('client_contacts').update({ tags: newTags }).eq('id', clientId);
+      if (error) throw new Error(error.message);
+      return { updated: true, tags: newTags, added: addTags, removed: removeTags };
+    }
+
+    case 'delete_client_contact': {
+      let clientId = args.client_id ? String(args.client_id) : null;
+      if (!clientId && args.query) {
+        const query = String(args.query).trim();
+        const { data: found } = await supabase.from('client_contacts')
+          .select('id').or(`name.ilike.%${query}%,trade_name.ilike.%${query}%`).limit(1);
+        clientId = (found?.[0] as any)?.id ?? null;
+      }
+      if (!clientId) throw new Error('Cliente não encontrado.');
+      const { error } = await supabase.from('client_contacts').delete().eq('id', clientId);
+      if (error) throw new Error(error.message);
+      return { deleted: true, client_id: clientId };
     }
 
     case 'list_client_brands': {
