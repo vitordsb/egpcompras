@@ -402,9 +402,10 @@ export const toolDeclarations = [
             required: ['name', 'quantity'],
           },
         },
-        notes:         { type: 'STRING' as Type, description: 'Observações extras (prazo desejado, qualidade, etc.).' },
-        deadline_days: { type: 'NUMBER' as Type, description: 'Prazo em dias para resposta. Default 5.' },
-        title:         { type: 'STRING' as Type, description: 'Título da cotação. Se omitido, gerado automaticamente.' },
+        notes:          { type: 'STRING' as Type, description: 'Observações internas (prazo desejado, qualidade, etc.) — aparece na mensagem.' },
+        deadline_days:  { type: 'NUMBER' as Type, description: 'Prazo em dias para resposta. Default 5.' },
+        title:          { type: 'STRING' as Type, description: 'Título da cotação. Se omitido, gerado automaticamente.' },
+        custom_message: { type: 'STRING' as Type, description: 'Texto personalizado da mensagem WhatsApp. Se fornecido, substitui o texto padrão formal — o link e a lista de itens são sempre anexados automaticamente. Ex: "Olá, tudo bom? pode cotar pra mim essa lista? qualquer dúvida é só chamar".' },
       },
       required: ['supplier_id', 'items'],
     },
@@ -2568,15 +2569,18 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
       const itemLines = items
         .map((it, i) => `${i + 1}. *${it.name}* — ${it.quantity} ${it.unit ?? 'un'}`)
         .join('\n');
-      const notesLine = args.notes ? `\n\n_Obs: ${args.notes}_` : '';
-      const message =
-        `*Solicitação de Cotação — EGP Tecnologia*\n\n` +
-        `Olá! Gostaríamos de solicitar cotação para os seguintes itens:\n\n` +
-        `${itemLines}${notesLine}\n\n` +
-        `Acesse o link abaixo para preencher sua proposta:\n` +
-        `🔗 ${inviteUrl}\n\n` +
-        `*Prazo para resposta:* ${deadlineLabel}\n\n` +
-        `_EGP Tecnologia_`;
+      const notesLine = args.notes ? `\n_Obs: ${args.notes}_` : '';
+      const customMsg = args.custom_message ? String(args.custom_message).trim() : null;
+
+      const message = customMsg
+        ? `${customMsg}\n\n*Itens:*\n${itemLines}${notesLine}\n\n🔗 ${inviteUrl}\n*Prazo:* ${deadlineLabel}`
+        : `*Solicitação de Cotação — EGP Tecnologia*\n\n` +
+          `Olá! Gostaríamos de solicitar cotação para os seguintes itens:\n\n` +
+          `${itemLines}${notesLine}\n\n` +
+          `Acesse o link abaixo para preencher sua proposta:\n` +
+          `🔗 ${inviteUrl}\n\n` +
+          `*Prazo para resposta:* ${deadlineLabel}\n\n` +
+          `_EGP Tecnologia_`;
 
       const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
       const anonKey     = import.meta.env.VITE_SUPABASE_ANON_KEY as string;

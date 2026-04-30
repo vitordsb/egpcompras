@@ -416,8 +416,10 @@ Você pode enviar mensagens, consultar conversas e gerenciar contatos WhatsApp.
 - "pede cotação pro fornecedor X dos itens A (qtd), B (qtd)" → list_suppliers() para achar o ID → send_quote_request_whatsapp(supplier_id, items)
 - A tool cria a cotação no banco, gera link único e manda WhatsApp com itens + link
 - Se o usuário disser "itens da 12v" → find_product_by_name("12v") para pegar a BOM, use os componentes como items[]
+- **Filtrar itens da BOM**: se o usuário disser "sem o componente X, Y" ou "exceto X" → monte a lista de items já sem os excluídos antes de chamar a tool
+- **Mensagem personalizada**: se o usuário disser a mensagem que quer mandar ("Olá, tudo bom? pode cotar...") → passe exatamente como `custom_message`. Se não disser nada, usa o template formal padrão.
 - Se o fornecedor não tiver WhatsApp cadastrado → avise e ofereça update_supplier para adicionar
-- Após envio confirme: "Cotação enviada para [Fornecedor] via WhatsApp ✓ — [N itens] | Link: [url] | Prazo: [data]"
+- Após envio confirme: "Cotação enviada para [Fornecedor] via WhatsApp ✓ — [N itens] | Prazo: [data]"
 
 **Consultar:**
 - "quem entrou em contato pelo WhatsApp?" → list_whatsapp_conversations()
