@@ -55,6 +55,9 @@ export default function WhatsAppPage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
+  const [draft, setDraft] = useState('');
+  const [sending, setSending] = useState(false);
+  const [sendError, setSendError] = useState<string | null>(null);
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingMsgs, setLoadingMsgs] = useState(false);
@@ -81,6 +84,37 @@ export default function WhatsAppPage() {
     );
     setSessions(enriched);
     setLoading(false);
+  }
+
+  async function sendManualMessage() {
+    const text = draft.trim();
+    if (!text || !selected || sending) return;
+    setSending(true);
+    setSendError(null);
+    try {
+      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
+      const anonKey     = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+      const res = await fetch(`${supabaseUrl}/functions/v1/whatsapp-send`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', apikey: anonKey, Authorization: `Bearer ${anonKey}` },
+        body: JSON.stringify({ to: selected, text }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error ?? 'Falha no envio');
+      setDraft('');
+      // Recarrega histórico (a Edge Function loga no banco automaticamente)
+      await loadConversation(selected);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      // Mensagem amigável para o erro de janela 24h
+      if (/re-?engagement|24.*hour|outside.*window/i.test(msg)) {
+        setSendError('Janela de 24h expirada — só dá pra mandar mensagem livre dentro de 24h da última do cliente. Use template aprovado para iniciar conversa.');
+      } else {
+        setSendError(msg);
+      }
+    } finally {
+      setSending(false);
+    }
   }
 
   async function loadConversation(phone: string) {
@@ -118,6 +152,8 @@ export default function WhatsAppPage() {
 
   useEffect(() => {
     if (!selected) return;
+    setDraft('');
+    setSendError(null);
     loadConversation(selected);
     // Polling a cada 10s para novas mensagens
     const id = setInterval(() => loadConversation(selected), 10000);
@@ -208,6 +244,8 @@ export default function WhatsAppPage() {
 
           <div className="flex flex-1 overflow-hidden">
 
+            {/* Coluna mensagens + input */}
+            <div className="flex flex-1 flex-col overflow-hidden">
             {/* Mensagens */}
             <div
               ref={messagesContainerRef}
@@ -238,6 +276,51 @@ export default function WhatsAppPage() {
                 ))
               )}
               <div ref={messagesEndRef} />
+            </div>
+
+            {/* Input de envio */}
+            <div className="shrink-0 border-t border-slate-200 bg-white px-4 py-3">
+              {sendError && (
+                <div className="mb-2 rounded-md border border-red-200 bg-red-50 px-3 py-1.5 text-xs text-red-700">
+                  {sendError}
+                </div>
+              )}
+              <div className="flex items-end gap-2">
+                <textarea
+                  value={draft}
+                  onChange={(e) => setDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      sendManualMessage();
+                    }
+                  }}
+                  placeholder="Digite a mensagem… (Enter envia, Shift+Enter quebra linha)"
+                  rows={1}
+                  disabled={sending}
+                  className="flex-1 resize-none rounded-2xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm focus:border-green-500 focus:outline-none focus:ring-1 focus:ring-green-500 disabled:opacity-60 max-h-32"
+                  style={{ minHeight: 40 }}
+                />
+                <button
+                  type="button"
+                  onClick={sendManualMessage}
+                  disabled={!draft.trim() || sending}
+                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-green-600 text-white transition hover:bg-green-700 disabled:opacity-40 disabled:hover:bg-green-600"
+                  aria-label="Enviar"
+                >
+                  {sending ? (
+                    <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3"/>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4l-3 3-3-3h4z"/>
+                    </svg>
+                  ) : (
+                    <svg viewBox="0 0 24 24" fill="currentColor" className="h-4 w-4">
+                      <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
+                    </svg>
+                  )}
+                </button>
+              </div>
+            </div>
             </div>
 
             {/* Painel de pedidos */}
