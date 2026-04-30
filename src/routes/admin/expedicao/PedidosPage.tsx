@@ -10,6 +10,8 @@ import type { DisplayStatus } from './shared';
 import { friendlyDbError } from '@/lib/db-error';
 import Pagination from '@/components/ui/Pagination';
 import ActionMenu from '@/components/ui/ActionMenu';
+import ShipmentAttachmentsPanel from '@/components/ShipmentAttachmentsPanel';
+import { useInternalAuth } from '@/lib/auth-context';
 
 const PAGE_SIZE = 9;
 
@@ -70,6 +72,7 @@ const emptyForm: FormState = {
 };
 
 export default function PedidosPage() {
+  const { userLabel } = useInternalAuth();
   const [list, setList] = useState<ShipmentRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [listError, setListError] = useState<string | null>(null);
@@ -1050,6 +1053,8 @@ export default function PedidosPage() {
                   </table>
                 )}
               </Card>
+
+              <ShipmentAttachmentsPanel shipmentId={detailShipment.id} uploadedBy={userLabel} />
 
               <Card>
                 <CardHeader>
