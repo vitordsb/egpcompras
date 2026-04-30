@@ -2564,22 +2564,17 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
       if (invErr || !invite) throw new Error(invErr?.message ?? 'Falha ao criar convite');
       const inviteUrl = buildPublicQuoteUrl((invite as any).token);
 
-      // 5. Monta e envia mensagem WhatsApp
+      // 5. Monta e envia mensagem WhatsApp (apenas texto + link, sem listar itens)
       const deadlineLabel = new Date(deadline).toLocaleDateString('pt-BR');
-      const itemLines = items
-        .map((it, i) => `${i + 1}. *${it.name}* — ${it.quantity} ${it.unit ?? 'un'}`)
-        .join('\n');
       const notesLine = args.notes ? `\n_Obs: ${args.notes}_` : '';
       const customMsg = args.custom_message ? String(args.custom_message).trim() : null;
 
       const message = customMsg
-        ? `${customMsg}\n\n*Itens:*\n${itemLines}${notesLine}\n\n🔗 ${inviteUrl}\n*Prazo:* ${deadlineLabel}`
+        ? `${customMsg}${notesLine}\n\n🔗 ${inviteUrl}\n*Prazo:* ${deadlineLabel}`
         : `*Solicitação de Cotação — EGP Tecnologia*\n\n` +
-          `Olá! Gostaríamos de solicitar cotação para os seguintes itens:\n\n` +
-          `${itemLines}${notesLine}\n\n` +
-          `Acesse o link abaixo para preencher sua proposta:\n` +
+          `Olá! Segue o link com a lista de itens para cotação:\n\n` +
           `🔗 ${inviteUrl}\n\n` +
-          `*Prazo para resposta:* ${deadlineLabel}\n\n` +
+          `*Prazo para resposta:* ${deadlineLabel}${notesLine}\n\n` +
           `_EGP Tecnologia_`;
 
       const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
