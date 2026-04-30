@@ -114,6 +114,7 @@ export interface Shipment {
   numero_venda: string | null;
   data_venda: string | null;
   client_name: string;
+  client_trade_name: string | null;
   client_cnpj: string | null;
   client_phone: string | null;
   client_email: string | null;

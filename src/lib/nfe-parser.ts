@@ -9,6 +9,7 @@ export interface NFeData {
   chave_acesso: string;
   data_emissao: string;
   client_name: string;
+  client_trade_name: string | null;
   client_cnpj: string;
   client_phone: string | null;
   client_address: string;
@@ -86,6 +87,8 @@ export function parseNFe(xml: string): NFeData | null {
     // Destinatário
     const destEl = doc.getElementsByTagName('dest')[0];
     const client_name = destEl ? getText(destEl, 'xNome') : '';
+    const xFant = destEl ? getText(destEl, 'xFant') : '';
+    const client_trade_name = xFant && xFant !== client_name ? xFant : null;
     const client_cnpj = formatCnpj(destEl ? (getText(destEl, 'CNPJ') || getText(destEl, 'CPF')) : '');
     const client_phone = destEl ? (getText(destEl, 'fone') || null) : null;
     const enderDest = destEl?.getElementsByTagName('enderDest')[0];
@@ -124,7 +127,7 @@ export function parseNFe(xml: string): NFeData | null {
     return {
       tipo: 'nfe',
       numero_nfe, serie, chave_acesso, data_emissao,
-      client_name, client_cnpj, client_phone, client_address,
+      client_name, client_trade_name, client_cnpj, client_phone, client_address,
       total_produtos, desconto, valor_total, frete_valor, frete_conta,
       itens, duplicatas,
     };
@@ -184,6 +187,7 @@ serie: ${d.serie}
 chave_acesso: ${d.chave_acesso}
 data_emissao: ${d.data_emissao}
 client_name: ${d.client_name}
+client_trade_name: ${d.client_trade_name ?? '—'}
 client_cnpj: ${d.client_cnpj}
 client_phone: ${d.client_phone ?? '—'}
 client_address: ${d.client_address}

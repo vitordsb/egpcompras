@@ -870,7 +870,8 @@ export const toolDeclarations = [
     parameters: {
       type: 'OBJECT' as Type,
       properties: {
-        client_name:          { type: 'STRING' as Type, description: 'Nome do cliente.' },
+        client_name:          { type: 'STRING' as Type, description: 'Razão social do cliente (xNome da NF-e).' },
+        client_trade_name:    { type: 'STRING' as Type, description: 'Nome fantasia (xFant da NF-e). Preencher quando diferente da razão social.' },
         numero_nfe:           { type: 'STRING' as Type, description: 'Número da NFe (opcional).' },
         numero_venda:         { type: 'STRING' as Type, description: 'Número da venda no Conta Azul (ex: 5785).' },
         data_venda:           { type: 'STRING' as Type, description: 'Data da emissão da venda, YYYY-MM-DD.' },
@@ -3930,6 +3931,7 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
 
       const payload: Record<string, unknown> = {
         client_name:         clientName,
+        client_trade_name:   args.client_trade_name   ? String(args.client_trade_name).trim() : null,
         numero_nfe:          args.numero_nfe          ? String(args.numero_nfe).trim()        : null,
         numero_venda:        args.numero_venda        ? String(args.numero_venda).trim()      : null,
         data_venda:          args.data_venda          ? String(args.data_venda)               : null,

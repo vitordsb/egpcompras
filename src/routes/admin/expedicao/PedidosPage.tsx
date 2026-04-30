@@ -9,6 +9,7 @@ import { STATUS_LABEL, STATUS_PILL, formatDate, formatDateTime, effectiveStatus,
 import type { DisplayStatus } from './shared';
 import { friendlyDbError } from '@/lib/db-error';
 import Pagination from '@/components/ui/Pagination';
+import ActionMenu from '@/components/ui/ActionMenu';
 
 const PAGE_SIZE = 9;
 
@@ -96,7 +97,6 @@ export default function PedidosPage() {
   const [savingObs, setSavingObs] = useState(false);
 
   const [confirmDelete, setConfirmDelete] = useState<ShipmentRow | null>(null);
-  const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [page, setPage] = useState(1);
 
   async function loadList() {
@@ -147,7 +147,7 @@ export default function PedidosPage() {
       }
       if (search.trim()) {
         const q = search.toLowerCase();
-        const hay = `${s.client_name} ${s.numero_nfe ?? ''} ${s.numero_venda ?? ''}`.toLowerCase();
+        const hay = `${s.client_name} ${s.client_trade_name ?? ''} ${s.numero_nfe ?? ''} ${s.numero_venda ?? ''}`.toLowerCase();
         if (!hay.includes(q)) return false;
       }
       return true;
@@ -545,7 +545,12 @@ export default function PedidosPage() {
                 {paginated.map((s) => (
                   <tr key={s.id} className="border-b border-slate-100 last:border-0">
                     <td className="px-5 py-3">
-                      <div className="font-medium text-slate-900">{s.client_name}</div>
+                      <div className="font-medium text-slate-900">
+                        {s.client_trade_name ?? s.client_name}
+                      </div>
+                      {s.client_trade_name && (
+                        <div className="text-xs text-slate-500">{s.client_name}</div>
+                      )}
                       {s.client_cnpj && <div className="text-xs text-slate-400">{s.client_cnpj}</div>}
                     </td>
                     <td className="px-5 py-3">
@@ -589,84 +594,37 @@ export default function PedidosPage() {
                       )}
                     </td>
                     <td className="px-5 py-3 text-right whitespace-nowrap">
-                      {/* Menu [...] */}
-                      <div className="relative inline-block">
-                        <button
-                          type="button"
-                          onClick={() => setOpenMenuId(openMenuId === s.id ? null : s.id)}
-                          className="flex h-7 w-7 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-500 hover:bg-slate-50 hover:text-slate-700 transition-colors"
-                        >
-                          <svg viewBox="0 0 20 20" fill="currentColor" className="h-4 w-4">
-                            <path d="M10 3a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3ZM10 8.5a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3ZM11.5 15.5a1.5 1.5 0 1 0-3 0 1.5 1.5 0 0 0 3 0Z" />
-                          </svg>
-                        </button>
-                        {openMenuId === s.id && (
-                          <>
-                            <div
-                              className="fixed inset-0 z-10"
-                              onClick={() => setOpenMenuId(null)}
-                            />
-                            <div className="absolute right-0 top-8 z-20 w-40 rounded-lg border border-slate-200 bg-white py-1 shadow-lg">
-                              <button
-                                type="button"
-                                onClick={() => { setDetailId(s.id); setOpenMenuId(null); }}
-                                className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50"
-                              >
-                                <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" className="h-4 w-4 text-slate-400">
-                                  <path strokeLinecap="round" strokeLinejoin="round" d="M2.5 10s3-5.5 7.5-5.5S17.5 10 17.5 10s-3 5.5-7.5 5.5S2.5 10 2.5 10Z" />
-                                  <circle cx="10" cy="10" r="2" />
-                                </svg>
-                                Ver detalhes
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => { openEdit(s); setOpenMenuId(null); }}
-                                className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50"
-                              >
-                                <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" className="h-4 w-4 text-slate-400">
-                                  <path strokeLinecap="round" strokeLinejoin="round" d="M13.586 3.586a2 2 0 1 1 2.828 2.828l-8.5 8.5-3.5.672.672-3.5 8.5-8.5Z" />
-                                </svg>
-                                Editar
-                              </button>
-                              {s.status === 'pending' && (
-                                <button
-                                  type="button"
-                                  onClick={() => { changeStatus(s, 'shipped'); setOpenMenuId(null); }}
-                                  className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-emerald-700 hover:bg-emerald-50"
-                                >
-                                  <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" className="h-4 w-4">
-                                    <path strokeLinecap="round" strokeLinejoin="round" d="M3 10h14m-4-4 4 4-4 4" />
-                                  </svg>
-                                  Saiu
-                                </button>
-                              )}
-                              {s.status === 'shipped' && (
-                                <button
-                                  type="button"
-                                  onClick={() => { changeStatus(s, 'returned'); setOpenMenuId(null); }}
-                                  className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-sky-700 hover:bg-sky-50"
-                                >
-                                  <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" className="h-4 w-4">
-                                    <path strokeLinecap="round" strokeLinejoin="round" d="M17 10H3m4 4-4-4 4-4" />
-                                  </svg>
-                                  Voltou
-                                </button>
-                              )}
-                              <div className="my-1 border-t border-slate-100" />
-                              <button
-                                type="button"
-                                onClick={() => { setConfirmDelete(s); setOpenMenuId(null); }}
-                                className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50"
-                              >
-                                <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" className="h-4 w-4">
-                                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 4h8M4 6h12M7 6v9a1 1 0 0 0 1 1h4a1 1 0 0 0 1-1V6" />
-                                </svg>
-                                Excluir
-                              </button>
-                            </div>
-                          </>
-                        )}
-                      </div>
+                      <ActionMenu items={[
+                        {
+                          label: 'Ver detalhes',
+                          icon: <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" className="h-4 w-4 text-slate-400"><path strokeLinecap="round" strokeLinejoin="round" d="M2.5 10s3-5.5 7.5-5.5S17.5 10 17.5 10s-3 5.5-7.5 5.5S2.5 10 2.5 10Z" /><circle cx="10" cy="10" r="2" /></svg>,
+                          onClick: () => setDetailId(s.id),
+                        },
+                        {
+                          label: 'Editar',
+                          icon: <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" className="h-4 w-4 text-slate-400"><path strokeLinecap="round" strokeLinejoin="round" d="M13.586 3.586a2 2 0 1 1 2.828 2.828l-8.5 8.5-3.5.672.672-3.5 8.5-8.5Z" /></svg>,
+                          onClick: () => openEdit(s),
+                        },
+                        ...(s.status === 'pending' ? [{
+                          label: 'Saiu',
+                          variant: 'success' as const,
+                          icon: <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" className="h-4 w-4"><path strokeLinecap="round" strokeLinejoin="round" d="M3 10h14m-4-4 4 4-4 4" /></svg>,
+                          onClick: () => changeStatus(s, 'shipped'),
+                        }] : []),
+                        ...(s.status === 'shipped' ? [{
+                          label: 'Voltou',
+                          variant: 'info' as const,
+                          icon: <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" className="h-4 w-4"><path strokeLinecap="round" strokeLinejoin="round" d="M17 10H3m4 4-4-4 4-4" /></svg>,
+                          onClick: () => changeStatus(s, 'returned'),
+                        }] : []),
+                        {
+                          label: 'Excluir',
+                          variant: 'danger' as const,
+                          separator: true,
+                          icon: <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" className="h-4 w-4"><path strokeLinecap="round" strokeLinejoin="round" d="M6 4h8M4 6h12M7 6v9a1 1 0 0 0 1 1h4a1 1 0 0 0 1-1V6" /></svg>,
+                          onClick: () => setConfirmDelete(s),
+                        },
+                      ]} />
                     </td>
                   </tr>
                 ))}
