@@ -3,6 +3,7 @@ import { supabase } from '@/lib/supabase';
 import { Card } from '@/components/ui/Card';
 import { cn } from '@/lib/utils';
 import Pagination from '@/components/ui/Pagination';
+import { formatDateBR } from '@/lib/dates';
 
 const PAGE_SIZE = 25;
 
@@ -22,7 +23,7 @@ interface Row {
 const fmtBRL = (v: number) =>
   v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 const fmtDate = (s: string | null) =>
-  s ? new Date(s + (s.includes('T') ? '' : 'T00:00:00')).toLocaleDateString('pt-BR') : '—';
+  s ? formatDateBR(s) : '—';
 
 const TITULO_STATUS: Record<string, { label: string; cls: string }> = {
   aberto:    { label: 'Em aberto',  cls: 'bg-amber-100 text-amber-700' },

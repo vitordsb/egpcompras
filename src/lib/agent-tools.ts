@@ -11,6 +11,7 @@
 import { supabase } from '@/lib/supabase';
 import { fetchUsdBrl } from '@/lib/currency';
 import { buildPublicQuoteUrl } from '@/lib/utils';
+import { todayBR } from '@/lib/dates';
 import type { Type } from '@google/genai';
 
 
@@ -4616,7 +4617,7 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
     }
 
     case 'list_late_shipments': {
-      const today = new Date().toISOString().slice(0, 10);
+      const today = todayBR();
       const { data: lateShips, error: lateErr } = await supabase
         .from('shipments')
         .select('id, client_name, numero_nfe, numero_venda, data_prevista, valor_total, status')
@@ -5036,7 +5037,7 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
     case 'create_production_order': {
       const productName = String(args.product_name ?? '').trim();
       const qty = Number(args.quantity);
-      const sentAt = args.sent_at ? String(args.sent_at) : new Date().toISOString().slice(0, 10);
+      const sentAt = args.sent_at ? String(args.sent_at) : todayBR();
 
       // Localiza produto
       const { data: prods } = await supabase.from('products').select('id, name').ilike('name', `%${productName}%`).limit(1);
@@ -5172,7 +5173,7 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
       if (!orderId) return { finished: false, message: 'Ordem não encontrada.' };
 
       const qtyReturned = Number(args.quantity_returned);
-      const returnedAt = args.returned_at ? String(args.returned_at) : new Date().toISOString().slice(0, 10);
+      const returnedAt = args.returned_at ? String(args.returned_at) : todayBR();
 
       // Atualiza ordem
       await supabase.from('production_orders').update({
@@ -5564,7 +5565,7 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
     case 'register_incoming_material': {
       const itemName = String(args.item_name ?? '').trim();
       const expectedArrival = String(args.expected_arrival);
-      const orderedAt = args.ordered_at ? String(args.ordered_at) : new Date().toISOString().slice(0, 10);
+      const orderedAt = args.ordered_at ? String(args.ordered_at) : todayBR();
 
       // Resolve pedido vinculado se informado
       let shipId: string | null = null;
@@ -6266,7 +6267,7 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
     }
 
     case 'list_overdue_titles': {
-      const today = new Date().toISOString().slice(0, 10);
+      const today = todayBR();
       let q = supabase.from('titulos')
         .select('id, client_name, valor, vencimento, numero_titulo, financeira:financeiras(nome)')
         .eq('status', 'aberto').lt('vencimento', today).order('vencimento');
@@ -6493,7 +6494,7 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
         numero_nfe:     args.numero_nfe     ? String(args.numero_nfe).trim()     : null,
         numero_venda:   args.numero_venda   ? String(args.numero_venda).trim()   : null,
         vencimento:     args.vencimento     ? String(args.vencimento)            : null,
-        data_entrada:   args.data_entrada   ? String(args.data_entrada)          : new Date().toISOString().slice(0, 10),
+        data_entrada:   args.data_entrada   ? String(args.data_entrada)          : todayBR(),
         notes:          args.notes          ? String(args.notes).trim()          : null,
       };
       const { data, error } = await supabase
@@ -6547,7 +6548,7 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
 
       const patch: Record<string, unknown> = { status: newStatus, updated_at: new Date().toISOString() };
       if (newStatus === 'pago') {
-        patch.data_pagamento = args.data_pagamento ? String(args.data_pagamento) : new Date().toISOString().slice(0, 10);
+        patch.data_pagamento = args.data_pagamento ? String(args.data_pagamento) : todayBR();
       }
       const { error } = await supabase.from('titulos').update(patch).eq('id', id);
       if (error) throw new Error(error.message);
@@ -6569,7 +6570,7 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
       if (error) throw new Error(error.message);
 
       const map = new Map<string, { financeira: string; em_aberto: number; total_aberto: number; vencidos: number; total_geral: number }>();
-      const hoje = new Date().toISOString().slice(0, 10);
+      const hoje = todayBR();
       for (const row of (data ?? []) as any[]) {
         const fname = row.financeira?.nome ?? row.financeira_id;
         if (!map.has(fname)) map.set(fname, { financeira: fname, em_aberto: 0, total_aberto: 0, vencidos: 0, total_geral: 0 });

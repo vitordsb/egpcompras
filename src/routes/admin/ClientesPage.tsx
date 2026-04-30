@@ -46,10 +46,8 @@ function formatBRL(n: number | null): string {
   return n.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 }
 
-function formatDate(s: string | null): string {
-  if (!s) return '—';
-  return new Date(s).toLocaleDateString('pt-BR');
-}
+import { formatDateBR, daysSince as daysSinceBR } from '@/lib/dates';
+const formatDate = formatDateBR;
 
 function formatPhone(s: string | null): string {
   if (!s) return '—';
@@ -60,10 +58,7 @@ function formatPhone(s: string | null): string {
   return s;
 }
 
-function daysSince(s: string | null): number | null {
-  if (!s) return null;
-  return Math.floor((Date.now() - new Date(s).getTime()) / 86400000);
-}
+const daysSince = daysSinceBR;
 
 export default function ClientesPage() {
   const toast = useToast();

@@ -30,8 +30,9 @@ interface ChatSummary {
   is_exclusive: boolean;
 }
 
+import { todayBR } from '@/lib/dates';
 function todayIso(): string {
-  return new Date().toISOString().slice(0, 10);
+  return todayBR();
 }
 
 function dateRange(iso: string): { start: string; end: string } {

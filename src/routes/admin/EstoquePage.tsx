@@ -5,6 +5,7 @@ import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 import { cn } from '@/lib/utils';
 import Pagination from '@/components/ui/Pagination';
+import { formatDateBR } from '@/lib/dates';
 
 const PAGE_SIZE = 25;
 
@@ -71,7 +72,7 @@ function fmtQty(n: number, unit: string) {
   return `${Number(n).toLocaleString('pt-BR', { maximumFractionDigits: 2 })} ${unit}`;
 }
 function fmtDate(iso: string) {
-  return new Date(iso).toLocaleDateString('pt-BR');
+  return formatDateBR(iso);
 }
 
 type Tab = 'stock' | 'needs' | 'capacity' | 'history';

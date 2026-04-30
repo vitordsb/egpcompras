@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase';
 import { Card, CardBody } from '@/components/ui/Card';
 import { cn } from '@/lib/utils';
+import { todayBR, formatDateBR } from '@/lib/dates';
 
 interface Titulo {
   id: string;
@@ -19,8 +20,7 @@ interface Titulo {
 
 const fmtBRL = (v: number) =>
   v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
-const fmtDate = (s: string | null) =>
-  s ? new Date(s + (s.includes('T') ? '' : 'T00:00:00')).toLocaleDateString('pt-BR') : '—';
+const fmtDate = formatDateBR;
 
 const STATUS_MAP: Record<string, { label: string; cls: string }> = {
   aberto:    { label: 'Em aberto',  cls: 'bg-amber-100 text-amber-700' },
@@ -35,7 +35,7 @@ export default function RelatorioFinanceiraPage() {
   const [titulos, setTitulos] = useState<Titulo[]>([]);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<TabKey>('aberto');
-  const hoje = new Date().toISOString().slice(0, 10);
+  const hoje = todayBR();
 
   useEffect(() => {
     (async () => {

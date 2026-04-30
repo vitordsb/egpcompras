@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase';
 import { Card, CardBody } from '@/components/ui/Card';
 import { cn } from '@/lib/utils';
+import { formatDateBR } from '@/lib/dates';
 
 type OrderStatus = 'rascunho' | 'enviado' | 'em_montagem' | 'concluido' | 'cancelado';
 
@@ -53,7 +54,7 @@ const STATUS_PILL: Record<OrderStatus, string> = {
 
 function fmtDate(s: string | null) {
   if (!s) return '—';
-  return new Date(s + (s.includes('T') ? '' : 'T00:00:00')).toLocaleDateString('pt-BR');
+  return formatDateBR(s);
 }
 
 function fmtDateTime(s: string) {

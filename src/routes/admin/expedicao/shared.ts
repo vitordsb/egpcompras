@@ -1,4 +1,5 @@
 import type { ShipmentStatus } from '@/types/db';
+import { formatDateBR, formatDateTimeBR, todayBR } from '@/lib/dates';
 
 export type DisplayStatus = ShipmentStatus | 'late';
 
@@ -21,9 +22,7 @@ export const STATUS_PILL: Record<DisplayStatus, string> = {
 /** Retorna true se o pedido está pendente e a data prevista já passou. */
 export function isLate(s: { status: ShipmentStatus; data_prevista: string | null }): boolean {
   if (s.status !== 'pending' || !s.data_prevista) return false;
-  // Compara só a data (sem hora) pra não depender de timezone
-  const today = new Date().toISOString().slice(0, 10);
-  return s.data_prevista < today;
+  return s.data_prevista < todayBR();
 }
 
 /** Status visual derivado — não altera o DB. */
@@ -31,12 +30,5 @@ export function effectiveStatus(s: { status: ShipmentStatus; data_prevista: stri
   return isLate(s) ? 'late' : s.status;
 }
 
-export function formatDate(iso: string | null): string {
-  if (!iso) return '—';
-  return new Date(iso).toLocaleDateString('pt-BR');
-}
-
-export function formatDateTime(iso: string | null): string {
-  if (!iso) return '—';
-  return new Date(iso).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
-}
+export const formatDate = formatDateBR;
+export const formatDateTime = formatDateTimeBR;

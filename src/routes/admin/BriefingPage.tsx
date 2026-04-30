@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { supabase } from '@/lib/supabase';
 import { cn } from '@/lib/utils';
 import { isLate } from '@/routes/admin/expedicao/shared';
+import { formatDateBR, todayBR } from '@/lib/dates';
 import MarkdownText from '@/components/MarkdownText';
 import type { ShipmentStatus } from '@/types/db';
 
@@ -54,7 +55,7 @@ interface OverdueTitle {
 }
 
 function fmtDate(iso: string) {
-  return new Date(iso).toLocaleDateString('pt-BR');
+  return formatDateBR(iso);
 }
 
 function fmtTime(iso: string) {
@@ -98,7 +99,7 @@ export default function BriefingPage() {
   useEffect(() => {
     async function load() {
       const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-      const today = new Date().toISOString().slice(0, 10);
+      const today = todayBR();
 
       const [runsRes, shipmentsRes, titlesRes, memoriesRes, waRes, stockRes] = await Promise.all([
         supabase
