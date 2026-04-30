@@ -441,15 +441,18 @@ PASSO 2 — Montar a lista de itens
 - Aguarde confirmação antes de prosseguir
 
 PASSO 3 — Resolver o fornecedor
+IMPORTANTE: para cotações, use SEMPRE list_suppliers(). NUNCA use find_whatsapp_contact() para cotações — são tabelas diferentes.
+
 - Chame list_suppliers() e busque pelo nome mencionado
-- Se encontrar exatamente 1 → use-o
+- Se encontrar exatamente 1 com WhatsApp → use supplier_id normalmente
 - Se encontrar mais de 1 → pergunte: "Encontrei [X] e [Y]. Qual deles?"
-- Se não encontrar nenhum → pergunte: "Não encontrei fornecedor com esse nome. Quer que eu cadastre agora? Se sim, me passe o WhatsApp dele."
-  - Se usuário confirmar: use create_supplier() com o nome + whatsapp_phone fornecido
-  - Se usuário negar: encerre sem enviar
-- Se encontrar mas sem WhatsApp → pergunte: "Fornecedor [X] não tem WhatsApp cadastrado. Me passa o número para eu salvar e enviar."
-  - Se usuário passar: update_supplier() para salvar, depois envia
-  - Se usuário negar: encerre
+- Se encontrar mas sem WhatsApp:
+  - Se o usuário já tiver dito o número na mensagem → passe phone= diretamente (a tool salva automaticamente)
+  - Se não → pergunte: "Qual é o WhatsApp do [fornecedor]?"
+- Se não encontrar nenhum:
+  - Se o usuário já tiver dito o número → passe phone= + supplier_name= (a tool cria o fornecedor)
+  - Se não → pergunte: "Não encontrei '[nome]'. Qual é o WhatsApp dele?"
+  - Quando o usuário passar o número, chame send_quote_request_whatsapp com phone= e supplier_name=
 
 PASSO 4 — Enviar
 - Chame send_quote_request_whatsapp(supplier_id, items, custom_message?)

@@ -384,11 +384,13 @@ export const toolDeclarations = [
   },
   {
     name: 'send_quote_request_whatsapp',
-    description: 'Cria uma cotação no sistema, gera link único para o fornecedor preencher e envia via WhatsApp com lista de itens + link. Use quando o usuário pedir cotação para um fornecedor específico. Busque o fornecedor em list_suppliers se não tiver o ID.',
+    description: 'Cria uma cotação no sistema, gera link único e envia via WhatsApp. Aceita supplier_id OU phone direto. SEMPRE use list_suppliers para buscar fornecedor por nome — NUNCA use find_whatsapp_contact para cotações. Se o usuário fornecer um número de telefone diretamente, passe como phone.',
     parameters: {
       type: 'OBJECT' as Type,
       properties: {
-        supplier_id: { type: 'STRING' as Type, description: 'ID do fornecedor (use list_suppliers para encontrar).' },
+        supplier_id:   { type: 'STRING' as Type, description: 'ID do fornecedor em suppliers (use list_suppliers para encontrar). Obrigatório se phone não for passado.' },
+        phone:         { type: 'STRING' as Type, description: 'Número WhatsApp direto (ex: "11 93957-2807"). Use quando o usuário fornecer o número na mensagem. A tool salva o número no fornecedor automaticamente.' },
+        supplier_name: { type: 'STRING' as Type, description: 'Nome do fornecedor — obrigatório quando usar phone sem supplier_id.' },
         items: {
           type: 'ARRAY' as Type,
           description: 'Lista de itens para cotar.',
@@ -405,9 +407,9 @@ export const toolDeclarations = [
         notes:          { type: 'STRING' as Type, description: 'Observações internas (prazo desejado, qualidade, etc.) — aparece na mensagem.' },
         deadline_days:  { type: 'NUMBER' as Type, description: 'Prazo em dias para resposta. Default 5.' },
         title:          { type: 'STRING' as Type, description: 'Título da cotação. Se omitido, gerado automaticamente.' },
-        custom_message: { type: 'STRING' as Type, description: 'Texto personalizado da mensagem WhatsApp. Se fornecido, substitui o texto padrão formal — o link e a lista de itens são sempre anexados automaticamente. Ex: "Olá, tudo bom? pode cotar pra mim essa lista? qualquer dúvida é só chamar".' },
+        custom_message: { type: 'STRING' as Type, description: 'Texto personalizado da mensagem WhatsApp. Se fornecido, substitui o texto padrão formal.' },
       },
-      required: ['supplier_id', 'items'],
+      required: ['items'],
     },
   },
   {
@@ -2504,20 +2506,52 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
     }
 
     case 'send_quote_request_whatsapp': {
-      const supplierId = String(args.supplier_id ?? '');
-      if (!supplierId) throw new Error('supplier_id é obrigatório');
       const items = (args.items ?? []) as Array<{ name: string; quantity: number; unit?: string }>;
       if (!items.length) throw new Error('items não pode ser vazio');
 
-      // 1. Busca fornecedor
-      const { data: supplier, error: suppErr } = await supabase
-        .from('suppliers')
-        .select('id, name, whatsapp_phone')
-        .eq('id', supplierId)
-        .single();
-      if (suppErr || !supplier) throw new Error('Fornecedor não encontrado');
-      if (!(supplier as any).whatsapp_phone) {
-        throw new Error(`Fornecedor "${(supplier as any).name}" não tem número WhatsApp cadastrado. Use update_supplier para adicionar.`);
+      // 1. Resolve fornecedor — por supplier_id ou por phone direto
+      let supplierId = String(args.supplier_id ?? '');
+      let supplierName = '';
+      let whatsappPhone = '';
+
+      if (supplierId) {
+        // Caminho normal: busca pelo ID
+        const { data: supplier, error: suppErr } = await supabase
+          .from('suppliers').select('id, name, whatsapp_phone').eq('id', supplierId).single();
+        if (suppErr || !supplier) throw new Error('Fornecedor não encontrado');
+        supplierName = (supplier as any).name;
+        whatsappPhone = (supplier as any).whatsapp_phone ?? '';
+        if (!whatsappPhone && args.phone) {
+          // Usuário forneceu número — salva e usa
+          const digits = String(args.phone).replace(/\D/g, '');
+          whatsappPhone = digits.startsWith('55') ? digits : `55${digits}`;
+          await supabase.from('suppliers').update({ whatsapp_phone: whatsappPhone }).eq('id', supplierId);
+        }
+        if (!whatsappPhone) {
+          throw new Error(`Fornecedor "${supplierName}" não tem WhatsApp cadastrado. Forneça o número na mesma mensagem — ex: "manda pro Vitor, número 11 99999-9999".`);
+        }
+      } else if (args.phone) {
+        // Caminho alternativo: número direto, tenta encontrar fornecedor pelo número
+        const digits = String(args.phone).replace(/\D/g, '');
+        whatsappPhone = digits.startsWith('55') ? digits : `55${digits}`;
+        const { data: byPhone } = await supabase
+          .from('suppliers').select('id, name').eq('whatsapp_phone', whatsappPhone).maybeSingle();
+        if (byPhone) {
+          supplierId = (byPhone as any).id;
+          supplierName = (byPhone as any).name;
+        } else {
+          // Cria fornecedor mínimo com o número
+          const name = args.supplier_name ? String(args.supplier_name).trim() : `Fornecedor ${whatsappPhone.slice(-4)}`;
+          const { data: created, error: createErr } = await supabase
+            .from('suppliers')
+            .insert({ name, email: `${whatsappPhone}@whatsapp.tmp`, whatsapp_phone: whatsappPhone, default_currency: 'BRL' })
+            .select('id, name').single();
+          if (createErr || !created) throw new Error(createErr?.message ?? 'Falha ao criar fornecedor');
+          supplierId = (created as any).id;
+          supplierName = (created as any).name;
+        }
+      } else {
+        throw new Error('Informe supplier_id (use list_suppliers) OU phone (número WhatsApp direto).');
       }
 
       // 2. Cria cotação no banco
@@ -2525,7 +2559,7 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
       const deadline = new Date(Date.now() + deadlineDays * 86400000).toISOString();
       const title = args.title
         ? String(args.title)
-        : `Cotação ${(supplier as any).name} — ${new Date().toLocaleDateString('pt-BR')}`;
+        : `Cotação ${supplierName} — ${new Date().toLocaleDateString('pt-BR')}`;
 
       let usdRate: number | null = null;
       try { const fx = await fetchUsdBrl(); usdRate = fx.rate; } catch {}
@@ -2582,15 +2616,15 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
       const res = await fetch(`${supabaseUrl}/functions/v1/whatsapp-send`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', apikey: anonKey, Authorization: `Bearer ${anonKey}` },
-        body: JSON.stringify({ to: (supplier as any).whatsapp_phone, text: message }),
+        body: JSON.stringify({ to: whatsappPhone, text: message }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error ?? 'Falha ao enviar cotação WhatsApp');
 
       return {
         sent: true,
-        supplier: (supplier as any).name,
-        phone: (supplier as any).whatsapp_phone,
+        supplier: supplierName,
+        phone: whatsappPhone,
         quotation_id: quotationId,
         invite_url: inviteUrl,
         items_count: items.length,
