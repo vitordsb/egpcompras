@@ -440,13 +440,16 @@ export default function BuyerAgentPage() {
           if (t.toolCall && RH_TOOL_NAMES.has(t.toolCall.name) && chatId) {
             supabase.from('ai_chats').update({ is_exclusive: true }).eq('id', chatId).then(() => {});
           }
-          // Auto-anexar arquivos aos shipments criados via IA
+          // Auto-anexar arquivos aos shipments criados via IA (ou já existentes)
           if (t.toolCall?.name === 'create_shipment') {
             lastShipmentToolCall = t.toolCall;
           } else if (t.toolResponse?.name === 'create_shipment' && !t.toolResponse.error && lastShipmentToolCall) {
             const result = (t.toolResponse.data ?? {}) as Record<string, unknown>;
-            const created = (result.created ?? result) as Record<string, unknown>;
-            const shipmentId = typeof created?.id === 'string' ? created.id : null;
+            const created = (result.created ?? {}) as Record<string, unknown>;
+            // Match: id de novo shipment OU shipment_id de retorno already_exists
+            const shipmentId = (typeof created?.id === 'string' && created.id)
+              || (typeof result.shipment_id === 'string' && result.shipment_id)
+              || null;
             const numeroNfe = String(lastShipmentToolCall.args?.numero_nfe ?? '');
             const numeroVenda = String(lastShipmentToolCall.args?.numero_venda ?? '');
             const callRef = lastShipmentToolCall;

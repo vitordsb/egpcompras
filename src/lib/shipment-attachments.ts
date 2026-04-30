@@ -10,8 +10,17 @@ export interface ShipmentAttachment {
   file_type: AttachmentType;
   mime_type: string;
   size_bytes: number | null;
+  content_hash: string | null;
   uploaded_at: string;
   uploaded_by: string | null;
+}
+
+async function computeSha256(blob: Blob): Promise<string> {
+  const buf = await blob.arrayBuffer();
+  const hash = await crypto.subtle.digest('SHA-256', buf);
+  return Array.from(new Uint8Array(hash))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
 }
 
 const BUCKET = 'shipments';
@@ -34,8 +43,8 @@ export function detectAttachmentType(fileName: string, mimeType: string): Attach
 }
 
 /**
- * Upload de arquivo do shipment.
- * - data: pode ser File, Blob, ou base64 string (com ou sem prefixo data:)
+ * Upload de arquivo do shipment com dedupe por SHA-256.
+ * Se o mesmo conteúdo já existe nesse shipment, retorna o existente sem novo upload.
  */
 export async function uploadShipmentAttachment(opts: {
   shipmentId: string;
@@ -44,7 +53,7 @@ export async function uploadShipmentAttachment(opts: {
   data: File | Blob | string; // string = base64
   type?: AttachmentType;
   uploadedBy?: string;
-}): Promise<ShipmentAttachment> {
+}): Promise<ShipmentAttachment & { _duplicate?: boolean }> {
   const { shipmentId, fileName, mimeType, data, type, uploadedBy } = opts;
 
   // Converte base64 → Blob se necessário
@@ -57,6 +66,20 @@ export async function uploadShipmentAttachment(opts: {
     blob = new Blob([arr], { type: mimeType });
   } else {
     blob = data;
+  }
+
+  // Calcula hash do conteúdo
+  const contentHash = await computeSha256(blob);
+
+  // Dedupe: se já existir registro com mesmo hash nesse shipment, retorna ele
+  const { data: existing } = await supabase
+    .from('shipment_attachments')
+    .select('*')
+    .eq('shipment_id', shipmentId)
+    .eq('content_hash', contentHash)
+    .maybeSingle();
+  if (existing) {
+    return { ...(existing as ShipmentAttachment), _duplicate: true };
   }
 
   const ext = fileName.split('.').pop() ?? 'bin';
@@ -79,6 +102,7 @@ export async function uploadShipmentAttachment(opts: {
       file_type: detectedType,
       mime_type: mimeType,
       size_bytes: blob.size,
+      content_hash: contentHash,
       uploaded_by: uploadedBy ?? null,
     })
     .select('*')

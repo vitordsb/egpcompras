@@ -59,8 +59,10 @@ export default function ShipmentAttachmentsPanel({ shipmentId, uploadedBy }: Pro
     if (!files?.length) return;
     setUploading(true);
     try {
+      let novos = 0;
+      let duplicados = 0;
       for (const file of Array.from(files)) {
-        await uploadShipmentAttachment({
+        const result = await uploadShipmentAttachment({
           shipmentId,
           fileName: file.name,
           mimeType: file.type || 'application/octet-stream',
@@ -68,8 +70,13 @@ export default function ShipmentAttachmentsPanel({ shipmentId, uploadedBy }: Pro
           type: detectAttachmentType(file.name, file.type),
           uploadedBy,
         });
+        if ((result as any)._duplicate) duplicados++;
+        else novos++;
       }
-      toast.success('Upload concluído', `${files.length} arquivo${files.length > 1 ? 's' : ''} anexado${files.length > 1 ? 's' : ''}`);
+      const parts: string[] = [];
+      if (novos > 0) parts.push(`${novos} novo${novos > 1 ? 's' : ''}`);
+      if (duplicados > 0) parts.push(`${duplicados} já existente${duplicados > 1 ? 's' : ''} (ignorado${duplicados > 1 ? 's' : ''})`);
+      toast.success('Upload concluído', parts.join(' · '));
       await load();
     } catch (err) {
       toast.error('Erro no upload', err instanceof Error ? err.message : String(err));
