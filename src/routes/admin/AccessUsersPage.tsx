@@ -92,32 +92,30 @@ function PermissionsMatrix() {
           </tr>
         </thead>
         <tbody>
-          {groups.map(({ group, keys }) => (
-            <>
-              <tr key={`g-${group}`} className="border-b border-slate-100 bg-slate-50/50">
-                <td colSpan={ALL_ROLES.length + 1} className="px-5 py-1.5 text-xs font-semibold uppercase tracking-wide text-slate-400">
-                  {group}
+          {groups.flatMap(({ group, keys }) => [
+            <tr key={`g-${group}`} className="border-b border-slate-100 bg-slate-50/50">
+              <td colSpan={ALL_ROLES.length + 1} className="px-5 py-1.5 text-xs font-semibold uppercase tracking-wide text-slate-400">
+                {group}
+              </td>
+            </tr>,
+            ...keys.map((key) => (
+              <tr key={key} className="border-b border-slate-100 last:border-0 hover:bg-slate-50">
+                <td className="px-5 py-2.5 text-slate-700 font-medium">
+                  {PAGE_DEFINITIONS[key].label}
                 </td>
-              </tr>
-              {keys.map((key) => (
-                <tr key={key} className="border-b border-slate-100 last:border-0 hover:bg-slate-50">
-                  <td className="px-5 py-2.5 text-slate-700 font-medium">
-                    {PAGE_DEFINITIONS[key].label}
+                {ALL_ROLES.map((role) => (
+                  <td key={role} className="px-3 py-2.5 text-center">
+                    <input
+                      type="checkbox"
+                      checked={perms[role]?.has(key) ?? false}
+                      onChange={() => toggle(role, key)}
+                      className="h-4 w-4 rounded border-slate-300 text-brand-600 cursor-pointer"
+                    />
                   </td>
-                  {ALL_ROLES.map((role) => (
-                    <td key={role} className="px-3 py-2.5 text-center">
-                      <input
-                        type="checkbox"
-                        checked={perms[role]?.has(key) ?? false}
-                        onChange={() => toggle(role, key)}
-                        className="h-4 w-4 rounded border-slate-300 text-brand-600 cursor-pointer"
-                      />
-                    </td>
-                  ))}
-                </tr>
-              ))}
-            </>
-          ))}
+                ))}
+              </tr>
+            )),
+          ])}
         </tbody>
       </table>
     </div>
