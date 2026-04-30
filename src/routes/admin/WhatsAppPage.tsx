@@ -221,13 +221,16 @@ export default function WhatsAppPage() {
                 messages.map((m) => (
                   <div key={m.id} className={cn('flex', m.direction === 'out' ? 'justify-end' : 'justify-start')}>
                     <div className={cn(
-                      'max-w-[75%] rounded-2xl px-3.5 py-2 text-sm shadow-sm',
+                      'max-w-[75%] rounded-lg px-3 py-2 text-sm shadow-sm',
                       m.direction === 'out'
-                        ? 'rounded-br-sm bg-green-500 text-white'
-                        : 'rounded-bl-sm bg-white text-slate-800 border border-slate-200'
-                    )}>
+                        // verde claro WhatsApp (#d9fdd3) com texto escuro
+                        ? 'rounded-br-sm text-slate-800'
+                        : 'rounded-bl-sm bg-white text-slate-800 border border-slate-100'
+                    )}
+                    style={m.direction === 'out' ? { backgroundColor: '#d9fdd3' } : undefined}
+                    >
                       <p className="whitespace-pre-wrap leading-relaxed">{m.text}</p>
-                      <p className={cn('mt-1 text-[10px]', m.direction === 'out' ? 'text-green-100' : 'text-slate-400')}>
+                      <p className="mt-1 text-right text-[10px] text-slate-500">
                         {fmtDateTime(m.created_at)}
                       </p>
                     </div>
