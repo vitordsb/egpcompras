@@ -804,6 +804,8 @@ export interface RunOptions {
   userMessage: string;
   /** Usuário atual — injetado no system prompt e passado como author nas tools */
   currentUser?: string;
+  /** Cargo do usuário — filtra as tools disponíveis */
+  userRole?: import('@/lib/roles').UserRole;
   /** PDF único (legado) */
   userInlineData?: { mimeType: string; data: string; fileName?: string };
   /** Múltiplos PDFs enviados de uma vez */
@@ -822,6 +824,7 @@ export async function runAgent({
   history,
   userMessage,
   currentUser,
+  userRole,
   userInlineData,
   userInlineDataList,
   onTurn,
@@ -878,6 +881,13 @@ export async function runAgent({
   const [memories, procedures] = await Promise.all([loadMemories(), loadProcedureCatalog()]);
   const fullSystemInstruction = buildSystemInstruction(memories, procedures, currentUser);
 
+  // Filtra tools pelo cargo do usuário
+  const { getToolNamesForRole } = await import('@/lib/roles');
+  const allowedTools = userRole ? getToolNamesForRole(userRole) : '*';
+  const filteredTools = allowedTools === '*'
+    ? toolDeclarations
+    : toolDeclarations.filter((t) => (allowedTools as Set<string>).has(t.name));
+
   const MAX_STEPS = 25;
   for (let step = 0; step < MAX_STEPS; step++) {
     if (signal?.aborted) {
@@ -887,7 +897,7 @@ export async function runAgent({
       provider,
       {
         systemInstruction: fullSystemInstruction,
-        tools: toolDeclarations as any,
+        tools: filteredTools as any,
         history: workingHistory,
       },
       { signal, onRetry, onRetryClear }

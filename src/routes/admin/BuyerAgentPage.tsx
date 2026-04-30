@@ -76,7 +76,7 @@ function formatRelativeDate(iso: string): string {
 }
 
 export default function BuyerAgentPage() {
-  const { userLabel, userEmail } = useInternalAuth();
+  const { userLabel, userEmail, userRole } = useInternalAuth();
   const isRhUser = userEmail != null && RH_AUTHORIZED_EMAILS.includes(userEmail.toLowerCase());
   const provider = geminiProvider;
   const [providerStatus, setProviderStatus] = useState<{ ok: boolean; message?: string } | null>(null);
@@ -420,6 +420,7 @@ export default function BuyerAgentPage() {
         history,
         userMessage: finalMessage,
         currentUser: userLabel,
+        userRole,
         userInlineDataList: filesToSend.length > 0
           ? filesToSend.map((f) => ({ mimeType: f.mimeType, data: f.data, fileName: f.name }))
           : undefined,

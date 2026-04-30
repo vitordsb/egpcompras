@@ -5,6 +5,7 @@ import { cn } from '@/lib/utils';
 import Header from '@/components/Header';
 import QuickChatDrawer from '@/components/QuickChatDrawer';
 import { useInternalAuth } from '@/lib/auth-context';
+import { canAccessPage } from '@/lib/roles';
 import {
   writeUIMode,
   writeLastAdminRoute,
@@ -411,8 +412,22 @@ export default function AdminLayout() {
   const location = useLocation();
   const navigate = useNavigate();
   const mode = useUIMode();
-  const { isMaster, userEmail } = useInternalAuth();
+  const { userEmail, userRole } = useInternalAuth();
   const isRhUser = userEmail != null && RH_EMAILS.includes(userEmail.toLowerCase());
+
+  // Filtra seções do nav pelo cargo do usuário
+  function sectionVisible(item: NavItem): boolean {
+    if (userRole === 'admin') return true;
+    if (item.children) {
+      return item.children.some((c) => c.to && canAccessPage(userRole, c.to));
+    }
+    return item.to ? canAccessPage(userRole, item.to) : false;
+  }
+
+  function filterChildren(item: NavItem): NavItem {
+    if (!item.children) return item;
+    return { ...item, children: item.children.filter((c) => !c.to || canAccessPage(userRole, c.to)) };
+  }
   const [mobileOpen, setMobileOpen] = useState(false);
   const [configOpen, setConfigOpen] = useState(false);
   const [quickChatOpen, setQuickChatOpen] = useState(false);
@@ -509,7 +524,7 @@ export default function AdminLayout() {
   }, [mobileOpen]);
 
   // Verifica se alguma rota de config está ativa pra destacar o botão
-  const configNavLinks = isMaster ? [...configLinks, accessLink] : configLinks;
+  const configNavLinks = userRole === 'admin' ? [...configLinks, accessLink] : [];
   const configActive = configNavLinks.some(
     (l) => l.to && location.pathname.startsWith(l.to)
   );
@@ -574,13 +589,14 @@ export default function AdminLayout() {
             }}
           />
           <div className="my-1 border-t border-slate-100" />
-          {mainLinks.map((l) =>
-            l.children ? (
-              <NavGroup key={l.label} item={l} />
+          {mainLinks.filter(sectionVisible).map((l) => {
+            const filtered = filterChildren(l);
+            return filtered.children ? (
+              <NavGroup key={filtered.label} item={filtered} />
             ) : (
-              <NavItemRow key={l.to ?? l.label} item={l} />
-            )
-          )}
+              <NavItemRow key={filtered.to ?? filtered.label} item={filtered} />
+            );
+          })}
           {/* RH — visível apenas para vitor@grupoegp e joane@grupoegp */}
           {isRhUser && (
             <>
