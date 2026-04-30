@@ -76,7 +76,8 @@ export default function PedidosPage() {
   const [list, setList] = useState<ShipmentRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [listError, setListError] = useState<string | null>(null);
-  const [statusFilter, setStatusFilter] = useState<DisplayStatus | 'all'>('all');
+  // 'open' (default) = pendentes + atrasados — esconde saíram/voltaram/cancelados
+  const [statusFilter, setStatusFilter] = useState<DisplayStatus | 'all' | 'open' | 'with-obs'>('open');
   const [search, setSearch] = useState('');
 
   const [form, setForm] = useState<FormState | null>(null);
@@ -143,12 +144,18 @@ export default function PedidosPage() {
 
   const filtered = useMemo(() => {
     return list.filter((s) => {
-      if (statusFilter !== 'all') {
-        if (statusFilter === 'late') {
-          if (!isLate(s)) return false;
-        } else {
-          if (s.status !== statusFilter || isLate(s)) return false;
-        }
+      if (statusFilter === 'open') {
+        // Em aberto = pendentes + atrasados (esconde saíram/voltaram/cancelados)
+        if (s.status !== 'pending') return false;
+      } else if (statusFilter === 'with-obs') {
+        if ((s.observations_count ?? 0) === 0) return false;
+      } else if (statusFilter === 'late') {
+        if (!isLate(s)) return false;
+      } else if (statusFilter !== 'all') {
+        // Filtro por status específico (pending/shipped/returned/cancelled)
+        if (s.status !== statusFilter) return false;
+        // Pendentes: exclui os atrasados (que aparecem no card 'late')
+        if (statusFilter === 'pending' && isLate(s)) return false;
       }
       if (search.trim()) {
         const q = search.toLowerCase();
@@ -436,7 +443,9 @@ export default function PedidosPage() {
       else byStatus[s.status]++;
     }
     const withObs = list.filter((s) => (s.observations_count ?? 0) > 0).length;
-    return { ...byStatus, withObs };
+    // 'open' = total que precisa de atenção: pendentes (no prazo + atrasados)
+    const open = byStatus.pending + byStatus.late;
+    return { ...byStatus, open, withObs };
   }, [list]);
 
   // ---- Render -----------------------------------------------------
@@ -460,32 +469,27 @@ export default function PedidosPage() {
         </div>
       )}
 
-      {/* Cards de stats */}
-      <div className="mb-6 grid gap-3 sm:grid-cols-3 lg:grid-cols-6">
+      {/* Cards de stats — 'open' é o default (pendentes + atrasados) */}
+      <div className="mb-6 grid gap-3 sm:grid-cols-3 lg:grid-cols-7">
         {(
           [
-            { key: 'all',      label: 'Total',            value: list.length,   color: 'text-slate-900' },
+            { key: 'open',     label: 'Em aberto',        value: stats.open,    color: 'text-brand-700' },
             { key: 'late',     label: 'Atrasados',        value: stats.late,    color: 'text-red-700' },
-            { key: 'pending',  label: 'Pendentes',        value: stats.pending, color: 'text-amber-700' },
+            { key: 'pending',  label: 'No prazo',         value: stats.pending, color: 'text-amber-700' },
             { key: 'shipped',  label: 'Saíram',           value: stats.shipped, color: 'text-emerald-700' },
             { key: 'returned', label: 'Voltaram',         value: stats.returned, color: 'text-sky-700' },
             { key: 'with-obs', label: 'Com observações',  value: stats.withObs, color: 'text-purple-700' },
+            { key: 'all',      label: 'Total',            value: list.length,   color: 'text-slate-900' },
           ] as const
         ).map((s) => (
           <button
             key={s.key}
             type="button"
-            onClick={() => {
-              if (s.key === 'all' || s.key === 'with-obs') {
-                setStatusFilter('all');
-              } else {
-                setStatusFilter(s.key as DisplayStatus);
-              }
-            }}
+            onClick={() => setStatusFilter(s.key as typeof statusFilter)}
             className={cn(
               'rounded-lg border p-3 text-left transition-colors',
-              statusFilter === s.key || (s.key === 'all' && statusFilter === 'all')
-                ? 'border-brand-300 bg-brand-50'
+              statusFilter === s.key
+                ? 'border-brand-400 bg-brand-50 ring-1 ring-brand-200'
                 : s.key === 'late' && stats.late > 0
                   ? 'border-red-200 bg-red-50 hover:bg-red-100'
                   : 'border-slate-200 bg-white hover:bg-slate-50'
