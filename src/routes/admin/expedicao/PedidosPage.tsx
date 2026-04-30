@@ -13,6 +13,7 @@ import ActionMenu from '@/components/ui/ActionMenu';
 import ShipmentAttachmentsPanel from '@/components/ShipmentAttachmentsPanel';
 import { useInternalAuth } from '@/lib/auth-context';
 import { useBodyScrollLock } from '@/hooks/useBodyScrollLock';
+import PortalOverlay from '@/components/ui/PortalOverlay';
 
 const PAGE_SIZE = 9;
 
@@ -674,8 +675,9 @@ export default function PedidosPage() {
 
       {/* Modal de criar/editar */}
       {form && (
+        <PortalOverlay>
         <div
-          className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/40 p-4"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4"
           onClick={closeForm}
         >
           <div
@@ -975,12 +977,14 @@ export default function PedidosPage() {
             </form>
           </div>
         </div>
+        </PortalOverlay>
       )}
 
       {/* Modal de detalhes (timeline de observações) */}
       {detailId && detailShipment && (
+        <PortalOverlay>
         <div
-          className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/40 p-4"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4"
           onClick={() => setDetailId(null)}
         >
           <div
@@ -1145,12 +1149,14 @@ export default function PedidosPage() {
             </div>
           </div>
         </div>
+        </PortalOverlay>
       )}
 
       {/* Confirmação de exclusão */}
       {confirmDelete && (
+        <PortalOverlay>
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4"
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/50 p-4"
           onClick={() => setConfirmDelete(null)}
         >
           <div
@@ -1175,6 +1181,7 @@ export default function PedidosPage() {
             </div>
           </div>
         </div>
+        </PortalOverlay>
       )}
     </div>
   );
