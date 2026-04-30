@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/Button';
 import { Card, CardBody, CardHeader, CardTitle } from '@/components/ui/Card';
 import { Input, Label, Textarea } from '@/components/ui/Input';
 import { cn } from '@/lib/utils';
-import { STATUS_LABEL, STATUS_PILL, formatDate, formatDateTime, effectiveStatus, isLate } from './shared';
+import { STATUS_LABEL, STATUS_PILL, formatDate, formatDateTime, effectiveStatus, isLate, isOnTime } from './shared';
 import type { DisplayStatus } from './shared';
 import { friendlyDbError } from '@/lib/db-error';
 import Pagination from '@/components/ui/Pagination';
@@ -145,17 +145,19 @@ export default function PedidosPage() {
   const filtered = useMemo(() => {
     return list.filter((s) => {
       if (statusFilter === 'open') {
-        // Em aberto = pendentes + atrasados (esconde saíram/voltaram/cancelados)
+        // Em aberto = todos os pendentes (atrasados + hoje + futuros)
         if (s.status !== 'pending') return false;
       } else if (statusFilter === 'with-obs') {
         if ((s.observations_count ?? 0) === 0) return false;
       } else if (statusFilter === 'late') {
         if (!isLate(s)) return false;
+      } else if (statusFilter === 'on_time') {
+        if (!isOnTime(s)) return false;
+      } else if (statusFilter === 'pending') {
+        // Pendente = hoje (não atrasado, não futuro)
+        if (s.status !== 'pending' || isLate(s) || isOnTime(s)) return false;
       } else if (statusFilter !== 'all') {
-        // Filtro por status específico (pending/shipped/returned/cancelled)
         if (s.status !== statusFilter) return false;
-        // Pendentes: exclui os atrasados (que aparecem no card 'late')
-        if (statusFilter === 'pending' && isLate(s)) return false;
       }
       if (search.trim()) {
         const q = search.toLowerCase();
@@ -437,14 +439,17 @@ export default function PedidosPage() {
   // ---- Stats por status -------------------------------------------
 
   const stats = useMemo(() => {
-    const byStatus = { pending: 0, shipped: 0, returned: 0, cancelled: 0, late: 0 };
+    const byStatus = { pending: 0, shipped: 0, returned: 0, cancelled: 0, late: 0, on_time: 0 };
     for (const s of list) {
-      if (isLate(s)) byStatus.late++;
-      else byStatus[s.status]++;
+      if (s.status !== 'pending') {
+        byStatus[s.status]++;
+      } else if (isLate(s))   byStatus.late++;
+      else if (isOnTime(s))   byStatus.on_time++;
+      else                    byStatus.pending++; // hoje (ou sem data)
     }
     const withObs = list.filter((s) => (s.observations_count ?? 0) > 0).length;
-    // 'open' = total que precisa de atenção: pendentes (no prazo + atrasados)
-    const open = byStatus.pending + byStatus.late;
+    // 'open' = total que precisa de atenção: atrasado + hoje + futuro pendente
+    const open = byStatus.pending + byStatus.late + byStatus.on_time;
     return { ...byStatus, open, withObs };
   }, [list]);
 
@@ -469,17 +474,17 @@ export default function PedidosPage() {
         </div>
       )}
 
-      {/* Cards de stats — 'open' é o default (pendentes + atrasados) */}
+      {/* Cards de stats — 'open' é o default (todos os pendentes) */}
       <div className="mb-6 grid gap-3 sm:grid-cols-3 lg:grid-cols-7">
         {(
           [
             { key: 'open',     label: 'Em aberto',        value: stats.open,    color: 'text-brand-700' },
             { key: 'late',     label: 'Atrasados',        value: stats.late,    color: 'text-red-700' },
-            { key: 'pending',  label: 'No prazo',         value: stats.pending, color: 'text-amber-700' },
+            { key: 'pending',  label: 'Pendente (hoje)',  value: stats.pending, color: 'text-amber-700' },
+            { key: 'on_time',  label: 'No prazo',         value: stats.on_time, color: 'text-green-700' },
             { key: 'shipped',  label: 'Saíram',           value: stats.shipped, color: 'text-emerald-700' },
             { key: 'returned', label: 'Voltaram',         value: stats.returned, color: 'text-sky-700' },
             { key: 'with-obs', label: 'Com observações',  value: stats.withObs, color: 'text-purple-700' },
-            { key: 'all',      label: 'Total',            value: list.length,   color: 'text-slate-900' },
           ] as const
         ).map((s) => (
           <button
