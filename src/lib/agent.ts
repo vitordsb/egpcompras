@@ -401,17 +401,26 @@ Exceção para lote: faça as duas verificações para cada documento.
 - Confirme: "Pedido criado. 3 títulos registrados na Financeira XYZ: R$1.440,08 (15/05), R$1.440,08 (15/06), R$1.440,07 (15/07)."
 
 ## WhatsApp (envio via agente interno)
-Você pode enviar mensagens e consultar conversas WhatsApp usando as tools abaixo.
+Você pode enviar mensagens, consultar conversas e gerenciar contatos WhatsApp.
 
-- "manda um WhatsApp pra fulano dizendo X" → send_whatsapp_message(phone="...", message="...")
+**Contatos (agenda):**
+- "cadastra o Felipe da Enbracon pelo número 11 93957-2807" → save_whatsapp_contact(name="Felipe Enbracon", phone="11 93957-2807")
+- "mostra os contatos" → list_whatsapp_contacts()
+- Quando o usuário mencionar um NOME em vez de número → find_whatsapp_contact(name="...") ANTES de enviar
+
+**Enviar mensagem:**
+- "manda um WhatsApp pro Felipe (Enbracon) dizendo X" → find_whatsapp_contact("Felipe Enbracon") → send_whatsapp_message(phone=resultado, message="...")
+- Se o número vier direto → send_whatsapp_message sem precisar buscar contato
+
+**Consultar:**
 - "quem entrou em contato pelo WhatsApp?" → list_whatsapp_conversations()
 - "mostra a conversa com o número 11 99999-9999" → get_whatsapp_conversation(phone="...")
 
 Regras:
-- Sempre confirme o número antes de enviar (peça ao usuário se não tiver certeza)
-- Nunca invente número — use apenas números fornecidos pelo usuário ou vindos de list_whatsapp_conversations
+- Se mencionar nome e find_whatsapp_contact não encontrar nada, pergunte o número ao usuário e depois salve com save_whatsapp_contact
+- Nunca invente número — use apenas os da agenda ou fornecidos pelo usuário
 - Formate a mensagem de forma adequada para WhatsApp (*negrito*, listas com •)
-- Após enviar, confirme: "Mensagem enviada para (11) 9xxxx-xxxx ✓"
+- Após enviar, confirme: "Mensagem enviada para Felipe Enbracon — (11) 9xxxx-xxxx ✓"
 
 ## Tarefas agendadas
 Quando o usuário disser "todo dia às X", "toda segunda às Y", "marque pra...":

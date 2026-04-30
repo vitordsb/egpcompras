@@ -685,8 +685,37 @@ export const toolDeclarations = [
 
   // ---------- WHATSAPP (envio e consulta via agente interno) ----------
   {
+    name: 'save_whatsapp_contact',
+    description: 'Salva ou atualiza um contato WhatsApp (nome ↔ número). Use quando o usuário disser "cadastra o contato X pelo número Y" ou "adiciona o Felipe da Enbracon com número ...". Se já existir contato com mesmo nome, atualiza o número.',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        name:  { type: 'STRING' as Type, description: 'Nome ou apelido do contato. Ex: "Felipe Enbracon".' },
+        phone: { type: 'STRING' as Type, description: 'Número de telefone. Ex: "11 93957-2807" ou "5511939572807".' },
+        notes: { type: 'STRING' as Type, description: 'Observações opcionais (empresa, cargo, etc.).' },
+      },
+      required: ['name', 'phone'],
+    },
+  },
+  {
+    name: 'find_whatsapp_contact',
+    description: 'Busca um contato WhatsApp pelo nome (busca aproximada). Chame ANTES de send_whatsapp_message quando o usuário mencionar um nome de pessoa em vez de número.',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        name: { type: 'STRING' as Type, description: 'Nome ou parte do nome. Ex: "Felipe", "enbracon".' },
+      },
+      required: ['name'],
+    },
+  },
+  {
+    name: 'list_whatsapp_contacts',
+    description: 'Lista todos os contatos WhatsApp cadastrados.',
+    parameters: { type: 'OBJECT' as Type, properties: {} },
+  },
+  {
     name: 'send_whatsapp_message',
-    description: 'Envia uma mensagem de texto pelo WhatsApp para um número específico. Use quando o usuário pedir para avisar, notificar ou responder um cliente pelo WhatsApp.',
+    description: 'Envia uma mensagem de texto pelo WhatsApp. Se o usuário mencionar um nome em vez de número, chame find_whatsapp_contact antes para resolver o número.',
     parameters: {
       type: 'OBJECT' as Type,
       properties: {
@@ -3414,6 +3443,60 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
       const { data, error } = await supabase.from('prestadores').insert(payload).select('id, nome').single();
       if (error) throw new Error(error.message);
       return { created: data };
+    }
+
+    case 'save_whatsapp_contact': {
+      const name  = String(args.name ?? '').trim();
+      const notes = args.notes ? String(args.notes).trim() : null;
+      if (!name) throw new Error('name é obrigatório');
+      const rawPhone = String(args.phone ?? '').replace(/\D/g, '');
+      if (!rawPhone) throw new Error('phone é obrigatório');
+      const phone = rawPhone.startsWith('55') ? rawPhone : `55${rawPhone}`;
+
+      // upsert por nome (case-insensitive)
+      const { data: existing } = await supabase
+        .from('whatsapp_contacts')
+        .select('id')
+        .ilike('name', name)
+        .limit(1)
+        .maybeSingle();
+
+      if (existing) {
+        const { error } = await supabase
+          .from('whatsapp_contacts')
+          .update({ phone, notes, updated_at: new Date().toISOString() })
+          .eq('id', existing.id);
+        if (error) throw new Error(error.message);
+        return { updated: true, name, phone, message: `Contato "${name}" atualizado → ${phone}` };
+      } else {
+        const { error } = await supabase
+          .from('whatsapp_contacts')
+          .insert({ name, phone, notes });
+        if (error) throw new Error(error.message);
+        return { created: true, name, phone, message: `Contato "${name}" cadastrado → ${phone}` };
+      }
+    }
+
+    case 'find_whatsapp_contact': {
+      const query = String(args.name ?? '').trim();
+      if (!query) throw new Error('name é obrigatório');
+      const { data, error } = await supabase
+        .from('whatsapp_contacts')
+        .select('id, name, phone, notes')
+        .ilike('name', `%${query}%`)
+        .order('name')
+        .limit(10);
+      if (error) throw new Error(error.message);
+      return { found: (data ?? []).length, contacts: data ?? [] };
+    }
+
+    case 'list_whatsapp_contacts': {
+      const { data, error } = await supabase
+        .from('whatsapp_contacts')
+        .select('id, name, phone, notes, updated_at')
+        .order('name');
+      if (error) throw new Error(error.message);
+      return { total: (data ?? []).length, contacts: data ?? [] };
     }
 
     case 'send_whatsapp_message': {
