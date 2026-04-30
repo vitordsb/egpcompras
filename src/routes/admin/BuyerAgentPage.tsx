@@ -7,6 +7,7 @@ import {
   type RetryStatus,
 } from '@/lib/agent';
 import { geminiProvider } from '@/lib/providers/gemini';
+import Logo from '@/components/Logo';
 import { describeToolCall } from '@/lib/tool-labels';
 import { supabase } from '@/lib/supabase';
 import { useInternalAuth } from '@/lib/auth-context';
@@ -706,11 +707,7 @@ export default function BuyerAgentPage() {
                   <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5M3.75 17.25h16.5" />
                 </svg>
               </button>
-              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-brand-600 text-white">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-5 w-5">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09Z" />
-                </svg>
-              </div>
+              <Logo size={36} />
               <div className="min-w-0">
                 <h1 className="truncate text-base font-semibold text-slate-900 md:text-lg">EGP</h1>
                 <p className="hidden text-xs text-slate-500 sm:block">
