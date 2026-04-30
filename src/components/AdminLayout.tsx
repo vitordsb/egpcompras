@@ -293,6 +293,16 @@ const configLinks: NavItem[] = [
       </svg>
     ),
   },
+  {
+    to: '/admin/conta-oficial',
+    label: 'Conta Oficial',
+    description: 'Status do selo verde WhatsApp',
+    icon: (
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-4 w-4">
+        <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+      </svg>
+    ),
+  },
 ];
 
 const accessLink: NavItem = {
@@ -482,6 +492,7 @@ export default function AdminLayout() {
       '/admin/memorias':                 'Memórias',
       '/admin/procedimentos':            'Procedimentos',
       '/admin/consumo-ia':               'Consumo IA',
+      '/admin/conta-oficial':            'Conta Oficial',
       '/admin/acessos':                  'Acessos',
       '/admin/whatsapp':                 'WhatsApp',
       '/admin/tarefas':                  'Tarefas',
