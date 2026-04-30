@@ -217,10 +217,11 @@ function AuthenticatedApp() {
   // Home redireciona pro último modo escolhido (default Manual → última rota admin)
   const initialMode = readUIMode();
   const homeTarget = initialMode === 'ai' ? '/ia' : readLastAdminRoute();
-  const isAccessAdmin = masterAuthenticated || isAccessAdminSession(session);
   const userEmail = session?.user?.email ?? null;
-  const RH_EMAILS = ['vitor@grupoegp.com.br', 'joane@grupoegp.com.br'];
-  const isRhUser = userEmail != null && RH_EMAILS.includes(userEmail.toLowerCase());
+  const HARDCODED_ADMINS = ['vitor@grupoegp.com.br', 'joane@grupoegp.com.br'];
+  const isHardcodedAdmin = userEmail != null && HARDCODED_ADMINS.includes(userEmail.toLowerCase());
+  const isAccessAdmin = masterAuthenticated || isAccessAdminSession(session) || isHardcodedAdmin;
+  const isRhUser = userEmail != null && HARDCODED_ADMINS.includes(userEmail.toLowerCase());
 
   return (
     <InternalAuthProvider isMaster={isAccessAdmin} userEmail={userEmail}>
