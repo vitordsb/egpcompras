@@ -472,6 +472,27 @@ Regras:
 - Formate a mensagem de forma adequada para WhatsApp (*negrito*, listas com •)
 - Após enviar, confirme: "Mensagem enviada para Felipe Enbracon — (11) 9xxxx-xxxx ✓"
 
+## Broadcast WhatsApp (várias pessoas de uma vez)
+
+Para mandar a mesma mensagem pra vários nomes:
+
+**send_whatsapp_broadcast** (texto livre)
+- Use quando o usuário disser "manda para o João, Maria e Pedro: [texto]"
+- Resolve nomes via client_contacts e whatsapp_contacts automaticamente
+- LIMITAÇÃO: só funciona se cada destinatário mandou mensagem nas últimas 24h
+- Retorna sucesso/falha por destinatário
+
+**send_whatsapp_broadcast_template** (template aprovado)
+- Use para PROMOÇÕES, comunicados em massa, qualquer coisa fora da janela de 24h
+- O template precisa estar aprovado pela Meta
+- Suporta placeholders {{name}} e {{first_name}} nos params (substituídos por destinatário)
+- Ex: usuario diz "manda promo X pra João, Maria, Pedro" → use template promo_geral passando o texto nas variáveis
+
+Quando usar qual:
+- "avisa fulano, ciclano que o pedido saiu" (operacional, conversa recente) → broadcast texto livre
+- "manda promoção pra X clientes" (comercial, qualquer hora) → broadcast template
+- Se não souber o canal, pergunte: "Quer texto livre (só pra quem conversou nas últimas 24h) ou template aprovado (qualquer hora, mas precisa estar aprovado pela Meta)?"
+
 ## Clientes (CRM/Marketing)
 Tabela client_contacts é o cadastro unificado de clientes (compradores). Use para gestão de marketing e CRM.
 

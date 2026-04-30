@@ -758,6 +758,44 @@ export const toolDeclarations = [
     },
   },
   {
+    name: 'send_whatsapp_broadcast',
+    description: 'Envia a MESMA mensagem livre para vários destinatários. Aceita nomes (busca em client_contacts e whatsapp_contacts) ou números diretos. ATENÇÃO: só funciona para destinatários que mandaram mensagem nas últimas 24h. Para promoções fora da janela use send_whatsapp_broadcast_template.',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        recipients: {
+          type: 'ARRAY' as Type,
+          description: 'Lista de nomes (ex: "João", "Maria Silva") OU números (ex: "11939572807").',
+          items: { type: 'STRING' as Type },
+        },
+        message: { type: 'STRING' as Type, description: 'Texto da mensagem (até 4096 chars). Pode usar formatação WhatsApp (*negrito*, _itálico_).' },
+      },
+      required: ['recipients', 'message'],
+    },
+  },
+  {
+    name: 'send_whatsapp_broadcast_template',
+    description: 'Envia um TEMPLATE APROVADO pela Meta para vários destinatários. Funciona a qualquer hora, sem janela de 24h. Use para promoções, avisos em massa, comunicados.',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        recipients: {
+          type: 'ARRAY' as Type,
+          description: 'Lista de nomes ou números. Nomes resolvidos via client_contacts/whatsapp_contacts.',
+          items: { type: 'STRING' as Type },
+        },
+        template_name: { type: 'STRING' as Type, description: 'Nome do template aprovado na Meta (ex: "promo_geral").' },
+        template_params: {
+          type: 'ARRAY' as Type,
+          description: 'Valores das variáveis do template em ordem ({{1}}, {{2}}, ...). Suporta placeholders {{name}} e {{first_name}} substituídos por destinatário.',
+          items: { type: 'STRING' as Type },
+        },
+        template_lang: { type: 'STRING' as Type, description: 'Código do idioma. Default: pt_BR.' },
+      },
+      required: ['recipients', 'template_name'],
+    },
+  },
+  {
     name: 'list_whatsapp_conversations',
     description: 'Lista as conversas WhatsApp recentes com prévia da última mensagem. Use para ver quem entrou em contato ou antes de enviar uma mensagem.',
     parameters: {
@@ -3784,6 +3822,130 @@ export async function executeTool(name: string, args: any): Promise<unknown> {
       const json = await res.json();
       if (!res.ok) throw new Error(json.error ?? 'Falha ao enviar mensagem WhatsApp');
       return { sent: true, to: phone, message_id: json.message_id };
+    }
+
+    case 'send_whatsapp_broadcast':
+    case 'send_whatsapp_broadcast_template': {
+      const isTemplate = name === 'send_whatsapp_broadcast_template';
+      const recipients = Array.isArray(args.recipients) ? args.recipients.map((r: any) => String(r).trim()).filter(Boolean) : [];
+      if (recipients.length === 0) throw new Error('recipients vazio');
+      if (recipients.length > 100) throw new Error('Máximo 100 destinatários por chamada');
+
+      const message = !isTemplate ? String(args.message ?? '').trim() : null;
+      if (!isTemplate && !message) throw new Error('message é obrigatório');
+
+      const templateName = isTemplate ? String(args.template_name ?? '').trim() : null;
+      const templateLang = isTemplate ? String(args.template_lang ?? 'pt_BR') : 'pt_BR';
+      const templateParams = Array.isArray(args.template_params) ? args.template_params.map((p: any) => String(p)) : [];
+      if (isTemplate && !templateName) throw new Error('template_name é obrigatório');
+
+      // Resolve cada recipient → { name, phone }
+      const resolved: Array<{ original: string; name: string; phone: string | null; error?: string }> = [];
+      for (const r of recipients) {
+        const digits = r.replace(/\D/g, '');
+        // Se parece com número (10+ dígitos), usa direto
+        if (digits.length >= 10) {
+          const phone = digits.startsWith('55') ? digits : `55${digits}`;
+          resolved.push({ original: r, name: r, phone });
+          continue;
+        }
+        // Senão busca por nome em client_contacts e whatsapp_contacts
+        const { data: client } = await supabase
+          .from('client_contacts')
+          .select('name, trade_name, whatsapp_phone')
+          .ilike('name', `%${r}%`)
+          .not('whatsapp_phone', 'is', null)
+          .limit(1)
+          .maybeSingle();
+        if (client && (client as any).whatsapp_phone) {
+          resolved.push({
+            original: r,
+            name: (client as any).trade_name ?? (client as any).name,
+            phone: (client as any).whatsapp_phone,
+          });
+          continue;
+        }
+        const { data: contact } = await supabase
+          .from('whatsapp_contacts')
+          .select('name, phone')
+          .ilike('name', `%${r}%`)
+          .limit(1)
+          .maybeSingle();
+        if (contact) {
+          resolved.push({
+            original: r,
+            name: (contact as any).name,
+            phone: (contact as any).phone,
+          });
+          continue;
+        }
+        resolved.push({ original: r, name: r, phone: null, error: 'não encontrado' });
+      }
+
+      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
+      const anonKey     = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+
+      // Envia em paralelo (limite simples: até 10 simultâneos)
+      async function sendOne(r: { name: string; phone: string }): Promise<{ ok: boolean; message_id?: string; error?: string }> {
+        try {
+          let body: Record<string, unknown>;
+          if (isTemplate) {
+            // Resolve placeholders {{name}} / {{first_name}} para o destinatário
+            const params = templateParams.map((p: string) =>
+              p.replace(/\{\{name\}\}/gi, r.name)
+               .replace(/\{\{first_name\}\}/gi, (r.name.split(' ')[0] ?? r.name))
+            );
+            body = { to: r.phone, template: { name: templateName, language: templateLang, params } };
+          } else {
+            body = { to: r.phone, text: message };
+          }
+          const res = await fetch(`${supabaseUrl}/functions/v1/whatsapp-send`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', apikey: anonKey, Authorization: `Bearer ${anonKey}` },
+            body: JSON.stringify(body),
+          });
+          const json = await res.json();
+          if (!res.ok) return { ok: false, error: json.error ?? 'falha' };
+          return { ok: true, message_id: json.message_id };
+        } catch (err) {
+          return { ok: false, error: err instanceof Error ? err.message : String(err) };
+        }
+      }
+
+      const results: Array<{ recipient: string; phone: string | null; ok: boolean; message_id?: string; error?: string }> = [];
+
+      // Processa em lotes de 10
+      const validResolved = resolved.filter((r) => r.phone);
+      for (let i = 0; i < validResolved.length; i += 10) {
+        const batch = validResolved.slice(i, i + 10);
+        const batchResults = await Promise.all(batch.map((r) => sendOne(r as { name: string; phone: string })));
+        batch.forEach((r, idx) => {
+          results.push({
+            recipient: r.original,
+            phone: r.phone,
+            ok: batchResults[idx].ok,
+            message_id: batchResults[idx].message_id,
+            error: batchResults[idx].error,
+          });
+        });
+      }
+
+      // Adiciona não resolvidos
+      for (const r of resolved.filter((x) => !x.phone)) {
+        results.push({ recipient: r.original, phone: null, ok: false, error: r.error ?? 'sem WhatsApp' });
+      }
+
+      const sucesso = results.filter((r) => r.ok).length;
+      const falha = results.length - sucesso;
+
+      return {
+        mode: isTemplate ? 'template' : 'text',
+        template_name: templateName,
+        total: results.length,
+        sucesso,
+        falha,
+        results,
+      };
     }
 
     case 'list_whatsapp_conversations': {
