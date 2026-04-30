@@ -937,7 +937,7 @@ export async function runAgent({
     filteredTools = toolDeclarations.filter((t) => allowed.has(t.name));
   }
 
-  const MAX_STEPS = 12;
+  const MAX_STEPS = 20;
   for (let step = 0; step < MAX_STEPS; step++) {
     if (signal?.aborted) {
       throw new Error('Cancelado pelo usuário');
