@@ -255,6 +255,14 @@ export default function BuyerAgentPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lastChatKey]);
 
+  // Sincroniza o último chat no localStorage sempre que mudar
+  // (cobre o caso de novo chat criado via envio de mensagem)
+  useEffect(() => {
+    if (currentChatId) {
+      localStorage.setItem(lastChatKey, currentChatId);
+    }
+  }, [currentChatId, lastChatKey]);
+
   function newChat() {
     if (running) return;
     localStorage.removeItem(lastChatKey);
