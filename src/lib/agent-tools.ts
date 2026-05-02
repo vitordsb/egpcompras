@@ -3872,13 +3872,14 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
       const templateVars = (args.template_vars as Record<string, string>) ?? {};
       const imageSizeArg = String(args.image_size ?? 'landscape_4_3').trim();
 
+      const cor = templateVars.cor ?? 'vibrant blue';
       const TEMPLATE_PROMPTS: Record<string, string> = {
-        promocao_produto:  `Promotional product photography studio backdrop. Clean ${templateVars.cor ?? 'blue'} gradient background, soft directional light, subtle geometric shapes. Electronics brand commercial style. No products, no text, no watermark.`,
-        lancamento:        `New product launch backdrop. Dramatic dark background with ${templateVars.cor ?? 'electric blue'} spotlight glow, futuristic tech lines, cinematic depth. No products, no text, no watermark.`,
-        liquidacao:        'High-energy sale promotion background. Red, black and gold dramatic gradients, lightning bolt decorations, explosive energy. No products, no text, no watermark.',
-        data_comemorativa: `Elegant festive greeting card design for ${templateVars.data ?? 'special occasion'}. ${templateVars.estilo ?? 'warm'} visual style, warm celebratory atmosphere. No text, no watermark.`,
-        institucional:     `Professional corporate communication banner. Theme: ${templateVars.tema ?? 'technology'}. Clean modern design, blue and white palette, geometric shapes. No text, no watermark.`,
-        agradecimento:     `Warm heartfelt thank you card. ${templateVars.estilo ?? 'elegant'} style, golden warm tones, premium feel. No text, no watermark.`,
+        promocao_produto:  `Modern electronics promotional marketing banner background. Bold ${cor} gradient with abstract glowing geometric shapes, dynamic light streaks, futuristic tech pattern. Professional commercial design, vivid colors, high contrast. No people, no products, no text, no watermarks.`,
+        lancamento:        `Epic product launch announcement visual. Dark cinematic background with dramatic ${cor} light beams, glowing particles, depth of field bokeh, premium tech brand atmosphere. Dramatic and impactful. No text, no watermarks.`,
+        liquidacao:        'Explosive Black Friday sale marketing banner. Bold red and black diagonal gradient with gold accents, energetic geometric shapes, dynamic high-contrast retail design. Urgency and excitement. No text, no watermarks.',
+        data_comemorativa: `Beautiful festive celebration banner for ${templateVars.data ?? 'special occasion'}. ${templateVars.estilo ?? 'Warm and joyful'} atmosphere, elegant decorative elements matching the occasion, rich colors, premium quality marketing visual. No text, no watermarks.`,
+        institucional:     `Professional technology company communication banner. ${templateVars.tema ?? 'Innovation'} concept. Premium blue and white corporate design, abstract circuit board patterns, clean geometric shapes, trustworthy brand aesthetic. No text, no watermarks.`,
+        agradecimento:     `Elegant client appreciation visual. ${templateVars.estilo ?? 'Luxurious'} style with warm golden tones, soft glowing light, premium abstract patterns. Heartfelt and sophisticated corporate thank you design. No text, no watermarks.`,
       };
       const prompt = TEMPLATE_PROMPTS[templateId] ?? TEMPLATE_PROMPTS['promocao_produto'];
 

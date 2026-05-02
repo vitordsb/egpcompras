@@ -169,7 +169,7 @@ const TEMPLATES: ImageTemplate[] = [
     defaultSize: 'landscape_4_3',
     supportsProduct: true,
     prompt: `Professional commercial product photography for Brazilian electronics brand. Product: {{produto}}. Studio lighting, clean {{cor}} background gradient, promotional visual style. High quality, 4K, no watermark, no text.`,
-    backgroundPrompt: `Promotional product photography studio backdrop. Clean {{cor}} gradient background, soft directional light, subtle geometric shapes. Electronics brand commercial style. No products, no text, no watermark.`,
+    backgroundPrompt: `Modern electronics promotional marketing banner background. Bold {{cor}} gradient with abstract glowing geometric shapes, dynamic light streaks, futuristic tech pattern. Professional commercial design, vivid colors, high contrast. No people, no products, no text, no watermarks.`,
     variables: [
       { key: 'produto', label: 'Produto (se não selecionar foto)', placeholder: 'Ex: Controle 2 botões EGP' },
       { key: 'cor',     label: 'Cor do tema', placeholder: 'Ex: blue, green, orange, purple' },
@@ -184,7 +184,7 @@ const TEMPLATES: ImageTemplate[] = [
     defaultSize: 'landscape_4_3',
     supportsProduct: true,
     prompt: `New product launch teaser for electronics brand. Product: {{produto}}. Dramatic {{cor}} spotlight on dark background, futuristic tech aesthetic, glowing edges, cinematic quality. No text, no watermark.`,
-    backgroundPrompt: `New product launch backdrop. Dramatic dark background with {{cor}} spotlight glow, futuristic tech lines, cinematic depth. No products, no text, no watermark.`,
+    backgroundPrompt: `Epic product launch announcement visual. Dark cinematic background with dramatic {{cor}} light beams, glowing particles, depth of field bokeh, premium tech brand atmosphere. No products, no text, no watermarks.`,
     variables: [
       { key: 'produto', label: 'Produto (se não selecionar foto)', placeholder: 'Ex: Controle EGP Pro V2' },
       { key: 'cor',     label: 'Cor destaque', placeholder: 'Ex: electric blue, gold, neon green' },
@@ -199,7 +199,7 @@ const TEMPLATES: ImageTemplate[] = [
     defaultSize: 'landscape_16_9',
     supportsProduct: true,
     prompt: `High-energy retail sale promotion banner. Red, black and gold color scheme. Explosive dynamic composition, lightning bolts, confetti elements. Dramatic contrast. No text, no watermark.`,
-    backgroundPrompt: `High-energy sale promotion background. Red, black and gold dramatic gradients, lightning bolt decorations, explosive energy. No products, no text, no watermark.`,
+    backgroundPrompt: `Explosive Black Friday sale marketing banner. Bold red and black diagonal gradient with gold accents, energetic geometric shapes, dynamic high-contrast retail design. No products, no text, no watermarks.`,
     variables: [],
   },
   {
