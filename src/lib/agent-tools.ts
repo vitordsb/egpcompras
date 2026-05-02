@@ -798,7 +798,7 @@ export const toolDeclarations = [
   },
   {
     name: 'generate_image',
-    description: 'Gera uma imagem promocional com IA (Fal.ai) e retorna a URL para o usuário aprovar ANTES de enviar. SEMPRE chame esta tool primeiro e mostre o preview. Somente após aprovação do usuário chame send_whatsapp_image.',
+    description: 'Gera uma imagem promocional com IA e retorna a URL para o usuário aprovar ANTES de enviar. SEMPRE chame esta tool primeiro e mostre o preview. Somente após aprovação chame send_whatsapp_image. A imagem já inclui automaticamente logo EGP e CNPJ. Se product_filename for informado, a foto real do produto aparece na imagem.',
     parameters: {
       type: 'OBJECT' as Type,
       properties: {
@@ -806,10 +806,13 @@ export const toolDeclarations = [
           type: 'STRING' as Type,
           description: '"promocao_produto" | "lancamento" | "liquidacao" | "data_comemorativa" | "institucional" | "agradecimento"',
         },
-        template_vars: {
-          type: 'OBJECT' as Type,
-          description: 'Variáveis do template. Ex: { "cor": "blue", "produto": "Controle 2 Botões" }',
-          properties: {},
+        product_filename: {
+          type: 'STRING' as Type,
+          description: 'Nome do arquivo da foto do produto SEM extensão. Disponíveis: Controle2b, Controle2bComSuporte, Controle4bCopiador, Controle4BotoesCromado, Eletrificador12v, FiltroDeLinha, Fonte, moduloSas, moduloWifi, nobreak, nobreakpackdebateria, packbateria, PlacadeAdvertencia, ProtetorDeRede, Sensor Infravermelho, Sensor Magnetico, Sirene, Sirene Magnetica, Voltimetro. Se o usuário mencionar um produto, escolha o filename mais próximo.',
+        },
+        cor: {
+          type: 'STRING' as Type,
+          description: 'Cor dominante do fundo. Ex: "blue", "green", "orange", "purple", "red". Default: blue.',
         },
         image_size: {
           type: 'STRING' as Type,
@@ -3868,18 +3871,20 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
     }
 
     case 'generate_image': {
-      const templateId   = String(args.template_id ?? 'promocao_produto').trim();
-      const templateVars = (args.template_vars as Record<string, string>) ?? {};
-      const imageSizeArg = String(args.image_size ?? 'landscape_4_3').trim();
+      const templateId      = String(args.template_id ?? 'promocao_produto').trim();
+      const productFilename = String(args.product_filename ?? '').trim();
+      const cor             = String(args.cor ?? 'blue').trim();
+      const imageSizeArg    = String(args.image_size ?? 'landscape_4_3').trim();
 
-      const cor = templateVars.cor ?? 'vibrant blue';
+      // Fundo limpo e neutro — o produto real é sobreposto server-side via jimp
+      // Prompts focados em gradiente sólido + espaço central vazio para o produto
       const TEMPLATE_PROMPTS: Record<string, string> = {
-        promocao_produto:  `Modern electronics promotional marketing banner background. Bold ${cor} gradient with abstract glowing geometric shapes, dynamic light streaks, futuristic tech pattern. Professional commercial design, vivid colors, high contrast. No people, no products, no text, no watermarks.`,
-        lancamento:        `Epic product launch announcement visual. Dark cinematic background with dramatic ${cor} light beams, glowing particles, depth of field bokeh, premium tech brand atmosphere. Dramatic and impactful. No text, no watermarks.`,
-        liquidacao:        'Explosive Black Friday sale marketing banner. Bold red and black diagonal gradient with gold accents, energetic geometric shapes, dynamic high-contrast retail design. Urgency and excitement. No text, no watermarks.',
-        data_comemorativa: `Beautiful festive celebration banner for ${templateVars.data ?? 'special occasion'}. ${templateVars.estilo ?? 'Warm and joyful'} atmosphere, elegant decorative elements matching the occasion, rich colors, premium quality marketing visual. No text, no watermarks.`,
-        institucional:     `Professional technology company communication banner. ${templateVars.tema ?? 'Innovation'} concept. Premium blue and white corporate design, abstract circuit board patterns, clean geometric shapes, trustworthy brand aesthetic. No text, no watermarks.`,
-        agradecimento:     `Elegant client appreciation visual. ${templateVars.estilo ?? 'Luxurious'} style with warm golden tones, soft glowing light, premium abstract patterns. Heartfelt and sophisticated corporate thank you design. No text, no watermarks.`,
+        promocao_produto:  `Clean professional product display background. Smooth ${cor} gradient from bottom-left to top-right, soft subtle geometric lines, minimal abstract shapes on the sides. Bright center area kept clean for product placement. Commercial quality, vibrant. No objects, no text.`,
+        lancamento:        `Dramatic product reveal background. Dark ${cor === 'blue' ? 'deep navy' : cor} gradient, subtle radial glow in center, thin light streaks on edges, cinematic premium atmosphere. Central area clear for product. No text.`,
+        liquidacao:        'Bold sale promotion background. Strong red-to-black diagonal gradient, golden accent lines on corners, energetic abstract shapes on edges, center area clean and bright. No text.',
+        data_comemorativa: `Festive celebration background. Elegant gradient with warm celebratory colors, decorative elements on the borders, clean central space. Professional marketing quality. No text.`,
+        institucional:     `Professional corporate background. Clean ${cor} and white gradient, abstract circuit pattern on edges only, premium business aesthetic, wide open center. No text.`,
+        agradecimento:     `Warm appreciation background. Soft golden gradient, elegant subtle pattern on borders, generous clear center space, premium feel. No text.`,
       };
       const prompt = TEMPLATE_PROMPTS[templateId] ?? TEMPLATE_PROMPTS['promocao_produto'];
 
@@ -3889,7 +3894,7 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
       const genRes  = await fetch(`${supabaseUrl}/functions/v1/generate-image`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', apikey: anonKey, Authorization: `Bearer ${anonKey}` },
-        body: JSON.stringify({ prompt, image_size: imageSizeArg }),
+        body: JSON.stringify({ prompt, image_size: imageSizeArg, product_filename: productFilename || undefined }),
       });
       const genJson = await genRes.json();
       if (!genRes.ok) throw new Error(genJson.error ?? 'Falha ao gerar imagem');
@@ -3897,7 +3902,8 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
       return {
         image_url: genJson.url,
         stored: genJson.stored,
-        instruction: 'Mostre a imagem para o usuário usando markdown: ![Preview](url). Depois pergunte se deseja enviar e para qual contato. NÃO envie sem aprovação explícita.',
+        branded: genJson.branded,
+        instruction: 'Mostre a imagem para o usuário usando markdown image: ![Preview](url). Depois pergunte se deseja enviar e para qual contato. NÃO envie sem aprovação explícita.',
       };
     }
 
