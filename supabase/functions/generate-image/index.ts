@@ -1,6 +1,10 @@
 // Gera imagem via Fal.ai (flux/schnell), armazena no Supabase Storage wa-images
 // e retorna a URL pública permanente.
 // FAL_KEY nunca vai pro frontend.
+//
+// Aceita dois modos:
+//   { prompt, image_size? }           → gera via Fal.ai e armazena
+//   { image_data: "<base64 JPEG>" }   → upload direto (ex: canvas composited no frontend)
 
 const FAL_KEY  = Deno.env.get('FAL_KEY') ?? '';
 const SUPA_URL = Deno.env.get('SUPABASE_URL') ?? '';
@@ -12,30 +16,51 @@ const CORS = {
   'Access-Control-Allow-Headers': 'Content-Type, Authorization, apikey',
 };
 
+function jsonOk(data: unknown) {
+  return new Response(JSON.stringify(data), { status: 200, headers: { ...CORS, 'Content-Type': 'application/json' } });
+}
 function jsonError(msg: string, status = 400) {
-  return new Response(
-    JSON.stringify({ error: msg }),
-    { status, headers: { ...CORS, 'Content-Type': 'application/json' } },
-  );
+  return new Response(JSON.stringify({ error: msg }), { status, headers: { ...CORS, 'Content-Type': 'application/json' } });
+}
+
+async function uploadBuffer(buffer: ArrayBuffer, contentType: string): Promise<string | null> {
+  const ext = contentType.includes('png') ? 'png' : contentType.includes('webp') ? 'webp' : 'jpg';
+  const fileName = `${Date.now()}-${crypto.randomUUID().slice(0, 8)}.${ext}`;
+  const res = await fetch(`${SUPA_URL}/storage/v1/object/wa-images/${fileName}`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${SUPA_JWT}`, 'Content-Type': contentType, 'x-upsert': 'false' },
+    body: buffer,
+  });
+  if (!res.ok) return null;
+  return `${SUPA_URL}/storage/v1/object/public/wa-images/${fileName}`;
 }
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS });
   if (req.method !== 'POST') return new Response('Method not allowed', { status: 405, headers: CORS });
 
-  let body: { prompt?: string; image_size?: string };
+  let body: { prompt?: string; image_size?: string; image_data?: string };
   try { body = await req.json(); } catch { return jsonError('Invalid JSON'); }
 
-  const { prompt, image_size = 'landscape_4_3' } = body;
-  if (!prompt?.trim()) return jsonError('prompt é obrigatório');
+  // ── Modo 2: upload direto de imagem já renderizada (base64 JPEG do canvas) ──
+  if (body.image_data) {
+    try {
+      const bytes = Uint8Array.from(atob(body.image_data), (c) => c.charCodeAt(0));
+      const publicUrl = await uploadBuffer(bytes.buffer, 'image/jpeg');
+      if (!publicUrl) return jsonError('Falha no upload da imagem');
+      return jsonOk({ url: publicUrl, stored: true });
+    } catch {
+      return jsonError('image_data inválido (esperado base64 JPEG)');
+    }
+  }
 
-  // 1. Gera imagem no Fal.ai (flux/schnell — ~2s, ~$0.003/img)
+  // ── Modo 1: geração via Fal.ai ──
+  const { prompt, image_size = 'landscape_4_3' } = body;
+  if (!prompt?.trim()) return jsonError('prompt ou image_data é obrigatório');
+
   const falRes = await fetch('https://fal.run/fal-ai/flux/schnell', {
     method: 'POST',
-    headers: {
-      Authorization: `Key ${FAL_KEY}`,
-      'Content-Type': 'application/json',
-    },
+    headers: { Authorization: `Key ${FAL_KEY}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
       prompt: prompt.trim(),
       image_size,
@@ -54,46 +79,13 @@ Deno.serve(async (req) => {
   const tempUrl: string | undefined = falData.images?.[0]?.url;
   if (!tempUrl) return jsonError('Fal.ai não retornou imagem');
 
-  // 2. Baixa a imagem e guarda no Supabase Storage para URL permanente
+  // Baixa e armazena permanentemente
   const imgRes = await fetch(tempUrl);
-  if (!imgRes.ok) {
-    // Fal URLs são efêmeras (~1h) — retorna como fallback sem armazenar
-    return new Response(
-      JSON.stringify({ url: tempUrl, stored: false }),
-      { status: 200, headers: { ...CORS, 'Content-Type': 'application/json' } },
-    );
-  }
+  if (!imgRes.ok) return jsonOk({ url: tempUrl, stored: false });
 
   const contentType = imgRes.headers.get('Content-Type') ?? 'image/jpeg';
   const imgBuffer = await imgRes.arrayBuffer();
-  const ext = contentType.includes('png') ? 'png' : contentType.includes('webp') ? 'webp' : 'jpg';
-  const fileName = `${Date.now()}-${crypto.randomUUID().slice(0, 8)}.${ext}`;
+  const publicUrl = await uploadBuffer(imgBuffer, contentType);
 
-  const uploadRes = await fetch(
-    `${SUPA_URL}/storage/v1/object/wa-images/${fileName}`,
-    {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${SUPA_JWT}`,
-        'Content-Type': contentType,
-        'x-upsert': 'false',
-      },
-      body: imgBuffer,
-    },
-  );
-
-  if (!uploadRes.ok) {
-    // Upload falhou — retorna URL do Fal como fallback
-    return new Response(
-      JSON.stringify({ url: tempUrl, stored: false }),
-      { status: 200, headers: { ...CORS, 'Content-Type': 'application/json' } },
-    );
-  }
-
-  const publicUrl = `${SUPA_URL}/storage/v1/object/public/wa-images/${fileName}`;
-
-  return new Response(
-    JSON.stringify({ url: publicUrl, stored: true }),
-    { status: 200, headers: { ...CORS, 'Content-Type': 'application/json' } },
-  );
+  return jsonOk(publicUrl ? { url: publicUrl, stored: true } : { url: tempUrl, stored: false });
 });

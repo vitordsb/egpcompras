@@ -2,6 +2,78 @@ import { useState } from 'react';
 import { supabase } from '@/lib/supabase';
 import { cn } from '@/lib/utils';
 import { useInternalAuth } from '@/lib/auth-context';
+import logoSrc from '@/images/letreirosemfundo.png';
+
+// ---------------------------------------------------------------------------
+// Composição canvas: gera imagem + identidade visual EGP no rodapé
+// ---------------------------------------------------------------------------
+
+const CNPJ_TEXT    = 'CNPJ: 40.116.124/0001-51';
+const COMPANY_NAME = 'EGP IND E COM LTDA';
+
+function loadImg(src: string, crossOrigin = true): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    if (crossOrigin) img.crossOrigin = 'anonymous';
+    img.onload  = () => resolve(img);
+    img.onerror = reject;
+    img.src = src;
+  });
+}
+
+async function compositeWithBranding(rawUrl: string): Promise<string> {
+  const [generated, logo] = await Promise.all([
+    loadImg(rawUrl),
+    loadImg(logoSrc, false),
+  ]);
+
+  const W = generated.naturalWidth;
+  const H = generated.naturalHeight;
+
+  const canvas = document.createElement('canvas');
+  canvas.width  = W;
+  canvas.height = H;
+  const ctx = canvas.getContext('2d')!;
+
+  // Imagem gerada
+  ctx.drawImage(generated, 0, 0, W, H);
+
+  // Faixa escura no rodapé (gradiente transparente → semi-opaco)
+  const stripH = Math.round(H * 0.14);
+  const grad = ctx.createLinearGradient(0, H - stripH, 0, H);
+  grad.addColorStop(0, 'rgba(0,0,0,0)');
+  grad.addColorStop(1, 'rgba(0,0,0,0.72)');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, H - stripH, W, stripH);
+
+  // Logo (letreiro sem fundo) — canto inferior esquerdo
+  const pad       = Math.round(W * 0.025);
+  const logoW     = Math.round(W * 0.24);
+  const logoH     = Math.round(logoW * (155 / 446));
+  const logoY     = H - logoH - pad;
+  ctx.drawImage(logo, pad, logoY, logoW, logoH);
+
+  // CNPJ + nome — canto inferior direito
+  const fontSize  = Math.max(10, Math.round(W * 0.018));
+  const lineH     = Math.round(fontSize * 1.5);
+  ctx.font        = `500 ${fontSize}px Inter, Arial, sans-serif`;
+  ctx.fillStyle   = 'rgba(255,255,255,0.88)';
+  ctx.textAlign   = 'right';
+  ctx.textBaseline = 'bottom';
+  ctx.fillText(CNPJ_TEXT,    W - pad, H - pad);
+  ctx.fillText(COMPANY_NAME, W - pad, H - pad - lineH);
+
+  // Converte canvas → base64 JPEG e retorna
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (!blob) { reject(new Error('canvas.toBlob falhou')); return; }
+      const reader = new FileReader();
+      reader.onload  = () => resolve((reader.result as string).split(',')[1]);
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    }, 'image/jpeg', 0.93);
+  });
+}
 
 // ---------------------------------------------------------------------------
 // Templates pré-definidos
@@ -201,6 +273,8 @@ export default function ImageGeneratorPage() {
     try {
       const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
       const anonKey     = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+
+      // 1. Gera imagem bruta via Fal.ai
       const res = await fetch(`${supabaseUrl}/functions/v1/generate-image`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', apikey: anonKey, Authorization: `Bearer ${anonKey}` },
@@ -208,7 +282,20 @@ export default function ImageGeneratorPage() {
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error ?? 'Falha ao gerar imagem');
-      setGeneratedUrl(json.url);
+
+      // 2. Composta logo + CNPJ no canvas do browser
+      const base64 = await compositeWithBranding(json.url);
+
+      // 3. Re-upload da imagem finalizada via Edge Function
+      const uploadRes = await fetch(`${supabaseUrl}/functions/v1/generate-image`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', apikey: anonKey, Authorization: `Bearer ${anonKey}` },
+        body: JSON.stringify({ image_data: base64 }),
+      });
+      const uploadJson = await uploadRes.json();
+      if (!uploadRes.ok) throw new Error(uploadJson.error ?? 'Falha no upload');
+
+      setGeneratedUrl(uploadJson.url);
     } catch (err) {
       setGenError(err instanceof Error ? err.message : String(err));
     } finally {
