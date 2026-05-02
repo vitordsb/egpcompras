@@ -38,6 +38,26 @@ export default function MarkdownText({ text }: Props) {
               {children}
             </pre>
           ),
+          img: ({ src, alt }) => {
+            const isGenerated = src && (
+              src.includes('/wa-images/') || src.includes('fal.media') || src.includes('/object/public/wa-images')
+            );
+            if (isGenerated) {
+              return (
+                <div className="my-3 max-w-sm overflow-hidden rounded-xl border border-violet-200 shadow-sm">
+                  <img src={src} alt={alt ?? 'imagem gerada'} className="w-full object-cover" />
+                  <div className="flex items-center gap-2 bg-violet-50 px-3 py-2">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-3.5 w-3.5 shrink-0 text-violet-500">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09Z" />
+                    </svg>
+                    <span className="text-xs text-violet-700 font-medium">Imagem gerada por IA — aguardando aprovação</span>
+                    <a href={src} target="_blank" rel="noreferrer" className="ml-auto text-[10px] text-violet-500 hover:underline">abrir</a>
+                  </div>
+                </div>
+              );
+            }
+            return <img src={src} alt={alt ?? ''} className="max-w-full rounded" />;
+          },
           a: ({ href, children }) => {
             const isQuoteLink = href && /\/cotacao\//.test(href);
             if (isQuoteLink) {
