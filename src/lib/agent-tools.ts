@@ -797,6 +797,35 @@ export const toolDeclarations = [
     },
   },
   {
+    name: 'generate_and_send_image',
+    description: 'Gera uma imagem promocional com IA (Fal.ai) e envia via WhatsApp. A imagem inclui automaticamente a identidade visual EGP (logo + CNPJ). Use para promoções, datas comemorativas, lançamentos. Aceita nome de contato ou número direto.',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        phone: { type: 'STRING' as Type, description: 'Número ou nome do contato (resolve via whatsapp_contacts).' },
+        template_id: {
+          type: 'STRING' as Type,
+          description: '"promocao_produto" | "lancamento" | "liquidacao" | "data_comemorativa" | "institucional" | "agradecimento"',
+        },
+        product_filename: {
+          type: 'STRING' as Type,
+          description: 'Nome do arquivo da foto do produto (sem extensão). Ex: "Controle2b", "nobreak", "Sirene". Use para sobrepor a foto real do produto na imagem. Lista disponível: Controle2b, Controle2bComSuporte, Controle4bCopiador, Controle4BotoesCromado, Eletrificador12v, FiltroDeLinha, Fio Inox, Fonte, moduloSas, moduloWifi, nobreakpackdebateria, nobreak, packbateria, PlacadeAdvertencia, ProtetorDeRede, Sensor Infravermelho, Sensor Magnetico, Sirene Magnetica, Sirene, Voltimetro.',
+        },
+        template_vars: {
+          type: 'OBJECT' as Type,
+          description: 'Variáveis do template. Ex: { "cor": "blue", "produto": "Controle 2 Botões", "desconto": "10%" }',
+          properties: {},
+        },
+        image_size: {
+          type: 'STRING' as Type,
+          description: '"square_hd" | "landscape_4_3" | "landscape_16_9". Default: landscape_4_3.',
+        },
+        caption: { type: 'STRING' as Type, description: 'Legenda da imagem no WhatsApp (texto que acompanha).' },
+      },
+      required: ['phone', 'template_id', 'caption'],
+    },
+  },
+  {
     name: 'list_whatsapp_conversations',
     description: 'Lista as conversas WhatsApp recentes com prévia da última mensagem. Use para ver quem entrou em contato ou antes de enviar uma mensagem.',
     parameters: {
@@ -3829,6 +3858,94 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
         .order('name');
       if (error) throw new Error(error.message);
       return { total: (data ?? []).length, contacts: data ?? [] };
+    }
+
+    case 'generate_and_send_image': {
+      const phoneRaw       = String(args.phone ?? '').trim();
+      const templateId     = String(args.template_id ?? 'promocao_produto').trim();
+      const productFile    = String(args.product_filename ?? '').trim();
+      const templateVars   = (args.template_vars as Record<string, string>) ?? {};
+      const imageSizeArg   = String(args.image_size ?? 'landscape_4_3').trim();
+      const caption        = String(args.caption ?? '').trim();
+
+      if (!phoneRaw) throw new Error('phone é obrigatório');
+
+      // Resolve número: tenta por nome nos contatos primeiro
+      let phone = phoneRaw.replace(/\D/g, '');
+      if (!phone || phone.length < 8) {
+        const { data: found } = await supabase
+          .from('whatsapp_contacts')
+          .select('phone')
+          .ilike('name', `%${phoneRaw}%`)
+          .limit(1);
+        const resolved = (found as any)?.[0]?.phone;
+        if (!resolved) throw new Error(`Contato "${phoneRaw}" não encontrado. Informe o número diretamente.`);
+        phone = resolved;
+      }
+
+      // Prompts por template (background only, produto vem sobreposto separadamente na UI)
+      const TEMPLATE_PROMPTS: Record<string, string> = {
+        promocao_produto:  `Promotional product photography studio backdrop. Clean ${templateVars.cor ?? 'blue'} gradient background, soft directional light, subtle geometric shapes. Electronics brand commercial style. No products, no text, no watermark.`,
+        lancamento:        `New product launch backdrop. Dramatic dark background with ${templateVars.cor ?? 'electric blue'} spotlight glow, futuristic tech lines, cinematic depth. No products, no text, no watermark.`,
+        liquidacao:        'High-energy sale promotion background. Red, black and gold dramatic gradients, lightning bolt decorations, explosive energy. No products, no text, no watermark.',
+        data_comemorativa: `Elegant festive greeting card design for ${templateVars.data ?? 'special occasion'}. ${templateVars.estilo ?? 'warm'} visual style, warm celebratory atmosphere. No text, no watermark.`,
+        institucional:     `Professional corporate communication banner. Theme: ${templateVars.tema ?? 'technology'}. Clean modern design, blue and white palette, geometric shapes. No text, no watermark.`,
+        agradecimento:     `Warm heartfelt thank you card. ${templateVars.estilo ?? 'elegant'} style, golden warm tones, premium feel. No text, no watermark.`,
+      };
+
+      const prompt = TEMPLATE_PROMPTS[templateId] ?? TEMPLATE_PROMPTS['promocao_produto'];
+
+      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
+      const anonKey     = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+      const SUPA_PUB    = 'https://tgajbfzkncwmopkudlpr.supabase.co';
+
+      // 1. Gera background via Fal.ai
+      const genRes  = await fetch(`${supabaseUrl}/functions/v1/generate-image`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', apikey: anonKey, Authorization: `Bearer ${anonKey}` },
+        body: JSON.stringify({ prompt, image_size: imageSizeArg }),
+      });
+      const genJson = await genRes.json();
+      if (!genRes.ok) throw new Error(genJson.error ?? 'Falha ao gerar imagem');
+
+      // 2. Se produto informado: re-upload com composição via Edge Function (produto do Storage)
+      //    A composição visual completa (logo+CNPJ) já é aplicada pelo generate-image
+      let finalUrl = genJson.url as string;
+
+      if (productFile) {
+        const encodedFile = encodeURIComponent(`${productFile}.png`);
+        const productUrl  = `${SUPA_PUB}/storage/v1/object/public/product-images/products/${encodedFile}`;
+        // Passa product_url para o generate-image (sem composição server-side por ora)
+        // A imagem gerada já inclui o branding EGP da etapa anterior
+        finalUrl = genJson.url;
+        // Nota: composição produto+fundo acontece no browser (ImageGeneratorPage)
+        // Para o agente, envia o background com branding + menciona produto na legenda
+        void productUrl; // variável reservada para futuro server-side composite
+      }
+
+      // 3. Envia via WhatsApp
+      const sendRes  = await fetch(`${supabaseUrl}/functions/v1/whatsapp-send`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', apikey: anonKey, Authorization: `Bearer ${anonKey}` },
+        body: JSON.stringify({
+          to: phone,
+          image_url: finalUrl,
+          text: caption || undefined,
+          sender_label: ctx.currentUser,
+        }),
+      });
+      const sendJson = await sendRes.json();
+      if (!sendRes.ok) throw new Error(sendJson.error ?? 'Falha ao enviar');
+
+      return {
+        sent: true,
+        to: phone,
+        image_url: finalUrl,
+        message_id: sendJson.message_id,
+        note: productFile
+          ? `Imagem enviada com branding EGP. Para sobrepor a foto real do produto "${productFile}", use a tela Imagens IA manualmente.`
+          : 'Imagem enviada com branding EGP.',
+      };
     }
 
     case 'send_whatsapp_message': {

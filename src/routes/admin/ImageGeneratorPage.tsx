@@ -5,7 +5,35 @@ import { useInternalAuth } from '@/lib/auth-context';
 import logoSrc from '@/images/letreirosemfundo.png';
 
 // ---------------------------------------------------------------------------
-// Composição canvas: gera imagem + identidade visual EGP no rodapé
+// Fotos dos produtos — importadas via Vite glob (URLs hasheadas, sem CORS)
+// ---------------------------------------------------------------------------
+
+const productMods = import.meta.glob<string>(
+  '../../images/products/*.png',
+  { eager: true, import: 'default' },
+);
+
+function toDisplayName(filename: string): string {
+  const base = filename.replace('.png', '');
+  return base
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .replace(/([A-Za-z])([0-9])/g, '$1 $2')
+    .replace(/([0-9])([A-Za-z])/g, '$1 $2')
+    .replace(/^(.)/, (c) => c.toUpperCase())
+    .trim();
+}
+
+interface ProductEntry { filename: string; name: string; url: string }
+
+const PRODUCTS: ProductEntry[] = Object.entries(productMods)
+  .map(([path, url]) => {
+    const filename = path.split('/').pop()!;
+    return { filename, name: toDisplayName(filename), url };
+  })
+  .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
+
+// ---------------------------------------------------------------------------
+// Canvas: composta a imagem gerada + foto do produto + identidade EGP
 // ---------------------------------------------------------------------------
 
 const CNPJ_TEXT    = 'CNPJ: 40.116.124/0001-51';
@@ -21,10 +49,14 @@ function loadImg(src: string, crossOrigin = true): Promise<HTMLImageElement> {
   });
 }
 
-async function compositeWithBranding(rawUrl: string): Promise<string> {
-  const [generated, logo] = await Promise.all([
+async function compositeWithBranding(
+  rawUrl: string,
+  productUrl?: string,
+): Promise<string> {
+  const [generated, logo, product] = await Promise.all([
     loadImg(rawUrl),
     loadImg(logoSrc, false),
+    productUrl ? loadImg(productUrl, false) : Promise.resolve(null),
   ]);
 
   const W = generated.naturalWidth;
@@ -35,10 +67,28 @@ async function compositeWithBranding(rawUrl: string): Promise<string> {
   canvas.height = H;
   const ctx = canvas.getContext('2d')!;
 
-  // Imagem gerada
+  // Fundo gerado pela IA
   ctx.drawImage(generated, 0, 0, W, H);
 
-  // Faixa escura no rodapé (gradiente transparente → semi-opaco)
+  // Foto do produto centralizada (com sombra)
+  if (product) {
+    const maxW = W * 0.58;
+    const maxH = H * 0.74;
+    const scale  = Math.min(maxW / product.naturalWidth, maxH / product.naturalHeight);
+    const pW = product.naturalWidth  * scale;
+    const pH = product.naturalHeight * scale;
+    const pX = (W - pW) / 2;
+    const pY = (H - pH) / 2 - H * 0.04;
+
+    ctx.save();
+    ctx.shadowColor   = 'rgba(0,0,0,0.35)';
+    ctx.shadowBlur    = Math.round(W * 0.025);
+    ctx.shadowOffsetY = Math.round(H * 0.015);
+    ctx.drawImage(product, pX, pY, pW, pH);
+    ctx.restore();
+  }
+
+  // Faixa escura no rodapé
   const stripH = Math.round(H * 0.14);
   const grad = ctx.createLinearGradient(0, H - stripH, 0, H);
   grad.addColorStop(0, 'rgba(0,0,0,0)');
@@ -46,24 +96,22 @@ async function compositeWithBranding(rawUrl: string): Promise<string> {
   ctx.fillStyle = grad;
   ctx.fillRect(0, H - stripH, W, stripH);
 
-  // Logo (letreiro sem fundo) — canto inferior esquerdo
-  const pad       = Math.round(W * 0.025);
-  const logoW     = Math.round(W * 0.24);
-  const logoH     = Math.round(logoW * (155 / 446));
-  const logoY     = H - logoH - pad;
-  ctx.drawImage(logo, pad, logoY, logoW, logoH);
+  // Logo — canto inferior esquerdo
+  const pad    = Math.round(W * 0.025);
+  const logoW  = Math.round(W * 0.24);
+  const logoH  = Math.round(logoW * (155 / 446));
+  ctx.drawImage(logo, pad, H - logoH - pad, logoW, logoH);
 
   // CNPJ + nome — canto inferior direito
-  const fontSize  = Math.max(10, Math.round(W * 0.018));
-  const lineH     = Math.round(fontSize * 1.5);
-  ctx.font        = `500 ${fontSize}px Inter, Arial, sans-serif`;
-  ctx.fillStyle   = 'rgba(255,255,255,0.88)';
-  ctx.textAlign   = 'right';
+  const fontSize = Math.max(10, Math.round(W * 0.018));
+  const lineH    = Math.round(fontSize * 1.5);
+  ctx.font         = `500 ${fontSize}px Inter, Arial, sans-serif`;
+  ctx.fillStyle    = 'rgba(255,255,255,0.88)';
+  ctx.textAlign    = 'right';
   ctx.textBaseline = 'bottom';
   ctx.fillText(CNPJ_TEXT,    W - pad, H - pad);
   ctx.fillText(COMPANY_NAME, W - pad, H - pad - lineH);
 
-  // Converte canvas → base64 JPEG e retorna
   return new Promise((resolve, reject) => {
     canvas.toBlob((blob) => {
       if (!blob) { reject(new Error('canvas.toBlob falhou')); return; }
@@ -87,7 +135,9 @@ interface ImageTemplate {
   category: string;
   categoryLabel: string;
   description: string;
-  prompt: string;       // usa {{chave}} para variáveis
+  prompt: string;
+  backgroundPrompt?: string; // usado quando um produto é selecionado
+  supportsProduct?: boolean;
   variables: TemplateVar[];
   defaultSize: ImageSize;
 }
@@ -95,10 +145,10 @@ interface ImageTemplate {
 type ImageSize = 'square_hd' | 'landscape_4_3' | 'landscape_16_9' | 'portrait_4_3';
 
 const SIZE_LABELS: Record<ImageSize, string> = {
-  square_hd: 'Quadrado (1:1)',
-  landscape_4_3: 'Paisagem 4:3',
+  square_hd:      'Quadrado (1:1)',
+  landscape_4_3:  'Paisagem 4:3',
   landscape_16_9: 'Paisagem 16:9',
-  portrait_4_3: 'Retrato 4:3',
+  portrait_4_3:   'Retrato 4:3',
 };
 
 const CATEGORY_COLOR: Record<string, string> = {
@@ -115,25 +165,14 @@ const TEMPLATES: ImageTemplate[] = [
     name: 'Promoção de Produto',
     category: 'promocao',
     categoryLabel: 'Promoção',
-    description: 'Banner visual de produto em oferta com destaque de desconto',
+    description: 'Banner de produto em oferta — use a foto real do produto',
     defaultSize: 'landscape_4_3',
-    prompt: `Professional commercial product photography for Brazilian electronics brand. Product: {{produto}}. Studio lighting, clean {{cor}} background gradient, promotional visual style. Discount badge silhouette element. High quality, 4K, no watermark, no text.`,
+    supportsProduct: true,
+    prompt: `Professional commercial product photography for Brazilian electronics brand. Product: {{produto}}. Studio lighting, clean {{cor}} background gradient, promotional visual style. High quality, 4K, no watermark, no text.`,
+    backgroundPrompt: `Promotional product photography studio backdrop. Clean {{cor}} gradient background, soft directional light, subtle geometric shapes. Electronics brand commercial style. No products, no text, no watermark.`,
     variables: [
-      { key: 'produto', label: 'Produto', placeholder: 'Ex: Controle 2 botões EGP' },
-      { key: 'cor', label: 'Cor do tema', placeholder: 'Ex: blue, green, orange' },
-    ],
-  },
-  {
-    id: 'data_comemorativa',
-    name: 'Data Comemorativa',
-    category: 'comemorativa',
-    categoryLabel: 'Comemorativa',
-    description: 'Arte para datas especiais: Natal, Dia das Mães, Páscoa, etc.',
-    defaultSize: 'square_hd',
-    prompt: `Elegant festive greeting card design for {{data}}. {{estilo}} visual style, warm celebratory atmosphere. Decorative elements related to the occasion. Professional design suitable for business communication. Soft gradients, tasteful composition. No text, no watermark.`,
-    variables: [
-      { key: 'data', label: 'Data / Ocasião', placeholder: 'Ex: Natal, Dia das Mães, Páscoa' },
-      { key: 'estilo', label: 'Estilo visual', placeholder: 'Ex: minimalist, luxurious, colorful, warm' },
+      { key: 'produto', label: 'Produto (se não selecionar foto)', placeholder: 'Ex: Controle 2 botões EGP' },
+      { key: 'cor',     label: 'Cor do tema', placeholder: 'Ex: blue, green, orange, purple' },
     ],
   },
   {
@@ -141,12 +180,14 @@ const TEMPLATES: ImageTemplate[] = [
     name: 'Lançamento de Produto',
     category: 'produto',
     categoryLabel: 'Produto',
-    description: 'Arte de impacto para anunciar um novo produto',
+    description: 'Arte dramática para anunciar um novo produto',
     defaultSize: 'landscape_4_3',
-    prompt: `New product launch teaser banner for electronics brand. Product: {{produto}}. Dramatic {{cor}} spotlight effect on dark background, futuristic tech aesthetic, glowing edges, premium product reveal composition. High contrast, cinematic quality. No text, no watermark.`,
+    supportsProduct: true,
+    prompt: `New product launch teaser for electronics brand. Product: {{produto}}. Dramatic {{cor}} spotlight on dark background, futuristic tech aesthetic, glowing edges, cinematic quality. No text, no watermark.`,
+    backgroundPrompt: `New product launch backdrop. Dramatic dark background with {{cor}} spotlight glow, futuristic tech lines, cinematic depth. No products, no text, no watermark.`,
     variables: [
-      { key: 'produto', label: 'Produto', placeholder: 'Ex: Controle EGP Pro V2' },
-      { key: 'cor', label: 'Cor destaque', placeholder: 'Ex: electric blue, gold, neon green' },
+      { key: 'produto', label: 'Produto (se não selecionar foto)', placeholder: 'Ex: Controle EGP Pro V2' },
+      { key: 'cor',     label: 'Cor destaque', placeholder: 'Ex: electric blue, gold, neon green' },
     ],
   },
   {
@@ -154,10 +195,25 @@ const TEMPLATES: ImageTemplate[] = [
     name: 'Liquidação / Black Friday',
     category: 'promocao',
     categoryLabel: 'Promoção',
-    description: 'Visual impactante para grandes promoções e liquidações',
+    description: 'Visual impactante para grandes promoções',
     defaultSize: 'landscape_16_9',
-    prompt: `High-energy retail sale promotion banner. Red, black and gold color scheme. Explosive dynamic composition with abstract geometric shapes, lightning bolts, confetti elements. Dramatic contrast, urgency and excitement visual mood. Professional commercial graphics. No text, no watermark.`,
+    supportsProduct: true,
+    prompt: `High-energy retail sale promotion banner. Red, black and gold color scheme. Explosive dynamic composition, lightning bolts, confetti elements. Dramatic contrast. No text, no watermark.`,
+    backgroundPrompt: `High-energy sale promotion background. Red, black and gold dramatic gradients, lightning bolt decorations, explosive energy. No products, no text, no watermark.`,
     variables: [],
+  },
+  {
+    id: 'data_comemorativa',
+    name: 'Data Comemorativa',
+    category: 'comemorativa',
+    categoryLabel: 'Comemorativa',
+    description: 'Arte para datas especiais: Natal, Dia das Mães, Páscoa…',
+    defaultSize: 'square_hd',
+    prompt: `Elegant festive greeting card design for {{data}}. {{estilo}} visual style, warm celebratory atmosphere. Decorative elements related to the occasion. Professional design. No text, no watermark.`,
+    variables: [
+      { key: 'data',   label: 'Data / Ocasião', placeholder: 'Ex: Natal, Dia das Mães, Páscoa' },
+      { key: 'estilo', label: 'Estilo visual',  placeholder: 'Ex: minimalist, luxurious, colorful, warm' },
+    ],
   },
   {
     id: 'institucional',
@@ -166,9 +222,9 @@ const TEMPLATES: ImageTemplate[] = [
     categoryLabel: 'Institucional',
     description: 'Comunicado corporativo ou apresentação da empresa',
     defaultSize: 'landscape_4_3',
-    prompt: `Professional corporate communication banner for technology company. Theme: {{tema}}. Clean modern design, blue and white corporate palette, geometric abstract shapes, subtle circuit board pattern, premium business aesthetic. Trustworthy and professional. No text, no watermark.`,
+    prompt: `Professional corporate communication banner for technology company. Theme: {{tema}}. Clean modern design, blue and white palette, geometric abstract shapes, subtle circuit board pattern. No text, no watermark.`,
     variables: [
-      { key: 'tema', label: 'Tema / Conceito', placeholder: 'Ex: inovação, qualidade, parceria, atendimento' },
+      { key: 'tema', label: 'Tema / Conceito', placeholder: 'Ex: inovação, qualidade, parceria' },
     ],
   },
   {
@@ -178,7 +234,7 @@ const TEMPLATES: ImageTemplate[] = [
     categoryLabel: 'Institucional',
     description: 'Arte calorosa para agradecer um cliente',
     defaultSize: 'square_hd',
-    prompt: `Warm and heartfelt thank you card design. {{estilo}} style, golden and warm tones, heart or star elements, premium feel. Suitable for a Brazilian electronics company thanking loyal customers. Elegant, emotional, tasteful. No text, no watermark.`,
+    prompt: `Warm and heartfelt thank you card design. {{estilo}} style, golden and warm tones, heart or star elements, premium feel. Brazilian electronics company thanking loyal customers. No text, no watermark.`,
     variables: [
       { key: 'estilo', label: 'Estilo', placeholder: 'Ex: elegant, warm, modern, minimalist' },
     ],
@@ -188,14 +244,14 @@ const TEMPLATES: ImageTemplate[] = [
     name: 'Prompt Livre',
     category: 'custom',
     categoryLabel: 'Personalizado',
-    description: 'Descreva exatamente o que você quer gerar',
+    description: 'Descreva exatamente o que quer gerar',
     defaultSize: 'square_hd',
     prompt: '{{prompt_livre}}',
     variables: [
       {
         key: 'prompt_livre',
-        label: 'Descreva a imagem (em inglês para melhores resultados)',
-        placeholder: 'Ex: Professional product photo of a remote control, white background, studio lighting...',
+        label: 'Descreva a imagem (inglês dá melhores resultados)',
+        placeholder: 'Ex: Promotional banner, blue gradient background, electronics...',
       },
     ],
   },
@@ -205,8 +261,9 @@ const TEMPLATES: ImageTemplate[] = [
 // Helpers
 // ---------------------------------------------------------------------------
 
-function buildPrompt(template: ImageTemplate, vars: Record<string, string>): string {
-  let p = template.prompt;
+function buildPrompt(template: ImageTemplate, vars: Record<string, string>, withProduct: boolean): string {
+  const base = withProduct && template.backgroundPrompt ? template.backgroundPrompt : template.prompt;
+  let p = base;
   for (const [key, val] of Object.entries(vars)) {
     p = p.replace(new RegExp(`\\{\\{${key}\\}\\}`, 'g'), val.trim() || `[${key}]`);
   }
@@ -221,22 +278,22 @@ export default function ImageGeneratorPage() {
   const { userLabel } = useInternalAuth();
 
   const [selectedTemplate, setSelectedTemplate] = useState<ImageTemplate | null>(null);
-  const [vars, setVars] = useState<Record<string, string>>({});
+  const [selectedProduct, setSelectedProduct]   = useState<ProductEntry | null>(null);
+  const [vars, setVars]           = useState<Record<string, string>>({});
   const [imageSize, setImageSize] = useState<ImageSize>('landscape_4_3');
-  const [generating, setGenerating] = useState(false);
-  const [genError, setGenError] = useState<string | null>(null);
+  const [generating, setGenerating]   = useState(false);
+  const [genError, setGenError]       = useState<string | null>(null);
   const [generatedUrl, setGeneratedUrl] = useState<string | null>(null);
-  const [caption, setCaption] = useState('');
-  const [sending, setSending] = useState(false);
-  const [sendError, setSendError] = useState<string | null>(null);
+  const [caption, setCaption]     = useState('');
+  const [sending, setSending]     = useState(false);
+  const [sendError, setSendError]     = useState<string | null>(null);
   const [sendSuccess, setSendSuccess] = useState<string | null>(null);
-  const [contacts, setContacts] = useState<{ phone: string; name: string | null }[]>([]);
+  const [contacts, setContacts]       = useState<{ phone: string; name: string | null }[]>([]);
   const [selectedPhone, setSelectedPhone] = useState('');
   const [contactsLoaded, setContactsLoaded] = useState(false);
 
   async function loadContacts() {
     if (contactsLoaded) return;
-    // Combina whatsapp_contacts (têm nome) com whatsapp_sessions (telefones com conversa)
     const [{ data: namedContacts }, { data: sessions }] = await Promise.all([
       supabase.from('whatsapp_contacts').select('phone, name').order('name'),
       supabase.from('whatsapp_sessions').select('phone').order('updated_at', { ascending: false }),
@@ -250,6 +307,7 @@ export default function ImageGeneratorPage() {
 
   function selectTemplate(t: ImageTemplate) {
     setSelectedTemplate(t);
+    setSelectedProduct(null);
     setVars({});
     setImageSize(t.defaultSize);
     setGeneratedUrl(null);
@@ -261,7 +319,7 @@ export default function ImageGeneratorPage() {
 
   async function generateImage() {
     if (!selectedTemplate || generating) return;
-    const prompt = buildPrompt(selectedTemplate, vars);
+    const prompt = buildPrompt(selectedTemplate, vars, !!selectedProduct);
     if (!prompt.trim()) return;
 
     setGenerating(true);
@@ -274,8 +332,8 @@ export default function ImageGeneratorPage() {
       const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
       const anonKey     = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
 
-      // 1. Gera imagem bruta via Fal.ai
-      const res = await fetch(`${supabaseUrl}/functions/v1/generate-image`, {
+      // 1. Gera background via Fal.ai
+      const res  = await fetch(`${supabaseUrl}/functions/v1/generate-image`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', apikey: anonKey, Authorization: `Bearer ${anonKey}` },
         body: JSON.stringify({ prompt, image_size: imageSize }),
@@ -283,11 +341,14 @@ export default function ImageGeneratorPage() {
       const json = await res.json();
       if (!res.ok) throw new Error(json.error ?? 'Falha ao gerar imagem');
 
-      // 2. Composta logo + CNPJ no canvas do browser
-      const base64 = await compositeWithBranding(json.url);
+      // 2. Composta no canvas: background + foto do produto + branding EGP
+      const base64 = await compositeWithBranding(
+        json.url,
+        selectedProduct?.url ?? undefined,
+      );
 
-      // 3. Re-upload da imagem finalizada via Edge Function
-      const uploadRes = await fetch(`${supabaseUrl}/functions/v1/generate-image`, {
+      // 3. Re-upload da imagem final
+      const uploadRes  = await fetch(`${supabaseUrl}/functions/v1/generate-image`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', apikey: anonKey, Authorization: `Bearer ${anonKey}` },
         body: JSON.stringify({ image_data: base64 }),
@@ -333,8 +394,12 @@ export default function ImageGeneratorPage() {
     }
   }
 
-  const canGenerate = selectedTemplate !== null &&
-    selectedTemplate.variables.every((v) => vars[v.key]?.trim());
+  const varsOk = selectedTemplate
+    ? selectedTemplate.variables
+        .filter((v) => !(selectedProduct && v.key === 'produto'))
+        .every((v) => vars[v.key]?.trim())
+    : false;
+  const canGenerate = selectedTemplate !== null && varsOk;
 
   const fmtPhone = (p: string) => {
     const d = p.replace(/\D/g, '');
@@ -344,7 +409,7 @@ export default function ImageGeneratorPage() {
   };
 
   return (
-    <div className="flex h-full flex-col gap-0 overflow-hidden lg:flex-row">
+    <div className="flex h-full flex-col overflow-hidden lg:flex-row">
 
       {/* ── Painel esquerdo: galeria de templates ── */}
       <div className="flex w-full shrink-0 flex-col border-b border-slate-200 bg-white lg:w-72 lg:border-b-0 lg:border-r xl:w-80">
@@ -373,6 +438,9 @@ export default function ImageGeneratorPage() {
                 </span>
               </div>
               <p className="mt-0.5 text-xs text-slate-500 leading-relaxed">{t.description}</p>
+              {t.supportsProduct && (
+                <p className="mt-1 text-[10px] text-brand-600 font-medium">✦ suporta foto do produto</p>
+              )}
             </button>
           ))}
         </div>
@@ -400,10 +468,69 @@ export default function ImageGeneratorPage() {
                 </span>
               </div>
 
-              {/* Variáveis */}
-              {selectedTemplate.variables.length > 0 && (
+              {/* Seletor de foto do produto */}
+              {selectedTemplate.supportsProduct && (
+                <div className="mb-5">
+                  <div className="flex items-center justify-between mb-2">
+                    <label className="text-xs font-semibold text-slate-700 uppercase tracking-wide">
+                      Foto do Produto
+                    </label>
+                    {selectedProduct && (
+                      <button
+                        type="button"
+                        onClick={() => setSelectedProduct(null)}
+                        className="text-[11px] text-slate-400 hover:text-red-500"
+                      >
+                        remover
+                      </button>
+                    )}
+                  </div>
+
+                  {selectedProduct ? (
+                    <div className="flex items-center gap-3 rounded-lg border border-brand-200 bg-brand-50 p-2.5">
+                      <img
+                        src={selectedProduct.url}
+                        alt={selectedProduct.name}
+                        className="h-12 w-12 rounded object-contain"
+                      />
+                      <div>
+                        <p className="text-xs font-medium text-slate-800">{selectedProduct.name}</p>
+                        <p className="text-[10px] text-slate-500">Será sobreposta na imagem gerada</p>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-4 gap-1.5 max-h-48 overflow-y-auto rounded-lg border border-slate-200 p-2 bg-slate-50">
+                      {PRODUCTS.map((p) => (
+                        <button
+                          key={p.filename}
+                          type="button"
+                          onClick={() => setSelectedProduct(p)}
+                          title={p.name}
+                          className="group flex flex-col items-center gap-1 rounded-md p-1.5 hover:bg-white hover:shadow-sm transition-all"
+                        >
+                          <img
+                            src={p.url}
+                            alt={p.name}
+                            className="h-10 w-10 object-contain"
+                          />
+                          <span className="text-[9px] text-slate-500 text-center leading-tight line-clamp-2">
+                            {p.name}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Variáveis do template */}
+              {selectedTemplate.variables
+                .filter((v) => !(selectedProduct && v.key === 'produto'))
+                .length > 0 && (
                 <div className="space-y-3 mb-4">
-                  {selectedTemplate.variables.map((v) => (
+                  {selectedTemplate.variables
+                    .filter((v) => !(selectedProduct && v.key === 'produto'))
+                    .map((v) => (
                     <div key={v.key}>
                       <label className="block text-xs font-medium text-slate-700 mb-1">{v.label}</label>
                       {v.key === 'prompt_livre' ? (
@@ -463,14 +590,15 @@ export default function ImageGeneratorPage() {
                       <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3"/>
                       <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8h4l-3 3-3-3h4z"/>
                     </svg>
-                    Gerando imagem…
+                    Gerando…
                   </>
                 ) : (
                   <>
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-4 w-4">
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09ZM18.259 8.715 18 9.75l-.259-1.035a3.375 3.375 0 0 0-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 0 0 2.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 0 0 2.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 0 0-2.456 2.456ZM16.894 20.567 16.5 21.75l-.394-1.183a2.25 2.25 0 0 0-1.423-1.423L13.5 18.75l1.183-.394a2.25 2.25 0 0 0 1.423-1.423l.394-1.183.394 1.183a2.25 2.25 0 0 0 1.423 1.423l1.183.394-1.183.394a2.25 2.25 0 0 0-1.423 1.423Z" />
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09Z" />
                     </svg>
                     Gerar com IA
+                    {selectedProduct && <span className="text-brand-200 text-[11px]">· com foto do produto</span>}
                   </>
                 )}
               </button>
@@ -480,7 +608,7 @@ export default function ImageGeneratorPage() {
               )}
             </div>
 
-            {/* Preview */}
+            {/* Preview + envio */}
             {generatedUrl && (
               <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
                 <h3 className="text-sm font-semibold text-slate-900 mb-3">Preview</h3>
@@ -496,17 +624,17 @@ export default function ImageGeneratorPage() {
                     href={generatedUrl}
                     target="_blank"
                     rel="noreferrer"
-                    className="flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-50 transition-colors"
+                    className="flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-50"
                   >
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-3.5 w-3.5">
                       <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 6H5.25A2.25 2.25 0 0 0 3 8.25v10.5A2.25 2.25 0 0 0 5.25 21h10.5A2.25 2.25 0 0 0 18 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" />
                     </svg>
-                    Abrir em nova aba
+                    Abrir
                   </a>
                   <a
                     href={generatedUrl}
                     download
-                    className="flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-50 transition-colors"
+                    className="flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-50"
                   >
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-3.5 w-3.5">
                       <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 12 12 16.5m0 0L7.5 12m4.5 4.5V3" />
@@ -516,13 +644,13 @@ export default function ImageGeneratorPage() {
                   <button
                     type="button"
                     onClick={() => { setGeneratedUrl(null); setSendSuccess(null); setSendError(null); }}
-                    className="ml-auto flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-50 transition-colors"
+                    className="ml-auto flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs text-slate-600 hover:bg-slate-50"
                   >
                     Gerar outra
                   </button>
                 </div>
 
-                {/* Enviar via WhatsApp */}
+                {/* Envio WhatsApp */}
                 <div className="border-t border-slate-100 pt-4 space-y-3">
                   <h4 className="text-xs font-semibold text-slate-700 uppercase tracking-wide">Enviar via WhatsApp</h4>
 
@@ -548,18 +676,14 @@ export default function ImageGeneratorPage() {
                     <textarea
                       value={caption}
                       onChange={(e) => setCaption(e.target.value)}
-                      placeholder="Ex: Aproveite nossa promoção especial! 🎉"
+                      placeholder="Ex: Aproveite 10% de desconto nos controles! Válido até domingo. 🎉"
                       rows={2}
                       className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm focus:border-green-500 focus:outline-none focus:ring-1 focus:ring-green-500 resize-none"
                     />
                   </div>
 
-                  {sendError && (
-                    <p className="text-xs text-red-600 rounded-md bg-red-50 border border-red-200 px-3 py-1.5">{sendError}</p>
-                  )}
-                  {sendSuccess && (
-                    <p className="text-xs text-green-700 rounded-md bg-green-50 border border-green-200 px-3 py-1.5">{sendSuccess}</p>
-                  )}
+                  {sendError   && <p className="text-xs text-red-600 rounded-md bg-red-50 border border-red-200 px-3 py-1.5">{sendError}</p>}
+                  {sendSuccess && <p className="text-xs text-green-700 rounded-md bg-green-50 border border-green-200 px-3 py-1.5">{sendSuccess}</p>}
 
                   <button
                     type="button"
