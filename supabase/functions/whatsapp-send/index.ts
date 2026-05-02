@@ -43,25 +43,38 @@ Deno.serve(async (req) => {
   let body: {
     to?: string;
     text?: string;
+    image_url?: string;
     template?: { name: string; language?: string; params?: string[] };
     sender_label?: string;
   };
   try { body = await req.json(); } catch { return new Response('Invalid JSON', { status: 400, headers: CORS }); }
 
-  const { to, text, template, sender_label } = body;
+  const { to, text, image_url, template, sender_label } = body;
   const senderFirstName = senderName(sender_label);
   if (!to) return new Response(JSON.stringify({ error: 'to é obrigatório' }), { status: 400, headers: { ...CORS, 'Content-Type': 'application/json' } });
-  if (!text && !template) return new Response(JSON.stringify({ error: 'text OU template é obrigatório' }), { status: 400, headers: { ...CORS, 'Content-Type': 'application/json' } });
+  if (!text && !template && !image_url) return new Response(JSON.stringify({ error: 'text, image_url OU template é obrigatório' }), { status: 400, headers: { ...CORS, 'Content-Type': 'application/json' } });
 
   // Normaliza número: remove não-dígitos, garante código BR se não tiver DDI
   const digits = to.replace(/\D/g, '');
   const phone = digits.startsWith('55') ? digits : `55${digits}`;
 
-  // Monta payload — template se fornecido, senão texto livre
+  // Monta payload — imagem, template ou texto livre
   let payload: Record<string, unknown>;
   let logText: string;
 
-  if (template) {
+  if (image_url) {
+    // Mensagem de imagem (gerada pela IA ou externa)
+    const caption = text
+      ? (senderFirstName ? `*${senderFirstName} · EGP*\n\n${text}` : text)
+      : (senderFirstName ? `*${senderFirstName} · EGP*` : undefined);
+    payload = {
+      messaging_product: 'whatsapp',
+      to: phone,
+      type: 'image',
+      image: { link: image_url, ...(caption ? { caption } : {}) },
+    };
+    logText = `[imagem] ${caption ?? image_url}`;
+  } else if (template) {
     const params = template.params ?? [];
     payload = {
       messaging_product: 'whatsapp',

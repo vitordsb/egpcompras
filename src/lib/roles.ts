@@ -17,7 +17,7 @@ export const HARDCODED_ADMINS = ['vitor@grupoegp.com.br', 'joane@grupoegp.com.br
 // ===== Seções (page keys) =====
 
 export type PageKey =
-  | 'produtos' | 'whatsapp' | 'clientes' | 'campanhas'
+  | 'produtos' | 'whatsapp' | 'clientes' | 'campanhas' | 'imagens'
   | 'cotacoes' | 'componentes' | 'falta_comprar' | 'fornecedores'
   | 'pedidos'  | 'saidas'
   | 'financeira'
@@ -56,6 +56,12 @@ export const PAGE_DEFINITIONS: Record<PageKey, PageDef> = {
     label: 'Campanhas',
     group: 'Vendas',
     paths: ['/admin/campanhas'],
+    tools: [],
+  },
+  imagens: {
+    label: 'Imagens IA',
+    group: 'Vendas',
+    paths: ['/admin/imagens'],
     tools: [],
   },
   cotacoes: {

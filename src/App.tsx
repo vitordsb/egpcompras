@@ -26,6 +26,7 @@ import SemNotaPage from '@/routes/admin/financeira/SemNotaPage';
 import RelatorioFinanceiraPage from '@/routes/admin/financeira/RelatorioFinanceiraPage';
 import SupplierQuotePage from '@/routes/public/SupplierQuotePage';
 import WhatsAppPage from '@/routes/admin/WhatsAppPage';
+import ImageGeneratorPage from '@/routes/admin/ImageGeneratorPage';
 import ClientesPage from '@/routes/admin/ClientesPage';
 import CampanhasPage from '@/routes/admin/CampanhasPage';
 import ContaOficialPage from '@/routes/admin/ContaOficialPage';
@@ -267,6 +268,7 @@ function AuthenticatedApp() {
           element={isAccessAdmin ? <AccessUsersPage /> : <Navigate to="/admin/produtos" replace />}
         />
         <Route path="whatsapp" element={<WhatsAppPage />} />
+        <Route path="imagens" element={<ImageGeneratorPage />} />
         <Route path="clientes" element={<ClientesPage />} />
         <Route path="campanhas" element={<CampanhasPage />} />
         <Route path="conta-oficial" element={<ContaOficialPage />} />
