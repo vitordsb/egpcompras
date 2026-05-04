@@ -50,11 +50,21 @@ export default function ProductsPage() {
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
 
   // ── Kit ──
-  const [kitComponents, setKitComponents] = useState<KitComponent[]>([]);
-  const [kitSearch, setKitSearch]         = useState('');
+  const [kitComponents, setKitComponents]   = useState<KitComponent[]>([]);
+  const [kitSearch, setKitSearch]           = useState('');
+  const [kitBomExpanded, setKitBomExpanded] = useState<{ component_name: string; component_sku: string | null; total_quantity: number; component_unit: string | null }[]>([]);
   const kitSearchRef = useRef<HTMLInputElement>(null);
 
   useBodyScrollLock(!!form);
+
+  async function loadKitBomExpanded(kitProductId: string) {
+    const { data } = await supabase
+      .from('kit_bom_expanded')
+      .select('component_name, component_sku, total_quantity, component_unit')
+      .eq('kit_product_id', kitProductId)
+      .order('component_name');
+    setKitBomExpanded((data ?? []) as any[]);
+  }
 
   async function loadKitComponents(kitProductId: string) {
     const { data } = await supabase
@@ -144,7 +154,7 @@ export default function ProductsPage() {
       show_price: (p as any).show_price ?? false,
       is_kit: isKit,
     });
-    if (isKit) loadKitComponents(p.id);
+    if (isKit) { loadKitComponents(p.id); loadKitBomExpanded(p.id); }
   }
 
   function closeForm() {
@@ -203,7 +213,7 @@ export default function ProductsPage() {
 
     const { error } = await supabase.from('products').update(productPayload).eq('id', form.id);
     if (error) { setSaving(false); setFormError(error.message); return; }
-    if (form.is_kit) await saveKitComponents(form.id);
+    if (form.is_kit) { await saveKitComponents(form.id); await loadKitBomExpanded(form.id); }
     setSaving(false);
     closeForm();
     await loadProducts();
@@ -430,6 +440,28 @@ export default function ProductsPage() {
                           </span>
                         </div>
                       </div>
+                    )}
+
+                    {/* BOM expandida (só leitura — atualiza automaticamente quando muda BOM dos componentes) */}
+                    {kitBomExpanded.length > 0 && (
+                      <details className="rounded-lg border border-slate-100 bg-slate-50">
+                        <summary className="cursor-pointer px-3 py-2 text-xs font-medium text-slate-500 select-none">
+                          BOM expandida — {kitBomExpanded.length} componentes raw (atualiza automaticamente)
+                        </summary>
+                        <div className="divide-y divide-slate-100 border-t border-slate-100">
+                          {kitBomExpanded.map(b => (
+                            <div key={b.component_name} className="flex justify-between px-3 py-1.5 text-xs">
+                              <span className="text-slate-700">
+                                {b.component_name}
+                                {b.component_sku && <span className="ml-1 text-slate-400">({b.component_sku})</span>}
+                              </span>
+                              <span className="text-slate-500 font-medium">
+                                {Number(b.total_quantity)} {b.component_unit ?? 'un'}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </details>
                     )}
 
                     {/* Busca de produto para adicionar */}
