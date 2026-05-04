@@ -1,7 +1,7 @@
 // Renderização canvas de templates de marketing EGP.
 // Cada template é uma função pura que desenha num HTMLCanvasElement.
 
-import logoSrc from '@/images/letreirosemfundo.png';
+import iconSrc from '@/images/icon.png';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Tipos
@@ -95,14 +95,14 @@ function wrapText(ctx: CanvasRenderingContext2D, text: string, x: number, y: num
   return cy + lh;
 }
 
-// Barra inferior com logo EGP + CNPJ
+// Barra inferior: ícone EGP + nome + CNPJ
 async function brandBar(ctx: CanvasRenderingContext2D, W: number, H: number, cor: string) {
   const h = 76, y = H - h;
 
   ctx.fillStyle = '#0f0f0f';
   ctx.fillRect(0, y, W, h);
 
-  // Faixa de acento colorida
+  // Faixa de acento colorida no topo da barra
   ctx.fillStyle = cor;
   ctx.fillRect(0, y, W, 3);
 
@@ -111,22 +111,34 @@ async function brandBar(ctx: CanvasRenderingContext2D, W: number, H: number, cor
   ctx.lineWidth = 1;
   ctx.beginPath(); ctx.moveTo(0, y + 3); ctx.lineTo(W, y + 3); ctx.stroke();
 
-  // Logo
+  // Ícone EGP (colorido — sem problemas de contraste no fundo escuro)
+  const ICON_SIZE = 40;
+  const iconX = 20;
+  const iconY = y + (h - ICON_SIZE) / 2;
   try {
-    const logo = await loadImg(logoSrc);
-    const lH = 32, lW = lH * (446 / 155);
-    ctx.globalAlpha = 0.92;
-    ctx.drawImage(logo, 24, y + (h - lH) / 2, lW, lH);
-    ctx.globalAlpha = 1;
-  } catch { /* sem logo */ }
+    const icon = await loadImg(iconSrc);
+    ctx.drawImage(icon, iconX, iconY, ICON_SIZE, ICON_SIZE);
+  } catch { /* sem ícone */ }
 
-  // Textos
-  ctx.fillStyle = 'rgba(255,255,255,0.5)';
+  // Texto "EGP" em branco + "ind e com ltda" menor abaixo
+  const textX = iconX + ICON_SIZE + 12;
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
+
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 17px system-ui, Arial, sans-serif';
+  ctx.fillText('EGP', textX, y + h * 0.46);
+
+  ctx.fillStyle = 'rgba(255,255,255,0.50)';
   ctx.font = '11px system-ui, Arial, sans-serif';
+  ctx.fillText('ind e com ltda', textX, y + h * 0.70);
+
+  // CNPJ à direita
   ctx.textAlign = 'right';
+  ctx.fillStyle = 'rgba(255,255,255,0.35)';
+  ctx.font = '10px system-ui, Arial, sans-serif';
   ctx.textBaseline = 'middle';
-  ctx.fillText('EGP IND E COM LTDA', W - 20, y + h * 0.35);
-  ctx.fillText('CNPJ: 40.116.124/0001-51', W - 20, y + h * 0.65);
+  ctx.fillText('CNPJ: 40.116.124/0001-51', W - 20, y + h * 0.55);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -141,7 +153,7 @@ async function renderPromocao(
 ) {
   const W = canvas.width, H = canvas.height;
   const ctx = canvas.getContext('2d')!;
-  const cor = data.cor || '#1d8348';
+  const cor = data.cor || '#CB1464';
   const corEsc = adj(cor, -40);
   const CARD_Y = Math.round(H * 0.565);
 
@@ -309,7 +321,7 @@ async function renderFeriado(
 ) {
   const W = canvas.width, H = canvas.height;
   const ctx = canvas.getContext('2d')!;
-  const cor = data.cor || '#1a56a0';
+  const cor = data.cor || '#CB1464';
 
   // ── Fundo gradiente diagonal ──
   const bg = ctx.createLinearGradient(0, 0, W, H);
@@ -334,12 +346,12 @@ async function renderFeriado(
   ctx.fillStyle = rgba('#ffffff', 0.04);
   ctx.beginPath(); ctx.arc(W * 0.08, H * 0.88, H * 0.28, 0, Math.PI * 2); ctx.fill();
 
-  // ── Logo EGP centrado no topo ──
+  // ── Ícone EGP centrado no topo ──
   try {
-    const logo = await loadImg(logoSrc);
-    const lH = 42, lW = lH * (446 / 155);
-    ctx.globalAlpha = 0.9;
-    ctx.drawImage(logo, (W - lW) / 2, 52, lW, lH);
+    const icon = await loadImg(iconSrc);
+    const iSz = 52;
+    ctx.globalAlpha = 0.92;
+    ctx.drawImage(icon, (W - iSz) / 2, 52, iSz, iSz);
     ctx.globalAlpha = 1;
   } catch { /* ignore */ }
 
@@ -434,7 +446,7 @@ async function renderLancamento(
 ) {
   const W = canvas.width, H = canvas.height;
   const ctx = canvas.getContext('2d')!;
-  const cor = data.cor || '#1a56db';
+  const cor = data.cor || '#CB1464';
 
   // ── Fundo escuro com vinheta ──
   ctx.fillStyle = '#080c10';
@@ -574,7 +586,7 @@ export const TEMPLATES: TemplateDefinition[] = [
       { key: 'condicao',          label: 'Condição de pagamento',      type: 'text',  placeholder: 'à vista', defaultValue: 'à vista' },
       { key: 'badge',             label: 'Texto do badge',             type: 'text',  placeholder: 'OFERTAÇO\nNA ÁREA', defaultValue: 'PROMOÇÃO\nESPECIAL', hint: 'Use \\n para quebrar linha' },
       { key: 'condicoes',         label: 'Condições (rodapé pequeno)', type: 'text',  placeholder: 'Oferta válida até 31/05/2026.' },
-      { key: 'cor',               label: 'Cor do tema',                type: 'color', defaultValue: '#1d8348' },
+      { key: 'cor',               label: 'Cor do tema',                type: 'color', defaultValue: '#CB1464' },
     ],
   },
   {
@@ -591,7 +603,7 @@ export const TEMPLATES: TemplateDefinition[] = [
       { key: 'subtitulo', label: 'Subtítulo',        type: 'text',     placeholder: 'da equipe EGP' },
       { key: 'mensagem',  label: 'Mensagem',         type: 'textarea', placeholder: 'Desejamos a você e sua família\num 2026 cheio de conquistas!' },
       { key: 'data',      label: 'Data / Período',   type: 'text',     placeholder: 'Dezembro 2025' },
-      { key: 'cor',       label: 'Cor do tema',      type: 'color',    defaultValue: '#1a56a0' },
+      { key: 'cor',       label: 'Cor do tema',      type: 'color',    defaultValue: '#CB1464' },
     ],
   },
   {
@@ -609,7 +621,7 @@ export const TEMPLATES: TemplateDefinition[] = [
       { key: 'preco_promocional', label: 'Preço de lançamento',  type: 'price', placeholder: '249,90' },
       { key: 'condicao',          label: 'Condição',             type: 'text',  placeholder: 'à vista' },
       { key: 'badge',             label: 'Badge',                type: 'text',  placeholder: 'LANÇAMENTO',                         defaultValue: 'LANÇAMENTO' },
-      { key: 'cor',               label: 'Cor de destaque',      type: 'color', defaultValue: '#1a56db' },
+      { key: 'cor',               label: 'Cor de destaque',      type: 'color', defaultValue: '#CB1464' },
     ],
   },
 ];
