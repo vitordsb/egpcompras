@@ -883,10 +883,18 @@ export default function BuyerAgentPage() {
                 }
                 if (t.role === 'model' && t.text) {
                   const providerColor = 'text-brand-600';
+                  // Remove linhas técnicas de tool calls que o modelo às vezes inclui na resposta
+                  const cleanText = t.text
+                    .split('\n')
+                    .filter(line => !/\b(was called with|called with)\b/.test(line) &&
+                      !/^[a-z_]+\s*\([^)]*\)\s*\.?\s*$/.test(line.trim()))
+                    .join('\n')
+                    .trim();
+                  if (!cleanText) return null;
                   return (
                     <div key={idx} className="flex flex-col items-start">
                       <div className="max-w-[85%] rounded-lg bg-white border border-slate-200 px-4 py-3 text-sm text-slate-800 shadow-sm">
-                        <MarkdownText text={t.text} />
+                        <MarkdownText text={cleanText} />
                       </div>
                       <div className="mt-1 flex items-center gap-2 px-1">
                         {t.provider && (
