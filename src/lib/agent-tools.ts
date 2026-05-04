@@ -4781,6 +4781,16 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
       if (error || !created) throw new Error(error?.message ?? 'Falha ao criar pedido');
       const shipmentId = (created as any).id as string;
 
+      // Verificação pós-criação: confirma que o registro existe de fato no banco
+      const { data: verified, error: verifyErr } = await supabase
+        .from('shipments')
+        .select('id, client_name, numero_venda, numero_nfe, status')
+        .eq('id', shipmentId)
+        .maybeSingle();
+      if (verifyErr || !verified) {
+        throw new Error(`Pedido inserido mas não confirmado no banco (id: ${shipmentId}). Verifique manualmente.`);
+      }
+
       const itemsInput: Array<{
         product_name?: string; product_id?: string;
         item_code?: string; item_name?: string; unit_price?: number; quantity: number;
@@ -4868,6 +4878,8 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
       const privateLabelItems = itemsAdded.filter((i) => i.is_private_label);
       return {
         created,
+        verified_id: shipmentId,
+        confirmed_in_database: true,
         items_added: itemsAdded,
         items_failed: itemsFailed,
         private_label_count: privateLabelsDetected,

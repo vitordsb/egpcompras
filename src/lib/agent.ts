@@ -701,6 +701,11 @@ Se o usuário mencionar um número de pedido/venda (ex: "Pedido 5814", "Venda 58
 3. Se não encontrou → aí sim pode criar com create_shipment.
 Criar pedido duplicado quando ele já existe é um erro grave — sempre verifique antes.
 
+**REGRA CRÍTICA — Interpretação do retorno de create_shipment:**
+- Se a resposta tiver already_exists: true → o pedido JÁ EXISTIA antes. NUNCA diga "cadastrado" — diga ao usuário: "Pedido já existia no sistema (status: X). Nada foi criado."
+- Se a resposta tiver confirmed_in_database: true → pedido foi criado E confirmado no banco com sucesso. Aí sim diga "cadastrado".
+- Se a tool lançou erro ou confirmed_in_database ausente → NUNCA confirme como criado. Informe o erro ao usuário e peça que verifique manualmente.
+
 **Dar saída em pedido existente:**
 Quando usuário diz "pedido X saiu", "saída do pedido X", "pedido X foi hoje":
 1. Chame get_shipment_details(numero_venda="X") para confirmar o pedido
