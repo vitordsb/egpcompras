@@ -1,11 +1,11 @@
-const VERIFY_TOKEN   = 'egp-whatsapp-2026';
-const WA_TOKEN       = Deno.env.get('WA_TOKEN') ?? '';
-const WA_PHONE_ID    = Deno.env.get('WA_PHONE_ID') ?? '';
-const GEMINI_API_KEY = Deno.env.get('GEMINI_API_KEY') ?? '';
-const SUPA_URL       = Deno.env.get('SUPABASE_URL') ?? '';
+const VERIFY_TOKEN   = Deno.env.get('WA_VERIFY_TOKEN') ?? '';
+const WA_APP_SECRET  = Deno.env.get('WA_APP_SECRET')   ?? '';
+const WA_TOKEN       = Deno.env.get('WA_TOKEN')        ?? '';
+const WA_PHONE_ID    = Deno.env.get('WA_PHONE_ID')     ?? '';
+const GEMINI_API_KEY = Deno.env.get('GEMINI_API_KEY')  ?? '';
+const SUPA_URL       = Deno.env.get('SUPABASE_URL')    ?? '';
 const SUPA_JWT       = Deno.env.get('SUPA_SERVICE_JWT') ?? '';
 
-// Usa fetch direto (sem cliente JS — compatível com qualquer formato de key)
 const supaHeaders = {
   'apikey': SUPA_JWT,
   'Authorization': `Bearer ${SUPA_JWT}`,
@@ -13,6 +13,24 @@ const supaHeaders = {
   'Prefer': 'return=representation',
 };
 
+// ── Valida assinatura HMAC-SHA256 da Meta ─────────────────────────────────────
+async function verifyMetaSignature(rawBody: ArrayBuffer, sig: string): Promise<boolean> {
+  if (!WA_APP_SECRET) return true; // sem secret configurado, aceita (modo desenvolvimento)
+  try {
+    const key = await crypto.subtle.importKey(
+      'raw', new TextEncoder().encode(WA_APP_SECRET),
+      { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'],
+    );
+    const computed = await crypto.subtle.sign('HMAC', key, rawBody);
+    const hex = 'sha256=' + Array.from(new Uint8Array(computed))
+      .map(b => b.toString(16).padStart(2, '0')).join('');
+    return hex === sig;
+  } catch {
+    return false;
+  }
+}
+
+// ── DB helpers ────────────────────────────────────────────────────────────────
 async function dbSelect(table: string, filters: Record<string, string>): Promise<any[]> {
   const params = new URLSearchParams(
     Object.entries(filters).map(([k, v]) => [k, `eq.${v}`])
@@ -33,6 +51,7 @@ async function dbInsert(table: string, body: Record<string, unknown>): Promise<a
 }
 
 async function dbUpdate(table: string, id: string, body: Record<string, unknown>): Promise<void> {
+  if (!id) throw new Error(`dbUpdate(${table}): id vazio — abortando para evitar update em massa`);
   await fetch(`${SUPA_URL}/rest/v1/${table}?id=eq.${id}`, {
     method: 'PATCH', headers: supaHeaders, body: JSON.stringify(body),
   });
@@ -43,7 +62,8 @@ async function getSession(phone: string): Promise<{ id: string; history: any[] }
   const rows = await dbSelect('whatsapp_sessions', { phone });
   if (rows.length > 0) return { id: rows[0].id, history: rows[0].history ?? [] };
   const created = await dbInsert('whatsapp_sessions', { phone, history: [] });
-  return { id: created?.id ?? '', history: [] };
+  if (!created?.id) throw new Error(`getSession: falha ao criar sessão para ${phone}`);
+  return { id: created.id, history: [] };
 }
 
 async function saveSession(id: string, history: any[]): Promise<void> {
@@ -171,47 +191,84 @@ async function sendWA(to: string, text: string): Promise<void> {
   });
 }
 
-async function logMsg(phone: string, direction: 'in' | 'out', text: string): Promise<void> {
-  await dbInsert('whatsapp_messages', { phone, direction, text }).catch(() => {});
+async function logMsg(phone: string, direction: 'in' | 'out', text: string, wamid?: string): Promise<void> {
+  await dbInsert('whatsapp_messages', {
+    phone, direction, text,
+    ...(wamid ? { message_id: wamid } : {}),
+  }).catch(() => {});
 }
 
-async function createOrder(phone: string, data: any): Promise<void> {
+// Valida e executa criação de pedido
+async function createOrder(phone: string, data: unknown): Promise<void> {
+  if (!data || typeof data !== 'object') {
+    console.error('createOrder: dado não é objeto:', String(data).slice(0, 100));
+    return;
+  }
+  const d = data as Record<string, unknown>;
+  if (typeof d.client_name !== 'string' || d.client_name.trim().length === 0) {
+    console.error('createOrder: client_name ausente ou vazio');
+    return;
+  }
+  if (!Array.isArray(d.items) || d.items.length === 0) {
+    console.error('createOrder: items ausente ou vazio');
+    return;
+  }
+
   try {
     const ship = await dbInsert('shipments', {
-      client_name: data.client_name, client_phone: phone,
-      forma_pagamento: data.forma_pagamento ?? null,
+      client_name: d.client_name, client_phone: phone,
+      forma_pagamento: typeof d.forma_pagamento === 'string' ? d.forma_pagamento : null,
       notes: `Pedido via WhatsApp — ${phone}`, status: 'pending', origem: 'whatsapp',
     });
     if (!ship?.id) return;
-    for (const it of (data.items ?? [])) {
-      await dbInsert('shipment_items', { shipment_id: ship.id, item_name: it.name, quantity: it.quantity, unit_price: it.unit_price ?? null });
+    for (const it of d.items as any[]) {
+      await dbInsert('shipment_items', {
+        shipment_id: ship.id,
+        item_name:   typeof it.name     === 'string' ? it.name     : String(it.name ?? ''),
+        quantity:    Number(it.quantity) || 1,
+        unit_price:  it.unit_price != null ? Number(it.unit_price) : null,
+      });
     }
   } catch (e) { console.error('createOrder:', e); }
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
 Deno.serve(async (req) => {
+  // ── GET: verificação do webhook pelo Meta ──
   if (req.method === 'GET') {
     const u = new URL(req.url);
-    if (u.searchParams.get('hub.mode') === 'subscribe' && u.searchParams.get('hub.verify_token') === VERIFY_TOKEN)
-      return new Response(u.searchParams.get('hub.challenge'), { status: 200 });
+    if (
+      u.searchParams.get('hub.mode') === 'subscribe' &&
+      VERIFY_TOKEN &&
+      u.searchParams.get('hub.verify_token') === VERIFY_TOKEN
+    ) return new Response(u.searchParams.get('hub.challenge'), { status: 200 });
     return new Response('Forbidden', { status: 403 });
   }
 
   if (req.method !== 'POST') return new Response('ok');
 
+  // ── Lê o corpo raw uma única vez (necessário para HMAC) ──
+  let rawBody: ArrayBuffer;
+  try { rawBody = await req.arrayBuffer(); } catch { return new Response('ok'); }
+
+  // ── Valida assinatura Meta ──
+  const sig = req.headers.get('x-hub-signature-256') ?? '';
+  if (!(await verifyMetaSignature(rawBody, sig))) {
+    console.error('Webhook: assinatura inválida — possível spoofing');
+    return new Response('Forbidden', { status: 403 });
+  }
+
   let body: any;
-  try { body = await req.json(); } catch { return new Response('ok'); }
+  try { body = JSON.parse(new TextDecoder().decode(rawBody)); } catch { return new Response('ok'); }
 
   const change = body?.entry?.[0]?.changes?.[0]?.value;
 
-  // ── Processa status de entrega (delivered / read / failed / undelivered) ──
+  // ── Processa status de entrega (delivered / read / failed) ──
   const statuses = change?.statuses;
   if (Array.isArray(statuses) && statuses.length > 0) {
     for (const st of statuses) {
       const messageId: string = st.id;
-      const rawStatus: string = st.status; // sent | delivered | read | failed
-      // Mapeia para nosso enum (failed inclui undelivered da Meta)
+      const rawStatus: string = st.status;
       const status =
         rawStatus === 'delivered' ? 'delivered' :
         rawStatus === 'read'      ? 'read'      :
@@ -228,7 +285,6 @@ Deno.serve(async (req) => {
           },
         ).catch(() => {});
 
-        // Loga erros de falha de entrega no console para rastreamento
         if (status === 'failed' && st.errors?.length) {
           console.error(`Delivery failed for ${messageId}:`, JSON.stringify(st.errors));
         }
@@ -240,24 +296,47 @@ Deno.serve(async (req) => {
   const msg = change?.messages?.[0];
   if (!msg || msg.type !== 'text') return new Response('ok');
 
-  const phone = msg.from;
-  const text  = msg.text?.body ?? '';
+  const phone  = msg.from as string;
+  const wamid  = msg.id   as string | undefined;
+  let   text   = (msg.text?.body ?? '') as string;
+
   if (!text || change?.metadata?.phone_number_id === phone) return new Response('ok');
 
+  // ── Dedup: ignora mensagem já processada (reenvio do Meta) ──
+  if (wamid) {
+    const existing = await dbSelect('whatsapp_messages', { message_id: wamid });
+    if (existing.length > 0) return new Response('ok');
+  }
+
+  // ── Sanitização: remove marcadores internos que o cliente possa injetar ──
+  text = text
+    .replace(/%%PEDIDO%%[\s\S]*?%%FIM%%/g, '')
+    .replace(/%%PEDIDO%%|%%FIM%%/g, '')
+    .trim()
+    .slice(0, 1500); // limite de comprimento para evitar abuse de tokens
+
+  if (!text) return new Response('ok');
+
   try {
-    await logMsg(phone, 'in', text);
+    await logMsg(phone, 'in', text, wamid);
 
     const [session, context] = await Promise.all([getSession(phone), buildContext()]);
     const raw = await callGemini(session.history ?? [], text, context);
 
-    const match = raw.match(/%%PEDIDO%%(.+?)%%FIM%%/s);
+    const match   = raw.match(/%%PEDIDO%%(.+?)%%FIM%%/s);
     const visible = raw.replace(/%%PEDIDO%%.*?%%FIM%%/s, '').trim();
 
-    if (match) { try { await createOrder(phone, JSON.parse(match[1])); } catch {} }
+    if (match) {
+      try {
+        await createOrder(phone, JSON.parse(match[1]));
+      } catch (e) {
+        console.error('createOrder JSON.parse falhou:', e, '| raw:', match[1].slice(0, 200));
+      }
+    }
 
     const newHistory = [
       ...(session.history ?? []),
-      { role: 'user', parts: [{ text }] },
+      { role: 'user',  parts: [{ text }] },
       { role: 'model', parts: [{ text: visible }] },
     ].slice(-20);
 
@@ -267,7 +346,7 @@ Deno.serve(async (req) => {
       sendWA(phone, visible),
     ]);
   } catch (e) {
-    console.error('Error:', e);
+    console.error('Webhook error:', e);
     await sendWA(phone, 'Desculpe, ocorreu um erro. Tente novamente.').catch(() => {});
   }
 
