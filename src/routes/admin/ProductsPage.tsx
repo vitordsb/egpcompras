@@ -27,6 +27,7 @@ interface CommercialForm {
   image_url: string | null;
   pricing_mode: PricingMode;
   custom_markup_pct: number | null;
+  show_price: boolean;
 }
 
 export default function ProductsPage() {
@@ -66,6 +67,7 @@ export default function ProductsPage() {
       image_url: p.image_url,
       pricing_mode: p.pricing_mode,
       custom_markup_pct: p.custom_markup_pct != null ? Number(p.custom_markup_pct) : null,
+      show_price: (p as any).show_price ?? false,
     });
   }
 
@@ -119,7 +121,8 @@ export default function ProductsPage() {
       pricing_mode: form.pricing_mode,
       custom_markup_pct: form.pricing_mode === 'custom' ? form.custom_markup_pct : null,
       sale_price_brl: computedSalePrice,
-    };
+      show_price: form.show_price,
+    } as any;
 
     const { error } = await supabase.from('products').update(productPayload).eq('id', form.id);
     setSaving(false);
@@ -280,6 +283,33 @@ export default function ProductsPage() {
                       />
                     </div>
                   </div>
+                </div>
+
+                <div>
+                  <Label>Visibilidade do preço no WhatsApp</Label>
+                  <label className="flex cursor-pointer items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
+                    <div>
+                      <p className="text-sm font-medium text-slate-800">
+                        {form.show_price ? '✅ Preço visível para o cliente' : '🔒 Preço oculto — consultora informa'}
+                      </p>
+                      <p className="text-xs text-slate-400 mt-0.5">
+                        {form.show_price
+                          ? 'A IA mostra o preço ao responder no WhatsApp.'
+                          : 'A IA direciona para a consultora quando perguntarem o preço.'}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => patchForm({ show_price: !form.show_price })}
+                      className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus:outline-none ${
+                        form.show_price ? 'bg-brand-600' : 'bg-slate-300'
+                      }`}
+                    >
+                      <span className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${
+                        form.show_price ? 'translate-x-5' : 'translate-x-0'
+                      }`} />
+                    </button>
+                  </label>
                 </div>
 
                 <div>
