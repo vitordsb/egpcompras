@@ -97,23 +97,23 @@ function wrapText(ctx: CanvasRenderingContext2D, text: string, x: number, y: num
 
 // Barra inferior: ícone EGP + nome + CNPJ
 async function brandBar(ctx: CanvasRenderingContext2D, W: number, H: number, cor: string) {
-  const h = 76, y = H - h;
+  const h = 92, y = H - h;
 
   ctx.fillStyle = '#0f0f0f';
   ctx.fillRect(0, y, W, h);
 
   // Faixa de acento colorida no topo da barra
   ctx.fillStyle = cor;
-  ctx.fillRect(0, y, W, 3);
+  ctx.fillRect(0, y, W, 4);
 
   // Linha sutil de separação
   ctx.strokeStyle = 'rgba(255,255,255,0.06)';
   ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.moveTo(0, y + 3); ctx.lineTo(W, y + 3); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(0, y + 4); ctx.lineTo(W, y + 4); ctx.stroke();
 
   // Ícone EGP (colorido — sem problemas de contraste no fundo escuro)
-  const ICON_SIZE = 40;
-  const iconX = 20;
+  const ICON_SIZE = 52;
+  const iconX = 22;
   const iconY = y + (h - ICON_SIZE) / 2;
   try {
     const icon = await loadImg(iconSrc);
@@ -121,24 +121,24 @@ async function brandBar(ctx: CanvasRenderingContext2D, W: number, H: number, cor
   } catch { /* sem ícone */ }
 
   // Texto "EGP" em branco + "ind e com ltda" menor abaixo
-  const textX = iconX + ICON_SIZE + 12;
+  const textX = iconX + ICON_SIZE + 14;
   ctx.textAlign = 'left';
   ctx.textBaseline = 'alphabetic';
 
   ctx.fillStyle = '#ffffff';
-  ctx.font = 'bold 17px system-ui, Arial, sans-serif';
-  ctx.fillText('EGP', textX, y + h * 0.46);
+  ctx.font = 'bold 22px system-ui, Arial, sans-serif';
+  ctx.fillText('EGP', textX, y + h * 0.47);
 
-  ctx.fillStyle = 'rgba(255,255,255,0.50)';
-  ctx.font = '11px system-ui, Arial, sans-serif';
-  ctx.fillText('ind e com ltda', textX, y + h * 0.70);
+  ctx.fillStyle = 'rgba(255,255,255,0.55)';
+  ctx.font = '15px system-ui, Arial, sans-serif';
+  ctx.fillText('ind e com ltda', textX, y + h * 0.72);
 
   // CNPJ à direita
   ctx.textAlign = 'right';
-  ctx.fillStyle = 'rgba(255,255,255,0.35)';
-  ctx.font = '10px system-ui, Arial, sans-serif';
+  ctx.fillStyle = 'rgba(255,255,255,0.40)';
+  ctx.font = '13px system-ui, Arial, sans-serif';
   ctx.textBaseline = 'middle';
-  ctx.fillText('CNPJ: 40.116.124/0001-51', W - 20, y + h * 0.55);
+  ctx.fillText('CNPJ: 40.116.124/0001-51', W - 22, y + h * 0.55);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -218,12 +218,12 @@ async function renderPromocao(
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   if (badgeLines.length === 1) {
-    ctx.font = 'bold 15px system-ui, Arial, sans-serif';
+    ctx.font = 'bold 18px system-ui, Arial, sans-serif';
     ctx.fillText(badgeLines[0], 24 + badgeW / 2, badgeBY + badgeH / 2);
   } else {
-    ctx.font = 'bold 11px system-ui, Arial, sans-serif';
+    ctx.font = 'bold 14px system-ui, Arial, sans-serif';
     ctx.fillText(badgeLines[0], 24 + badgeW / 2, badgeBY + badgeH * 0.33);
-    ctx.font = 'bold 16px system-ui, Arial, sans-serif';
+    ctx.font = 'bold 19px system-ui, Arial, sans-serif';
     ctx.fillText(badgeLines[1], 24 + badgeW / 2, badgeBY + badgeH * 0.69);
   }
 
@@ -258,22 +258,22 @@ async function renderPromocao(
   // Descrição
   if (data.descricao) {
     ctx.fillStyle = '#666666';
-    ctx.font = '15px system-ui, Arial, sans-serif';
-    wrapText(ctx, data.descricao, PX, nextY - 6, W - PX * 2, 22);
+    ctx.font = '19px system-ui, Arial, sans-serif';
+    wrapText(ctx, data.descricao, PX, nextY - 6, W - PX * 2, 28);
   }
 
   // Divisor
-  const divY = nextY + (data.descricao ? 26 : 8);
+  const divY = nextY + (data.descricao ? 34 : 8);
   ctx.strokeStyle = '#eeeeee';
   ctx.lineWidth = 1;
   ctx.beginPath(); ctx.moveTo(PX, divY); ctx.lineTo(W - PX, divY); ctx.stroke();
 
   // Preço original
-  const priceAreaY = divY + 18;
+  const priceAreaY = divY + 22;
   if (data.preco_original) {
     const txt = `De R$ ${data.preco_original}`;
     ctx.fillStyle = '#aaaaaa';
-    ctx.font = '15px system-ui, Arial, sans-serif';
+    ctx.font = '18px system-ui, Arial, sans-serif';
     ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
     ctx.fillText(txt, PX, priceAreaY);
     const tw = ctx.measureText(txt).width;
@@ -283,27 +283,27 @@ async function renderPromocao(
   }
 
   // Preço promocional
-  const bigPriceY = priceAreaY + (data.preco_original ? 34 : 8);
+  const bigPriceY = priceAreaY + (data.preco_original ? 40 : 8);
   ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
   ctx.fillStyle = cor;
-  ctx.font = '16px system-ui, Arial, sans-serif';
+  ctx.font = '20px system-ui, Arial, sans-serif';
   ctx.fillText('por', PX, bigPriceY);
   ctx.font = `bold ${(data.preco_promocional || '').length > 8 ? 44 : 52}px system-ui, Arial, sans-serif`;
-  ctx.fillText(`R$ ${data.preco_promocional || '—'}`, PX + 38, bigPriceY);
+  ctx.fillText(`R$ ${data.preco_promocional || '—'}`, PX + 46, bigPriceY);
 
   // Condição
   if (data.condicao) {
     ctx.fillStyle = '#888888';
-    ctx.font = '13px system-ui, Arial, sans-serif';
-    ctx.fillText(data.condicao, PX, bigPriceY + 36);
+    ctx.font = '17px system-ui, Arial, sans-serif';
+    ctx.fillText(data.condicao, PX, bigPriceY + 40);
   }
 
   // Condições no rodapé
   if (data.condicoes) {
     ctx.fillStyle = '#bbbbbb';
-    ctx.font = '10px system-ui, Arial, sans-serif';
+    ctx.font = '14px system-ui, Arial, sans-serif';
     ctx.textAlign = 'left'; ctx.textBaseline = 'bottom';
-    ctx.fillText(data.condicoes, PX, H - 80);
+    ctx.fillText(data.condicoes, PX, H - 96);
   }
 
   await brandBar(ctx, W, H, cor);
@@ -395,14 +395,14 @@ async function renderFeriado(
   if (data.subtitulo) {
     const subY = tStartY + tLines.length * (tSize + 8) + 18;
     ctx.fillStyle = rgba('#ffffff', 0.80);
-    ctx.font = `300 24px system-ui, Arial, sans-serif`;
+    ctx.font = `300 30px system-ui, Arial, sans-serif`;
     ctx.fillText(data.subtitulo, W / 2, subY);
   }
 
   // ── Mensagem em card frosted glass ──
   if (data.mensagem) {
     const mLines = data.mensagem.split('\n');
-    const cardPad = 32, lineH = 28;
+    const cardPad = 36, lineH = 36;
     const cardH = mLines.length * lineH + cardPad * 2;
     const cardY = H * 0.55;
 
@@ -417,7 +417,7 @@ async function renderFeriado(
 
     // Texto
     ctx.fillStyle = '#ffffff';
-    ctx.font = `18px system-ui, Arial, sans-serif`;
+    ctx.font = `22px system-ui, Arial, sans-serif`;
     ctx.textAlign = 'center'; ctx.textBaseline = 'top';
     const mStart = cardY + cardPad;
     mLines.forEach((line, i) => ctx.fillText(line, W / 2, mStart + i * lineH));
@@ -426,9 +426,9 @@ async function renderFeriado(
   // ── Data ──
   if (data.data) {
     ctx.fillStyle = rgba('#ffffff', 0.55);
-    ctx.font = '14px system-ui, Arial, sans-serif';
+    ctx.font = '18px system-ui, Arial, sans-serif';
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText(data.data.toUpperCase(), W / 2, H - 98);
+    ctx.fillText(data.data.toUpperCase(), W / 2, H - 112);
   }
 
   await brandBar(ctx, W, H, adj(cor, 40));
@@ -468,9 +468,9 @@ async function renderLancamento(
 
   // ── Badge topo ──
   const badge = (data.badge || 'LANÇAMENTO').toUpperCase();
+  ctx.font = 'bold 19px system-ui, Arial, sans-serif';
   const bMetrics = ctx.measureText(badge);
-  ctx.font = 'bold 15px system-ui, Arial, sans-serif';
-  const bW = bMetrics.width + 52, bH = 42;
+  const bW = bMetrics.width + 56, bH = 46;
   const bX = (W - bW) / 2, bY = 52;
 
   ctx.fillStyle = cor;
@@ -531,9 +531,9 @@ async function renderLancamento(
 
   // Slogan / descrição
   if (data.descricao) {
-    ctx.fillStyle = rgba('#ffffff', 0.45);
-    ctx.font = '16px system-ui, Arial, sans-serif';
-    ctx.fillText(data.descricao, W / 2, sepY + 82);
+    ctx.fillStyle = rgba('#ffffff', 0.50);
+    ctx.font = '21px system-ui, Arial, sans-serif';
+    ctx.fillText(data.descricao, W / 2, sepY + 90);
   }
 
   // ── Preço ──
@@ -555,9 +555,9 @@ async function renderLancamento(
     ctx.fillText(`R$ ${data.preco_promocional}`, W / 2, prY);
 
     if (data.condicao) {
-      ctx.fillStyle = rgba('#ffffff', 0.4);
-      ctx.font = '13px system-ui, Arial, sans-serif';
-      ctx.fillText(data.condicao, W / 2, prY + 36);
+      ctx.fillStyle = rgba('#ffffff', 0.45);
+      ctx.font = '17px system-ui, Arial, sans-serif';
+      ctx.fillText(data.condicao, W / 2, prY + 40);
     }
   }
 
