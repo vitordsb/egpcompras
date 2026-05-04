@@ -1,4 +1,4 @@
-import { useEffect, useState, type ChangeEvent, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react';
 import { supabase } from '@/lib/supabase';
 import type { PricingMode, Product, ProductWithCost } from '@/types/db';
 import { Button } from '@/components/ui/Button';
@@ -6,6 +6,14 @@ import { Card } from '@/components/ui/Card';
 import { Label, Textarea } from '@/components/ui/Input';
 import { formatBRL } from '@/lib/utils';
 import { useBodyScrollLock } from '@/hooks/useBodyScrollLock';
+
+interface KitComponent {
+  id: string;                    // product_kits.id (vazio se ainda não salvo)
+  component_product_id: string;
+  component_product_name: string;
+  unit_cost: number;
+  quantity: number;
+}
 
 function priceFor(cost: number, mode: PricingMode, customPct: number | null): number | null {
   if (cost <= 0) return null;
@@ -28,6 +36,7 @@ interface CommercialForm {
   pricing_mode: PricingMode;
   custom_markup_pct: number | null;
   show_price: boolean;
+  is_kit: boolean;
 }
 
 export default function ProductsPage() {
@@ -40,7 +49,69 @@ export default function ProductsPage() {
   const [saving, setSaving] = useState(false);
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
 
+  // ── Kit ──
+  const [kitComponents, setKitComponents] = useState<KitComponent[]>([]);
+  const [kitSearch, setKitSearch]         = useState('');
+  const kitSearchRef = useRef<HTMLInputElement>(null);
+
   useBodyScrollLock(!!form);
+
+  async function loadKitComponents(kitProductId: string) {
+    const { data } = await supabase
+      .from('product_kits')
+      .select('id, component_product_id, quantity, component:products!component_product_id(name, unit_cost_brl:products_with_cost(unit_cost_brl))')
+      .eq('kit_product_id', kitProductId);
+    // Fallback: busca simples se a relação aninhada não funcionar
+    if (!data) { setKitComponents([]); return; }
+    const rows = await Promise.all((data as any[]).map(async (r) => {
+      const { data: prod } = await supabase
+        .from('products_with_cost').select('name, unit_cost_brl').eq('id', r.component_product_id).single();
+      return {
+        id:                     r.id,
+        component_product_id:   r.component_product_id,
+        component_product_name: (prod as any)?.name ?? r.component_product_id,
+        unit_cost:              Number((prod as any)?.unit_cost_brl ?? 0),
+        quantity:               Number(r.quantity),
+      };
+    }));
+    setKitComponents(rows);
+  }
+
+  async function addKitComponent(product: ProductWithCost) {
+    if (kitComponents.find(c => c.component_product_id === product.id)) return;
+    setKitComponents(prev => [...prev, {
+      id: '',
+      component_product_id:   product.id,
+      component_product_name: product.name,
+      unit_cost:              Number((product as any).unit_cost_brl ?? 0),
+      quantity:               1,
+    }]);
+    setKitSearch('');
+  }
+
+  function removeKitComponent(productId: string) {
+    setKitComponents(prev => prev.filter(c => c.component_product_id !== productId));
+  }
+
+  function updateKitQty(productId: string, qty: number) {
+    setKitComponents(prev => prev.map(c =>
+      c.component_product_id === productId ? { ...c, quantity: qty } : c
+    ));
+  }
+
+  async function saveKitComponents(kitProductId: string) {
+    // Delete all existing and re-insert
+    await supabase.from('product_kits').delete().eq('kit_product_id', kitProductId);
+    if (kitComponents.length > 0) {
+      await supabase.from('product_kits').insert(
+        kitComponents.map(c => ({
+          kit_product_id:       kitProductId,
+          component_product_id: c.component_product_id,
+          quantity:             c.quantity,
+        }))
+      );
+    }
+  }
 
   async function loadProducts() {
     setLoading(true);
@@ -59,6 +130,9 @@ export default function ProductsPage() {
 
   function openProduct(p: ProductWithCost) {
     setFormError(null);
+    setKitComponents([]);
+    setKitSearch('');
+    const isKit = (p as any).is_kit ?? false;
     setForm({
       id: p.id,
       name: p.name,
@@ -68,7 +142,9 @@ export default function ProductsPage() {
       pricing_mode: p.pricing_mode,
       custom_markup_pct: p.custom_markup_pct != null ? Number(p.custom_markup_pct) : null,
       show_price: (p as any).show_price ?? false,
+      is_kit: isKit,
     });
+    if (isKit) loadKitComponents(p.id);
   }
 
   function closeForm() {
@@ -122,14 +198,13 @@ export default function ProductsPage() {
       custom_markup_pct: form.pricing_mode === 'custom' ? form.custom_markup_pct : null,
       sale_price_brl: computedSalePrice,
       show_price: form.show_price,
+      is_kit:     form.is_kit,
     } as any;
 
     const { error } = await supabase.from('products').update(productPayload).eq('id', form.id);
+    if (error) { setSaving(false); setFormError(error.message); return; }
+    if (form.is_kit) await saveKitComponents(form.id);
     setSaving(false);
-    if (error) {
-      setFormError(error.message);
-      return;
-    }
     closeForm();
     await loadProducts();
   }
@@ -284,6 +359,123 @@ export default function ProductsPage() {
                     </div>
                   </div>
                 </div>
+
+                {/* ── Toggle Kit ── */}
+                <div>
+                  <Label>Composição do produto</Label>
+                  <label className="flex cursor-pointer items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
+                    <div>
+                      <p className="text-sm font-medium text-slate-800">
+                        {form.is_kit ? '🧩 Kit (composto por outros produtos)' : 'Produto simples'}
+                      </p>
+                      <p className="text-xs text-slate-400 mt-0.5">
+                        {form.is_kit
+                          ? 'BOM e custo calculados a partir dos produtos abaixo.'
+                          : 'Ative para montar esse produto a partir de outros produtos.'}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const next = !form.is_kit;
+                        patchForm({ is_kit: next });
+                        if (next && form.id) loadKitComponents(form.id);
+                        else setKitComponents([]);
+                      }}
+                      className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus:outline-none ${
+                        form.is_kit ? 'bg-brand-600' : 'bg-slate-300'
+                      }`}
+                    >
+                      <span className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${
+                        form.is_kit ? 'translate-x-5' : 'translate-x-0'
+                      }`} />
+                    </button>
+                  </label>
+                </div>
+
+                {/* ── Componentes do kit ── */}
+                {form.is_kit && (
+                  <div className="space-y-3">
+                    <Label>Produtos do kit</Label>
+
+                    {kitComponents.length > 0 && (
+                      <div className="rounded-lg border border-slate-200 divide-y divide-slate-100">
+                        {kitComponents.map(c => (
+                          <div key={c.component_product_id} className="flex items-center gap-3 px-3 py-2">
+                            <span className="flex-1 text-sm text-slate-800">{c.component_product_name}</span>
+                            <span className="text-xs text-slate-400">
+                              custo: {c.unit_cost > 0 ? formatBRL(c.unit_cost * c.quantity) : '—'}
+                            </span>
+                            <div className="flex items-center gap-1">
+                              <span className="text-xs text-slate-400">qtd</span>
+                              <input
+                                type="number"
+                                min={1}
+                                value={c.quantity}
+                                onChange={e => updateKitQty(c.component_product_id, Number(e.target.value) || 1)}
+                                className="w-14 rounded border border-slate-200 px-2 py-0.5 text-sm text-center"
+                              />
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => removeKitComponent(c.component_product_id)}
+                              className="text-red-400 hover:text-red-600 text-sm font-bold px-1"
+                            >×</button>
+                          </div>
+                        ))}
+                        <div className="flex justify-end px-3 py-2 bg-slate-50">
+                          <span className="text-xs text-slate-500">
+                            Custo total do kit:{' '}
+                            <strong>{formatBRL(kitComponents.reduce((s, c) => s + c.unit_cost * c.quantity, 0))}</strong>
+                          </span>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Busca de produto para adicionar */}
+                    <div className="relative">
+                      <input
+                        ref={kitSearchRef}
+                        type="text"
+                        value={kitSearch}
+                        onChange={e => setKitSearch(e.target.value)}
+                        placeholder="Buscar produto para adicionar ao kit…"
+                        className="w-full rounded-lg border border-dashed border-brand-400 bg-brand-50 px-3 py-2 text-sm focus:outline-none focus:border-brand-500"
+                      />
+                      {kitSearch.trim().length >= 1 && (
+                        <div className="absolute z-10 mt-1 w-full rounded-lg border border-slate-200 bg-white shadow-lg max-h-48 overflow-y-auto">
+                          {products
+                            .filter(p =>
+                              p.id !== form.id &&
+                              !kitComponents.find(c => c.component_product_id === p.id) &&
+                              p.name.toLowerCase().includes(kitSearch.toLowerCase())
+                            )
+                            .slice(0, 8)
+                            .map(p => (
+                              <button
+                                key={p.id}
+                                type="button"
+                                onClick={() => addKitComponent(p)}
+                                className="w-full text-left px-3 py-2 text-sm hover:bg-slate-50 flex justify-between"
+                              >
+                                <span>{p.name}</span>
+                                <span className="text-xs text-slate-400">
+                                  {(p as any).unit_cost_brl > 0 ? formatBRL(Number((p as any).unit_cost_brl)) : '—'}
+                                </span>
+                              </button>
+                            ))}
+                          {products.filter(p =>
+                            p.id !== form.id &&
+                            !kitComponents.find(c => c.component_product_id === p.id) &&
+                            p.name.toLowerCase().includes(kitSearch.toLowerCase())
+                          ).length === 0 && (
+                            <p className="px-3 py-2 text-xs text-slate-400">Nenhum produto encontrado</p>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
 
                 <div>
                   <Label>Visibilidade do preço no WhatsApp</Label>

@@ -625,6 +625,12 @@ Exemplo:
 - "Muda a quantidade do BT151 no 12v para 2 unidades" → find_product_by_name("12v") → update_bom_item(product_id, component_name="BT151", quantity=2)
 - "Lista os componentes do 12v" → get_product_details(product_id) e mostre o BOM com quantidades
 
+**Kits de produto (produto composto por outros produtos):**
+- "Cria o kit EGP Plug In com a 20V e o módulo WiFi" → set_product_kit(kit_product_name="EGP Plug In", component_products=[{product_name:"20V", quantity:1},{product_name:"Módulo WiFi", quantity:1}])
+- "Quais produtos formam o kit Plug In?" → get_kit_components(kit_product_name="Plug In")
+- "Adiciona o cabo USB ao kit Plug In" → get_kit_components + set_product_kit com a lista atualizada
+- O kit é tratado como produto normal em pedidos, estoque e catálogo — o custo é calculado automaticamente como soma dos componentes
+
 **Criar componente novo que não existe no catálogo:**
 - "Cadastra o componente resistor 10k (SKU: R10K)" → create_component(name="Resistor 10k", sku="R10K")
 - setup_product_bom cria componentes automaticamente se não encontrar no catálogo — não precisa criar separado.

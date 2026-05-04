@@ -48,6 +48,44 @@ export const toolDeclarations = [
     },
   },
   {
+    name: 'set_product_kit',
+    description:
+      'Cria ou atualiza a composição de um kit de produto. ' +
+      'O kit_product_name deve ser um produto já existente. ' +
+      'component_products é a lista de produtos que compõem o kit, cada um com nome e quantidade. ' +
+      'Use para "cria o kit EGP Plug In com a 20V (1 un) e o módulo WiFi (1 un)".',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        kit_product_name: { type: 'STRING' as Type, description: 'Nome do produto que será o kit.' },
+        component_products: {
+          type: 'ARRAY' as Type,
+          description: 'Produtos que compõem o kit.',
+          items: {
+            type: 'OBJECT' as Type,
+            properties: {
+              product_name: { type: 'STRING' as Type, description: 'Nome do produto componente.' },
+              quantity:     { type: 'NUMBER' as Type, description: 'Quantidade deste componente no kit (default 1).' },
+            },
+            required: ['product_name'],
+          },
+        },
+      },
+      required: ['kit_product_name', 'component_products'],
+    },
+  },
+  {
+    name: 'get_kit_components',
+    description: 'Lista os produtos que compõem um kit e o custo total calculado.',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        kit_product_name: { type: 'STRING' as Type },
+      },
+      required: ['kit_product_name'],
+    },
+  },
+  {
     name: 'list_components',
     description: 'Lista todos os componentes do catálogo (id, nome).',
     parameters: { type: 'OBJECT' as Type, properties: {} },
@@ -2336,6 +2374,64 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
           value_unit_brl: b.target_price_brl,
         })),
       };
+    }
+
+    case 'set_product_kit': {
+      const kitName  = String(args.kit_product_name ?? '').trim();
+      const comps    = Array.isArray(args.component_products) ? args.component_products as any[] : [];
+      if (!kitName) throw new Error('kit_product_name é obrigatório');
+      if (comps.length === 0) throw new Error('component_products não pode ser vazio');
+
+      // Resolve o produto kit
+      const { data: kitProds } = await supabase.from('products').select('id, name').ilike('name', `%${kitName}%`).limit(1);
+      const kitProd = (kitProds as any[])?.[0];
+      if (!kitProd) throw new Error(`Produto kit "${kitName}" não encontrado`);
+
+      // Marca como kit
+      await supabase.from('products').update({ is_kit: true }).eq('id', kitProd.id);
+
+      // Resolve cada componente
+      const resolved: { component_product_id: string; quantity: number; name: string }[] = [];
+      for (const c of comps) {
+        const { data: prods } = await supabase.from('products').select('id, name').ilike('name', `%${c.product_name}%`).limit(1);
+        const prod = (prods as any[])?.[0];
+        if (!prod) throw new Error(`Produto componente "${c.product_name}" não encontrado`);
+        resolved.push({ component_product_id: prod.id, quantity: Number(c.quantity) || 1, name: prod.name });
+      }
+
+      // Salva (replace all)
+      await supabase.from('product_kits').delete().eq('kit_product_id', kitProd.id);
+      await supabase.from('product_kits').insert(
+        resolved.map(r => ({ kit_product_id: kitProd.id, component_product_id: r.component_product_id, quantity: r.quantity }))
+      );
+
+      return {
+        kit: kitProd.name,
+        components: resolved.map(r => ({ name: r.name, quantity: r.quantity })),
+        message: `Kit "${kitProd.name}" configurado com ${resolved.length} produto(s): ${resolved.map(r => `${r.quantity}× ${r.name}`).join(', ')}`,
+      };
+    }
+
+    case 'get_kit_components': {
+      const kitName = String(args.kit_product_name ?? '').trim();
+      const { data: kitProds } = await supabase.from('products').select('id, name').ilike('name', `%${kitName}%`).limit(1);
+      const kitProd = (kitProds as any[])?.[0];
+      if (!kitProd) throw new Error(`Produto "${kitName}" não encontrado`);
+
+      const { data: kits } = await supabase
+        .from('product_kits')
+        .select('component_product_id, quantity')
+        .eq('kit_product_id', kitProd.id);
+
+      if (!kits?.length) return { kit: kitProd.name, is_kit: false, components: [] };
+
+      const components = await Promise.all((kits as any[]).map(async k => {
+        const { data: cost } = await supabase.from('products_with_cost').select('name, unit_cost_brl').eq('id', k.component_product_id).single();
+        return { name: (cost as any)?.name, quantity: k.quantity, unit_cost: (cost as any)?.unit_cost_brl };
+      }));
+
+      const totalCost = components.reduce((s, c) => s + (Number(c.unit_cost) * c.quantity), 0);
+      return { kit: kitProd.name, is_kit: true, components, total_cost_brl: totalCost };
     }
 
     case 'list_components': {
