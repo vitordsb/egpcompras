@@ -38,6 +38,7 @@ interface FormState {
   numero_venda: string;
   data_venda: string;
   data_prevista: string;
+  data_saida: string;
   client_cnpj: string;
   client_phone: string;
   client_email: string;
@@ -59,6 +60,7 @@ const emptyForm: FormState = {
   numero_venda: '',
   data_venda: '',
   data_prevista: '',
+  data_saida: '',
   client_cnpj: '',
   client_phone: '',
   client_email: '',
@@ -201,6 +203,7 @@ export default function PedidosPage() {
       numero_venda: s.numero_venda ?? '',
       data_venda: s.data_venda ?? '',
       data_prevista: s.data_prevista ?? '',
+      data_saida: s.data_saida ? s.data_saida.slice(0, 10) : '',
       client_cnpj: s.client_cnpj ?? '',
       client_phone: s.client_phone ?? '',
       client_email: s.client_email ?? '',
@@ -288,6 +291,7 @@ export default function PedidosPage() {
       numero_venda: form.numero_venda.trim() || null,
       data_venda: form.data_venda || null,
       data_prevista: form.data_prevista || null,
+      data_saida: form.data_saida || null,
       client_cnpj: form.client_cnpj.trim() || null,
       client_phone: form.client_phone.trim() || null,
       client_email: form.client_email.trim() || null,
@@ -697,8 +701,8 @@ export default function PedidosPage() {
                   </div>
                 )}
 
-                <div className="grid gap-3 sm:grid-cols-4">
-                  <div className="sm:col-span-4">
+                <div className="grid gap-3 sm:grid-cols-5">
+                  <div className="sm:col-span-5">
                     <Label htmlFor="ship-client">Cliente *</Label>
                     <Input
                       id="ship-client"
@@ -744,7 +748,17 @@ export default function PedidosPage() {
                       onChange={(e) => patchForm({ data_prevista: e.target.value })}
                     />
                   </div>
+                  <div>
+                    <Label htmlFor="ship-saida">Data de saída</Label>
+                    <Input
+                      id="ship-saida"
+                      type="date"
+                      value={form.data_saida}
+                      onChange={(e) => patchForm({ data_saida: e.target.value })}
+                    />
+                  </div>
                 </div>
+
 
                 <div className="grid gap-3 sm:grid-cols-2">
                   <div>
