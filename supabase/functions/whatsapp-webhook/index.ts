@@ -104,16 +104,34 @@ async function logMsg(phone: string, direction: 'in' | 'out', text: string, wami
 // ── Tools declarations ────────────────────────────────────────────────────────
 const TOOL_DECLARATIONS = [
   {
+    name: 'find_products',
+    description:
+      'Busca produtos do catálogo EGP por nome parcial e retorna lista numerada para o cliente escolher. ' +
+      'SEMPRE use quando o cliente mencionar algo ambíguo (ex: "12V", "controle", "fonte", "cerca"). ' +
+      'Apresente a lista e pergunte qual o cliente deseja antes de prosseguir.',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        query: {
+          type: 'STRING',
+          description: 'Termo de busca. Ex: "controle", "12V", "eletrificador", "nobreak".',
+        },
+      },
+      required: ['query'],
+    },
+  },
+  {
     name: 'check_stock',
     description:
-      'Consulta a disponibilidade de estoque de um produto em tempo real. ' +
-      'SEMPRE chame esta tool antes de afirmar que um produto está disponível ou confirmar quantidade.',
+      'Consulta o estoque de um produto específico já identificado. ' +
+      'SEMPRE chame antes de confirmar disponibilidade. ' +
+      'Se estoque for zero, registre o pedido mesmo assim via create_order_intent — nunca diga "sem estoque" ao cliente.',
     parameters: {
       type: 'OBJECT',
       properties: {
         product_name: {
           type: 'STRING',
-          description: 'Nome ou parte do nome do produto. Ex: "controle 2 botões", "eletrificadora".',
+          description: 'Nome exato ou próximo do produto já confirmado pelo cliente.',
         },
       },
       required: ['product_name'],
@@ -190,6 +208,27 @@ async function executeTool(
   try {
     switch (name) {
 
+      case 'find_products': {
+        const q = encodeURIComponent(String(args.query ?? ''));
+        const res = await fetch(
+          `${SUPA_URL}/rest/v1/products_with_cost` +
+          `?select=name,sale_price_brl,sku,description` +
+          `&name=ilike.*${q}*&order=name&limit=8`,
+          { headers: supaHeaders },
+        );
+        const rows: any[] = res.ok ? await res.json() : [];
+        if (rows.length === 0) {
+          return JSON.stringify({ found: false, message: `Nenhum produto encontrado para "${args.query}". Peça mais detalhes ao cliente.` });
+        }
+        const list = rows.map((p: any, i: number) => {
+          const price = p.sale_price_brl
+            ? `R$ ${Number(p.sale_price_brl).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`
+            : 'consultar';
+          return { index: i + 1, name: p.name, sku: p.sku, price, description: p.description };
+        });
+        return JSON.stringify({ found: true, products: list });
+      }
+
       case 'check_stock': {
         const q = encodeURIComponent(String(args.product_name ?? ''));
         const res = await fetch(
@@ -200,19 +239,12 @@ async function executeTool(
         );
         const rows: any[] = res.ok ? await res.json() : [];
         if (rows.length === 0) {
-          return JSON.stringify({ available: false, message: `"${args.product_name}" não encontrado no estoque.` });
+          // Produto não encontrado no estoque — ainda assim permite registrar pedido
+          return JSON.stringify({ found: false, in_stock: false, product_name: args.product_name });
         }
         const items = rows.map(s => {
           const qty = Number(s.quantity) - Number(s.reserved_quantity);
-          return {
-            name:      s.item_name,
-            available: qty > 0,
-            quantity:  qty,
-            unit:      s.unit ?? 'un',
-            message:   qty > 0
-              ? `${s.item_name}: *${qty} ${s.unit ?? 'un'}* disponíveis ✅`
-              : `${s.item_name}: sem estoque no momento ❌`,
-          };
+          return { name: s.item_name, in_stock: qty > 0, quantity: qty, unit: s.unit ?? 'un' };
         });
         return JSON.stringify(items);
       }
@@ -322,10 +354,13 @@ Seu tom é: caloroso, confiante, direto. Como uma vendedora experiente que conhe
 - NUNCA use markdown estilo --- ou ### — só formatação WhatsApp
 
 *USO DAS TOOLS — regras obrigatórias:*
-- Antes de afirmar que um produto está disponível → chame *check_stock*
-- Ao apresentar um produto → chame *get_active_promotions* para ver se há oferta
-- Após cliente confirmar nome + quantidade + pagamento → chame *create_order_intent*
-- Se não souber responder, cliente pedir humano, dúvida técnica ou negociação de volume → chame *escalate_to_human*
+
+1. Cliente mencionou produto de forma vaga (ex: "12V", "controle", "nobreak", "cerca") → chame *find_products* e apresente a lista numerada: "Encontrei estes produtos, qual você precisa? 1️⃣ ... 2️⃣ ..."
+2. Produto identificado → chame *check_stock* para verificar estoque
+3. *check_stock* retornou in_stock: false → NÃO diga "sem estoque". Registre via *create_order_intent* e responda: "Anotei seu interesse! Nossa consultora vai entrar em contato com prazo e disponibilidade. 📞"
+4. Ao apresentar um produto → chame *get_active_promotions* para ver se há oferta vigente
+5. Cliente confirmou produto + quantidade + nome → chame *create_order_intent*
+6. Não souber responder, cliente pedir humano, dúvida técnica específica ou negociação de volume → chame *escalate_to_human*
 
 ${catalog}
 
