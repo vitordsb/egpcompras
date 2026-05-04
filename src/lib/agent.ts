@@ -694,9 +694,15 @@ Para get_stock_report, check_component_stock_for_production, register_purchase_n
 - "mínimo de 50 sirenes" / "ponto de reposição de X é Y" → set_stock_minimum(item_name="X", min_quantity=Y)
 - get_low_stock_alerts usa esses mínimos para alertar quando o disponível cair abaixo.
 
+**REGRA CRÍTICA — O banco de dados é a única fonte da verdade:**
+NUNCA confie no histórico desta conversa para determinar o estado atual de um pedido, estoque ou qualquer registro. O histórico pode estar desatualizado ou ter refletido uma operação que falhou silenciosamente.
+- Quando o usuário disser "não funcionou", "não foi", "não aparece", "tenta de novo", "não encontro" → SEMPRE chame a tool de consulta correspondente primeiro para verificar o estado ATUAL no banco antes de agir.
+- Se o histórico mostra que você "criou" algo mas o usuário diz que não existe → acredite no usuário e verifique com a tool. Não discuta baseado no histórico.
+- Isso vale para shipments, estoque, purchase_needs, qualquer entidade.
+
 **REGRA CRÍTICA — Pedido com número já existente:**
 Se o usuário mencionar um número de pedido/venda (ex: "Pedido 5814", "Venda 5814", "NF 5542"):
-1. SEMPRE chame get_shipment_details(numero_venda="5814") PRIMEIRO
+1. SEMPRE chame get_shipment_details(numero_venda="5814") PRIMEIRO — mesmo que o histórico da conversa sugira que já foi criado.
 2. Se encontrou → trabalhe com o pedido existente. NUNCA crie um duplicado.
 3. Se não encontrou → aí sim pode criar com create_shipment.
 Criar pedido duplicado quando ele já existe é um erro grave — sempre verifique antes.
