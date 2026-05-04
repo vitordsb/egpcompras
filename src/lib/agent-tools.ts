@@ -4163,21 +4163,26 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
         };
       }
 
-      const template = (found[0]) as any;
-      const imageUrl  = template.image_url as string;
-      const caption   = captionOverride || (template.caption as string | null) || undefined;
+      const tmpl     = (found[0]) as any;
+      const imageUrl  = tmpl.image_url as string;
+      const formData  = (tmpl.form_data ?? {}) as Record<string, string>;
+      const tmplId    = (tmpl.template_id ?? '') as string;
+
+      // Detecta se é template de promoção (tem preço) → usa Meta template aprovado
+      // para contornar a janela de 24h
+      const isPromo = tmplId === 'promocao' && formData.preco_promocional;
+      const META_PROMO_TEMPLATE = 'promo_imagem_egp';
 
       const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
       const anonKey     = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
 
       // Envia para cada destinatário
-      const results: { recipient: string; phone: string | null; success: boolean; error?: string }[] = [];
+      const results: { recipient: string; phone: string | null; success: boolean; via?: string; error?: string }[] = [];
 
       for (const recipient of recipients) {
         // Resolve número
         let phone = recipient.replace(/\D/g, '');
         if (!phone || phone.length < 8) {
-          // Tenta por nome
           const { data: byName } = await supabase
             .from('whatsapp_contacts')
             .select('phone')
@@ -4191,20 +4196,52 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
           phone = resolved;
         }
 
+        let sendBody: Record<string, unknown>;
+        let via: string;
+
+        if (isPromo) {
+          // Usa o template Meta aprovado com imagem no header + variáveis no body
+          // Funciona fora da janela de 24h
+          sendBody = {
+            to: phone,
+            template: {
+              name: META_PROMO_TEMPLATE,
+              language: 'pt_BR',
+              image_url: imageUrl,
+              params: [
+                formData.produto         || tmpl.name,
+                formData.preco_promocional,
+                formData.condicao        || 'à vista',
+              ].filter(Boolean),
+            },
+            sender_label: ctx.currentUser,
+          };
+          via = `meta:${META_PROMO_TEMPLATE}`;
+        } else {
+          // Outros templates: envia como imagem normal (requer janela 24h)
+          sendBody = {
+            to: phone,
+            image_url: imageUrl,
+            text: captionOverride || (tmpl.caption as string | null) || undefined,
+            sender_label: ctx.currentUser,
+          };
+          via = 'image';
+        }
+
         const res = await fetch(`${supabaseUrl}/functions/v1/whatsapp-send`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', apikey: anonKey, Authorization: `Bearer ${anonKey}` },
-          body: JSON.stringify({ to: phone, image_url: imageUrl, text: caption, sender_label: ctx.currentUser }),
+          body: JSON.stringify(sendBody),
         });
         const json = await res.json();
-        results.push({ recipient, phone, success: res.ok, error: res.ok ? undefined : (json.error ?? 'Falha ao enviar') });
+        results.push({ recipient, phone, success: res.ok, via, error: res.ok ? undefined : (json.error ?? 'Falha ao enviar') });
       }
 
       const sent   = results.filter(r => r.success).length;
       const failed = results.filter(r => !r.success).length;
 
       return {
-        template_used: template.name,
+        template_used: tmpl.name,
         total: recipients.length,
         sent,
         failed,

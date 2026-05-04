@@ -57,7 +57,12 @@ Deno.serve(async (req) => {
     to?: string;
     text?: string;
     image_url?: string;
-    template?: { name: string; language?: string; params?: string[] };
+    template?: {
+      name: string;
+      language?: string;
+      params?: string[];
+      image_url?: string; // para templates com header IMAGE (ex: promo_imagem_egp)
+    };
     sender_label?: string;
   };
   try { body = await req.json(); } catch { return new Response('Invalid JSON', { status: 400, headers: CORS }); }
@@ -88,7 +93,24 @@ Deno.serve(async (req) => {
     };
     logText = `[imagem] ${caption ?? image_url}`;
   } else if (template) {
-    const params = template.params ?? [];
+    const params   = template.params ?? [];
+    const tmplImgUrl = template.image_url;
+
+    // Monta components: header com imagem (se houver) + body com params
+    const components: Record<string, unknown>[] = [];
+    if (tmplImgUrl) {
+      components.push({
+        type: 'header',
+        parameters: [{ type: 'image', image: { link: tmplImgUrl } }],
+      });
+    }
+    if (params.length > 0) {
+      components.push({
+        type: 'body',
+        parameters: params.map((p) => ({ type: 'text', text: p })),
+      });
+    }
+
     payload = {
       messaging_product: 'whatsapp',
       to: phone,
@@ -96,12 +118,10 @@ Deno.serve(async (req) => {
       template: {
         name: template.name,
         language: { code: template.language ?? 'pt_BR' },
-        components: params.length > 0 ? [
-          { type: 'body', parameters: params.map((p) => ({ type: 'text', text: p })) },
-        ] : [],
+        components,
       },
     };
-    logText = `[template:${template.name}] ${params.join(' | ')}`;
+    logText = `[template:${template.name}]${tmplImgUrl ? ' [imagem]' : ''} ${params.join(' | ')}`;
   } else {
     // Prefixa "*Nome · EGP*" pra cliente saber quem está falando
     const finalText = senderFirstName
