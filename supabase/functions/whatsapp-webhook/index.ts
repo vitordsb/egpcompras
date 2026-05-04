@@ -71,17 +71,14 @@ async function saveSession(id: string, history: any[]): Promise<void> {
 async function buildCatalog(): Promise<string> {
   try {
     const res = await fetch(
-      `${SUPA_URL}/rest/v1/products_with_cost?select=name,sale_price_brl,sku,description&order=name`,
+      `${SUPA_URL}/rest/v1/products_with_cost?select=name,sku,description&order=name`,
       { headers: supaHeaders },
     );
     const products: any[] = res.ok ? await res.json() : [];
     if (!Array.isArray(products) || products.length === 0) return '';
-    return '═══ CATÁLOGO ═══\n' + products.map((p: any) => {
-      const price = p.sale_price_brl
-        ? `R$ ${Number(p.sale_price_brl).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`
-        : 'consultar';
-      return `• ${p.name}${p.sku ? ` (${p.sku})` : ''}: ${price}${p.description ? ` — ${p.description}` : ''}`;
-    }).join('\n');
+    return '═══ PRODUTOS EGP ═══\n' + products.map((p: any) =>
+      `• ${p.name}${p.sku ? ` (${p.sku})` : ''}${p.description ? ` — ${p.description}` : ''}`
+    ).join('\n');
   } catch { return ''; }
 }
 
@@ -195,7 +192,7 @@ async function executeTool(
         const q = encodeURIComponent(String(args.query ?? ''));
         const res = await fetch(
           `${SUPA_URL}/rest/v1/products_with_cost` +
-          `?select=name,sale_price_brl,sku,description` +
+          `?select=name,sku,description` +
           `&name=ilike.*${q}*&order=name&limit=8`,
           { headers: supaHeaders },
         );
@@ -203,12 +200,9 @@ async function executeTool(
         if (rows.length === 0) {
           return JSON.stringify({ found: false, message: `Nenhum produto encontrado para "${args.query}". Peça mais detalhes ao cliente.` });
         }
-        const list = rows.map((p: any, i: number) => {
-          const price = p.sale_price_brl
-            ? `R$ ${Number(p.sale_price_brl).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`
-            : 'consultar';
-          return { index: i + 1, name: p.name, sku: p.sku, price, description: p.description };
-        });
+        const list = rows.map((p: any, i: number) => ({
+          index: i + 1, name: p.name, sku: p.sku, description: p.description,
+        }));
         return JSON.stringify({ found: true, products: list });
       }
 
@@ -346,8 +340,10 @@ Escreva como uma pessoa real mandando mensagem pelo WhatsApp. Respostas curtas, 
 ❌ "Por favor, me informe seu nome completo para que possamos prosseguir."
 ✅ "Qual seu nome?"
 
-*REGRA ABSOLUTA — nunca mencione estoque:*
-As palavras "estoque", "sem estoque", "indisponível", "esgotado" são proibidas. Sempre registre o pedido e diga que a consultora vai confirmar prazo e detalhes.
+*REGRAS ABSOLUTAS:*
+- Nunca mencione preço, valor ou "R$" — a consultora passa o preço ao cliente
+- Nunca mencione estoque, "sem estoque", "indisponível", "esgotado" — proibido
+- Sempre registre o pedido e diga que a consultora confirma prazo e detalhes
 
 *Fluxo de pedido:*
 1. Produto vago ("controle", "12V", "cerca") → chame find_products → mostre opções simples: "Qual desses? 1️⃣ X  2️⃣ Y"
