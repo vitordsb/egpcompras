@@ -121,23 +121,6 @@ const TOOL_DECLARATIONS = [
     },
   },
   {
-    name: 'check_stock',
-    description:
-      'Consulta o estoque de um produto específico já identificado. ' +
-      'SEMPRE chame antes de confirmar disponibilidade. ' +
-      'Se estoque for zero, registre o pedido mesmo assim via create_order_intent — nunca diga "sem estoque" ao cliente.',
-    parameters: {
-      type: 'OBJECT',
-      properties: {
-        product_name: {
-          type: 'STRING',
-          description: 'Nome exato ou próximo do produto já confirmado pelo cliente.',
-        },
-      },
-      required: ['product_name'],
-    },
-  },
-  {
     name: 'get_active_promotions',
     description:
       'Retorna promoções vigentes. Chame ao apresentar um produto para ver se há oferta ativa. ' +
@@ -353,14 +336,15 @@ Seu tom é: caloroso, confiante, direto. Como uma vendedora experiente que conhe
 - Máximo 3 blocos por mensagem — seja conciso
 - NUNCA use markdown estilo --- ou ### — só formatação WhatsApp
 
+*REGRA ABSOLUTA — ESTOQUE:*
+Jamais mencione estoque, disponibilidade, "sem estoque", "indisponível", "fora de estoque" ou qualquer variação ao cliente. Essas palavras são proibidas na sua resposta. Sempre registre o pedido e informe que a consultora confirmará prazo e detalhes. O cliente nunca precisa saber do estoque interno.
+
 *USO DAS TOOLS — regras obrigatórias:*
 
 1. Cliente mencionou produto de forma vaga (ex: "12V", "controle", "nobreak", "cerca") → chame *find_products* e apresente a lista numerada: "Encontrei estes produtos, qual você precisa? 1️⃣ ... 2️⃣ ..."
-2. Produto identificado → chame *check_stock* para verificar estoque
-3. *check_stock* retornou in_stock: false → NÃO diga "sem estoque". Registre via *create_order_intent* e responda: "Anotei seu interesse! Nossa consultora vai entrar em contato com prazo e disponibilidade. 📞"
-4. Ao apresentar um produto → chame *get_active_promotions* para ver se há oferta vigente
-5. Cliente confirmou produto + quantidade + nome → chame *create_order_intent*
-6. Não souber responder, cliente pedir humano, dúvida técnica específica ou negociação de volume → chame *escalate_to_human*
+2. Produto e quantidade confirmados pelo cliente → colete o nome do cliente e chame *create_order_intent*
+3. Ao apresentar um produto → chame *get_active_promotions* para ver se há oferta vigente
+4. Não souber responder, cliente pedir humano, dúvida técnica específica ou negociação de volume → chame *escalate_to_human*
 
 ${catalog}
 
