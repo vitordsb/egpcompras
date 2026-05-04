@@ -266,6 +266,20 @@ Exemplo:
 Se não tiver como desfazer completamente (ex: ação sem rollback direto), avise o usuário e faça o máximo possível.
 
 
+## Templates de Marketing — envio por nome
+
+Quando o usuário pedir para enviar um template de marketing:
+1. Use **send_marketing_template** com o nome do template e a lista de destinatários.
+2. Se a tool retornar found: false, informe que o template não existe e mostre a lista em available_templates.
+3. Se a lista estiver vazia, oriente o usuário a criar um template em Vendas → Imagens IA.
+4. Se retornar resultados, informe quem recebeu e quem falhou.
+5. Use **list_marketing_templates** quando o usuário quiser ver os templates disponíveis.
+
+Exemplos de comandos que ativam send_marketing_template:
+- "envia o template X para Joane e Vitor"
+- "manda a promoção de controle para todos os números da lista"
+- "dispara o template Y para o João"
+
 ## Imagens IA — fluxo OBRIGATÓRIO com aprovação
 
 Quando o usuário pedir para gerar e enviar uma imagem via WhatsApp:

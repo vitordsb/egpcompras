@@ -836,6 +836,31 @@ export const toolDeclarations = [
     },
   },
   {
+    name: 'send_marketing_template',
+    description: 'Envia um template de marketing salvo para um ou mais contatos via WhatsApp. Se o template não existir, retorna a lista de templates disponíveis. Use quando o usuário pedir para enviar um template pelo nome.',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        template_name: { type: 'STRING' as Type, description: 'Nome exato (ou aproximado) do template salvo.' },
+        recipients: {
+          type: 'ARRAY' as Type,
+          description: 'Lista de nomes ou números dos destinatários. Nomes são resolvidos via whatsapp_contacts.',
+          items: { type: 'STRING' as Type },
+        },
+        caption_override: {
+          type: 'STRING' as Type,
+          description: 'Legenda personalizada para substituir a legenda padrão do template (opcional).',
+        },
+      },
+      required: ['template_name', 'recipients'],
+    },
+  },
+  {
+    name: 'list_marketing_templates',
+    description: 'Lista todos os templates de marketing salvos. Use antes de send_marketing_template se não souber o nome exato.',
+    parameters: { type: 'OBJECT' as Type, properties: {} },
+  },
+  {
     name: 'list_whatsapp_conversations',
     description: 'Lista as conversas WhatsApp recentes com prévia da última mensagem. Use para ver quem entrou em contato ou antes de enviar uma mensagem.',
     parameters: {
@@ -4086,6 +4111,103 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
         total: results.length,
         sucesso,
         falha,
+        results,
+      };
+    }
+
+    case 'list_marketing_templates': {
+      const { data, error } = await supabase
+        .from('marketing_templates')
+        .select('name, template_id, caption, created_at, created_by')
+        .order('name');
+      if (error) throw new Error(error.message);
+      return {
+        total: (data ?? []).length,
+        templates: (data ?? []).map((t: any) => ({
+          name: t.name,
+          type: t.template_id,
+          caption: t.caption,
+          created_at: t.created_at?.slice(0, 10),
+          created_by: t.created_by,
+        })),
+      };
+    }
+
+    case 'send_marketing_template': {
+      const templateName    = String(args.template_name ?? '').trim();
+      const recipients      = Array.isArray(args.recipients) ? args.recipients.map(String) : [];
+      const captionOverride = String(args.caption_override ?? '').trim();
+
+      if (!templateName)       throw new Error('template_name é obrigatório');
+      if (recipients.length === 0) throw new Error('recipients deve ter pelo menos 1 destinatário');
+
+      // Busca template por nome (busca fuzzy case-insensitive)
+      const { data: found } = await supabase
+        .from('marketing_templates')
+        .select('*')
+        .ilike('name', `%${templateName}%`)
+        .order('name')
+        .limit(3);
+
+      if (!found?.length) {
+        // Retorna lista de templates disponíveis
+        const { data: all } = await supabase
+          .from('marketing_templates')
+          .select('name, template_id')
+          .order('name');
+        return {
+          found: false,
+          error: `Template "${templateName}" não encontrado.`,
+          message: 'Nenhum template com esse nome existe. Peça ao usuário para criar o template primeiro em Vendas → Imagens IA.',
+          available_templates: (all ?? []).map((t: any) => t.name),
+        };
+      }
+
+      const template = (found[0]) as any;
+      const imageUrl  = template.image_url as string;
+      const caption   = captionOverride || (template.caption as string | null) || undefined;
+
+      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
+      const anonKey     = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+
+      // Envia para cada destinatário
+      const results: { recipient: string; phone: string | null; success: boolean; error?: string }[] = [];
+
+      for (const recipient of recipients) {
+        // Resolve número
+        let phone = recipient.replace(/\D/g, '');
+        if (!phone || phone.length < 8) {
+          // Tenta por nome
+          const { data: byName } = await supabase
+            .from('whatsapp_contacts')
+            .select('phone')
+            .ilike('name', `%${recipient}%`)
+            .limit(1);
+          const resolved = (byName as any)?.[0]?.phone;
+          if (!resolved) {
+            results.push({ recipient, phone: null, success: false, error: `Contato "${recipient}" não encontrado` });
+            continue;
+          }
+          phone = resolved;
+        }
+
+        const res = await fetch(`${supabaseUrl}/functions/v1/whatsapp-send`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', apikey: anonKey, Authorization: `Bearer ${anonKey}` },
+          body: JSON.stringify({ to: phone, image_url: imageUrl, text: caption, sender_label: ctx.currentUser }),
+        });
+        const json = await res.json();
+        results.push({ recipient, phone, success: res.ok, error: res.ok ? undefined : (json.error ?? 'Falha ao enviar') });
+      }
+
+      const sent   = results.filter(r => r.success).length;
+      const failed = results.filter(r => !r.success).length;
+
+      return {
+        template_used: template.name,
+        total: recipients.length,
+        sent,
+        failed,
         results,
       };
     }
