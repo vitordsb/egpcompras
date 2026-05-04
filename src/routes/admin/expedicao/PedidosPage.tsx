@@ -559,7 +559,7 @@ export default function PedidosPage() {
                   <th className="px-5 py-3">Cliente</th>
                   <th className="px-5 py-3">Nº Pedido / NF-e</th>
                   <th className="px-5 py-3">Status</th>
-                  <th className="px-5 py-3">Prevista</th>
+                  <th className="px-5 py-3">Data</th>
                   <th className="px-5 py-3 text-right">Total</th>
                   <th className="px-5 py-3 text-right">Obs.</th>
                   <th className="px-5 py-3"></th>
@@ -616,7 +616,11 @@ export default function PedidosPage() {
                         {STATUS_LABEL[effectiveStatus(s)]}
                       </span>
                     </td>
-                    <td className="px-5 py-3 text-slate-600">{formatDate(s.data_prevista)}</td>
+                    <td className="px-5 py-3 text-slate-600">
+                      {s.status === 'shipped' && s.data_saida
+                        ? <span className="text-green-700">{formatDate(s.data_saida)}</span>
+                        : formatDate(s.data_prevista)}
+                    </td>
                     <td className="px-5 py-3 text-right text-slate-600">
                       {s.valor_total != null ? `R$ ${Number(s.valor_total).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` : '—'}
                     </td>
