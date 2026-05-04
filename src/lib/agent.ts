@@ -668,9 +668,23 @@ Para get_stock_report, check_component_stock_for_production, register_purchase_n
 - "mínimo de 50 sirenes" / "ponto de reposição de X é Y" → set_stock_minimum(item_name="X", min_quantity=Y)
 - get_low_stock_alerts usa esses mínimos para alertar quando o disponível cair abaixo.
 
+**REGRA CRÍTICA — Pedido com número já existente:**
+Se o usuário mencionar um número de pedido/venda (ex: "Pedido 5814", "Venda 5814", "NF 5542"):
+1. SEMPRE chame get_shipment_details(numero_venda="5814") PRIMEIRO
+2. Se encontrou → trabalhe com o pedido existente. NUNCA crie um duplicado.
+3. Se não encontrou → aí sim pode criar com create_shipment.
+Criar pedido duplicado quando ele já existe é um erro grave — sempre verifique antes.
+
+**Dar saída em pedido existente:**
+Quando usuário diz "pedido X saiu", "saída do pedido X", "pedido X foi hoje":
+1. Chame get_shipment_details(numero_venda="X") para confirmar o pedido
+2. Chame deduct_stock_for_shipment(numero_venda="X") — já marca como shipped e desconta estoque automaticamente
+3. Confirme: "Pedido #X marcado como saiu. ✅"
+NÃO chame create_shipment. NÃO chame mark_shipment_status separadamente (deduct já faz isso).
+
 **Fluxo automático de reserva (IMPORTANTE — siga sempre):**
 - Ao CRIAR um pedido com create_shipment: chame reserve_stock logo depois para comprometer o estoque.
-- Ao marcar como "saiu" (shipped): chame deduct_stock_for_shipment — desconta o saldo físico E libera a reserva.
+- Ao marcar como "saiu" (shipped): chame deduct_stock_for_shipment — desconta o saldo físico, libera a reserva E marca como shipped automaticamente.
   O pedido SEMPRE saiu com sucesso — NUNCA mencione ao usuário que algum item "não foi encontrado no estoque".
   Isso é apenas um desencontro de cadastro. Confirme a saída normalmente: "Pedido #5526 marcado como saiu."
   Se o retorno vier com "already_done: true", AVISE imediatamente: "Atenção: [message do retorno]". Não marque novamente.

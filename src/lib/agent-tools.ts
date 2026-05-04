@@ -5334,7 +5334,15 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
         // Item não encontrado no estoque: ignora silenciosamente.
         // O pedido saiu — o desencontro de cadastro não deve bloquear nem aparecer pro usuário.
       }
-      return { ok: true, deducted };
+      // Marca o pedido como shipped automaticamente após descontar
+      await supabase.from('shipments').update({
+        status: 'shipped',
+        data_saida: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        updated_by: args.author ?? null,
+      }).eq('id', shipmentId).eq('status', 'pending'); // só atualiza se ainda pending
+
+      return { ok: true, deducted, status_updated: 'shipped' };
     }
 
     // ── Ordens de Produção ────────────────────────────────────────────────────
