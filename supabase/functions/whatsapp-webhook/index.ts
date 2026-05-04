@@ -204,7 +204,40 @@ Deno.serve(async (req) => {
   try { body = await req.json(); } catch { return new Response('ok'); }
 
   const change = body?.entry?.[0]?.changes?.[0]?.value;
-  const msg    = change?.messages?.[0];
+
+  // ── Processa status de entrega (delivered / read / failed / undelivered) ──
+  const statuses = change?.statuses;
+  if (Array.isArray(statuses) && statuses.length > 0) {
+    for (const st of statuses) {
+      const messageId: string = st.id;
+      const rawStatus: string = st.status; // sent | delivered | read | failed
+      // Mapeia para nosso enum (failed inclui undelivered da Meta)
+      const status =
+        rawStatus === 'delivered' ? 'delivered' :
+        rawStatus === 'read'      ? 'read'      :
+        rawStatus === 'failed'    ? 'failed'    :
+        rawStatus === 'sent'      ? 'sent'      : null;
+
+      if (status && messageId) {
+        await fetch(
+          `${SUPA_URL}/rest/v1/whatsapp_messages?message_id=eq.${encodeURIComponent(messageId)}`,
+          {
+            method: 'PATCH',
+            headers: { ...supaHeaders, Prefer: 'return=minimal' },
+            body: JSON.stringify({ delivery_status: status }),
+          },
+        ).catch(() => {});
+
+        // Loga erros de falha de entrega no console para rastreamento
+        if (status === 'failed' && st.errors?.length) {
+          console.error(`Delivery failed for ${messageId}:`, JSON.stringify(st.errors));
+        }
+      }
+    }
+    return new Response('ok');
+  }
+
+  const msg = change?.messages?.[0];
   if (!msg || msg.type !== 'text') return new Response('ok');
 
   const phone = msg.from;

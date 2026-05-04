@@ -13,7 +13,13 @@ const CORS = {
   'Access-Control-Allow-Headers': 'Content-Type, Authorization, apikey',
 };
 
-async function logMessage(phone: string, direction: 'in' | 'out', text: string, sentBy: string | null) {
+async function logMessage(
+  phone: string,
+  direction: 'in' | 'out',
+  text: string,
+  sentBy: string | null,
+  messageId?: string,
+) {
   await fetch(`${SUPA_URL}/rest/v1/whatsapp_messages`, {
     method: 'POST',
     headers: {
@@ -22,7 +28,14 @@ async function logMessage(phone: string, direction: 'in' | 'out', text: string, 
       'Content-Type': 'application/json',
       Prefer: 'return=minimal',
     },
-    body: JSON.stringify({ phone, direction, text, sent_by: sentBy }),
+    body: JSON.stringify({
+      phone,
+      direction,
+      text,
+      sent_by: sentBy,
+      message_id: messageId ?? null,
+      delivery_status: 'sent',
+    }),
   }).catch(() => {});
 }
 
@@ -117,9 +130,10 @@ Deno.serve(async (req) => {
     });
   }
 
-  await logMessage(phone, 'out', logText, sender_label ?? null);
+  const messageId: string | undefined = json.messages?.[0]?.id;
+  await logMessage(phone, 'out', logText, sender_label ?? null, messageId);
 
-  return new Response(JSON.stringify({ sent: true, to: phone, message_id: json.messages?.[0]?.id }), {
+  return new Response(JSON.stringify({ sent: true, to: phone, message_id: messageId }), {
     status: 200, headers: { ...CORS, 'Content-Type': 'application/json' },
   });
 });

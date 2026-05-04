@@ -11,6 +11,8 @@ interface Session {
   unread?: number;
 }
 
+type DeliveryStatus = 'sent' | 'delivered' | 'read' | 'failed' | null;
+
 interface Message {
   id: string;
   phone: string;
@@ -18,6 +20,8 @@ interface Message {
   text: string;
   sent_by: string | null;
   created_at: string;
+  delivery_status: DeliveryStatus;
+  message_id: string | null;
 }
 
 interface Order {
@@ -51,12 +55,49 @@ function fmtDateTime(iso: string) {
   });
 }
 
-// "vitor@grupoegp.com.br" → "Vitor"
-// "Nathanna" → "Nathanna"
 function senderDisplay(label: string): string {
   const local = label.includes('@') ? label.split('@')[0] : label;
   if (!local) return label;
   return local.charAt(0).toUpperCase() + local.slice(1).toLowerCase();
+}
+
+// Ícone de status de entrega WhatsApp-style
+function DeliveryIcon({ status }: { status: DeliveryStatus }) {
+  if (status === 'read') {
+    return (
+      <svg viewBox="0 0 16 11" fill="none" className="inline-block h-3.5 w-3.5 ml-1 text-sky-500" aria-label="Lida">
+        <path d="M1 5.5l3.5 3.5L10 2" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/>
+        <path d="M5 5.5l3.5 3.5L14.5 2" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/>
+      </svg>
+    );
+  }
+  if (status === 'delivered') {
+    return (
+      <svg viewBox="0 0 16 11" fill="none" className="inline-block h-3.5 w-3.5 ml-1 text-slate-400" aria-label="Entregue">
+        <path d="M1 5.5l3.5 3.5L10 2" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/>
+        <path d="M5 5.5l3.5 3.5L14.5 2" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/>
+      </svg>
+    );
+  }
+  if (status === 'failed') {
+    return (
+      <svg viewBox="0 0 14 14" fill="none" className="inline-block h-3.5 w-3.5 ml-1 text-red-500" aria-label="Falhou">
+        <circle cx="7" cy="7" r="6" stroke="currentColor" strokeWidth="1.5"/>
+        <path d="M7 4v3.5M7 9.5v.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+      </svg>
+    );
+  }
+  // sent (padrão — tick simples)
+  return (
+    <svg viewBox="0 0 10 10" fill="none" className="inline-block h-3 w-3 ml-1 text-slate-400" aria-label="Enviada">
+      <path d="M1.5 5l2.5 2.5L8.5 2" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+    </svg>
+  );
+}
+
+// Calcula horas desde a última mensagem RECEBIDA (in) do contato
+function hoursOld(iso: string): number {
+  return (Date.now() - new Date(iso).getTime()) / 3_600_000;
 }
 
 export default function WhatsAppPage() {
@@ -70,6 +111,8 @@ export default function WhatsAppPage() {
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
+  // Horas desde a última mensagem RECEBIDA nesta conversa (para aviso 24h)
+  const [lastInboundHours, setLastInboundHours] = useState<number | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
@@ -197,7 +240,7 @@ export default function WhatsAppPage() {
     const [msgsRes, ordersRes] = await Promise.all([
       supabase
         .from('whatsapp_messages')
-        .select('id, phone, direction, text, sent_by, created_at')
+        .select('id, phone, direction, text, sent_by, created_at, delivery_status, message_id')
         .eq('phone', phone)
         .order('created_at', { ascending: true })
         .limit(200),
@@ -208,8 +251,14 @@ export default function WhatsAppPage() {
         .eq('origem', 'whatsapp')
         .order('created_at', { ascending: false }),
     ]);
-    setMessages((msgsRes.data ?? []) as Message[]);
+    const msgs = (msgsRes.data ?? []) as Message[];
+    setMessages(msgs);
     setOrders((ordersRes.data ?? []) as Order[]);
+
+    // Calcula horas desde a última mensagem recebida (janela 24h)
+    const lastIn = [...msgs].reverse().find(m => m.direction === 'in');
+    setLastInboundHours(lastIn ? hoursOld(lastIn.created_at) : null);
+
     setLoadingMsgs(false);
   }
 
@@ -409,9 +458,17 @@ export default function WhatsAppPage() {
                         </p>
                       )}
                       <p className="whitespace-pre-wrap leading-relaxed">{m.text}</p>
-                      <p className="mt-1 text-right text-[10px] text-slate-500">
-                        {fmtDateTime(m.created_at)}
-                      </p>
+                      <div className="mt-1 flex items-center justify-end gap-0.5">
+                        <span className="text-[10px] text-slate-500">{fmtDateTime(m.created_at)}</span>
+                        {m.direction === 'out' && (
+                          <DeliveryIcon status={m.delivery_status} />
+                        )}
+                      </div>
+                      {m.delivery_status === 'failed' && m.direction === 'out' && (
+                        <p className="mt-0.5 text-[10px] text-red-500 font-medium">
+                          Não entregue — contato fora da janela 24h ou número inválido
+                        </p>
+                      )}
                     </div>
                   </div>
                 ))
@@ -421,6 +478,23 @@ export default function WhatsAppPage() {
 
             {/* Input de envio */}
             <div className="shrink-0 border-t border-slate-200 bg-white px-4 py-3">
+              {/* Aviso de janela 24h */}
+              {lastInboundHours !== null && lastInboundHours > 24 && (
+                <div className="mb-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 flex items-start gap-2">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-3.5 w-3.5 shrink-0 mt-0.5">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />
+                  </svg>
+                  <span>
+                    <strong>Janela de 24h fechada</strong> — última mensagem recebida há {Math.round(lastInboundHours)}h.
+                    Mensagens livres podem não ser entregues. Aguarde o cliente responder ou use um template aprovado.
+                  </span>
+                </div>
+              )}
+              {lastInboundHours === null && (
+                <div className="mb-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs text-amber-700">
+                  Nenhuma mensagem recebida — janela 24h não aberta. O cliente precisa iniciar a conversa.
+                </div>
+              )}
               {sendError && (
                 <div className="mb-2 rounded-md border border-red-200 bg-red-50 px-3 py-1.5 text-xs text-red-700">
                   {sendError}
