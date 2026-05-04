@@ -15,7 +15,7 @@ const supaHeaders = {
 
 // ── Valida assinatura HMAC-SHA256 da Meta ─────────────────────────────────────
 async function verifyMetaSignature(rawBody: ArrayBuffer, sig: string): Promise<boolean> {
-  if (!WA_APP_SECRET) return true; // sem secret configurado, aceita (modo desenvolvimento)
+  if (!WA_APP_SECRET) return true;
   try {
     const key = await crypto.subtle.importKey(
       'raw', new TextEncoder().encode(WA_APP_SECRET),
@@ -25,18 +25,15 @@ async function verifyMetaSignature(rawBody: ArrayBuffer, sig: string): Promise<b
     const hex = 'sha256=' + Array.from(new Uint8Array(computed))
       .map(b => b.toString(16).padStart(2, '0')).join('');
     return hex === sig;
-  } catch {
-    return false;
-  }
+  } catch { return false; }
 }
 
 // ── DB helpers ────────────────────────────────────────────────────────────────
-async function dbSelect(table: string, filters: Record<string, string>): Promise<any[]> {
+async function dbSelect(table: string, filters: Record<string, string>, extra = ''): Promise<any[]> {
   const params = new URLSearchParams(
     Object.entries(filters).map(([k, v]) => [k, `eq.${v}`])
   );
-  params.append('limit', '1');
-  const res = await fetch(`${SUPA_URL}/rest/v1/${table}?${params}`, { headers: supaHeaders });
+  const res = await fetch(`${SUPA_URL}/rest/v1/${table}?${params}${extra}`, { headers: supaHeaders });
   if (!res.ok) return [];
   return await res.json();
 }
@@ -58,128 +55,34 @@ async function dbUpdate(table: string, id: string, body: Record<string, unknown>
 }
 
 // ── Sessão ────────────────────────────────────────────────────────────────────
-async function getSession(phone: string): Promise<{ id: string; history: any[] }> {
+async function getSession(phone: string): Promise<{ id: string; history: any[]; status: string }> {
   const rows = await dbSelect('whatsapp_sessions', { phone });
-  if (rows.length > 0) return { id: rows[0].id, history: rows[0].history ?? [] };
-  const created = await dbInsert('whatsapp_sessions', { phone, history: [] });
+  if (rows.length > 0) return { id: rows[0].id, history: rows[0].history ?? [], status: rows[0].status ?? 'active' };
+  const created = await dbInsert('whatsapp_sessions', { phone, history: [], status: 'active' });
   if (!created?.id) throw new Error(`getSession: falha ao criar sessão para ${phone}`);
-  return { id: created.id, history: [] };
+  return { id: created.id, history: [], status: 'active' };
 }
 
 async function saveSession(id: string, history: any[]): Promise<void> {
   await dbUpdate('whatsapp_sessions', id, { history, updated_at: new Date().toISOString() });
 }
 
-// ── Catálogo ─────────────────────────────────────────────────────────────────
-async function buildContext(): Promise<string> {
+// ── Catálogo (injetado no system prompt) ─────────────────────────────────────
+async function buildCatalog(): Promise<string> {
   try {
-    const [prodRes, stockRes] = await Promise.all([
-      fetch(`${SUPA_URL}/rest/v1/products_with_cost?select=name,sale_price_brl,sku,description&order=name`, { headers: supaHeaders }),
-      fetch(`${SUPA_URL}/rest/v1/stock_items?select=item_name,item_code,quantity,reserved_quantity,unit&order=item_name`, { headers: supaHeaders }),
-    ]);
-    const [products, stock]: [any[], any[]] = await Promise.all([prodRes.json(), stockRes.json()]);
-
-    let ctx = '═══ CATÁLOGO ═══\n';
-    ctx += (Array.isArray(products) ? products : []).map((p: any) => {
-      const price = p.sale_price_brl ? `R$ ${Number(p.sale_price_brl).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}` : 'consultar';
+    const res = await fetch(
+      `${SUPA_URL}/rest/v1/products_with_cost?select=name,sale_price_brl,sku,description&order=name`,
+      { headers: supaHeaders },
+    );
+    const products: any[] = res.ok ? await res.json() : [];
+    if (!Array.isArray(products) || products.length === 0) return '';
+    return '═══ CATÁLOGO ═══\n' + products.map((p: any) => {
+      const price = p.sale_price_brl
+        ? `R$ ${Number(p.sale_price_brl).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`
+        : 'consultar';
       return `• ${p.name}${p.sku ? ` (${p.sku})` : ''}: ${price}${p.description ? ` — ${p.description}` : ''}`;
     }).join('\n');
-
-    if (Array.isArray(stock) && stock.length > 0) {
-      ctx += '\n\n═══ ESTOQUE ═══\n';
-      ctx += stock.map((s: any) => `• ${s.item_name}: ${Number(s.quantity) - Number(s.reserved_quantity)} ${s.unit ?? 'un'}`).join('\n');
-    }
-    return ctx;
-  } catch {
-    return 'Catálogo indisponível no momento.';
-  }
-}
-
-// ── Gemini ────────────────────────────────────────────────────────────────────
-async function callGemini(history: any[], userText: string, context: string): Promise<string> {
-  const system = `Você é a *EGP Atendimento*, assistente virtual da EGP Tecnologia — empresa brasileira especializada em equipamentos de segurança eletrônica.
-
-Seu tom é: caloroso, confiante, direto. Como uma vendedora experiente que conhece bem os produtos e quer ajudar de verdade. Não é robótico nem formal demais.
-
-*FORMATAÇÃO WhatsApp* (use sempre):
-- *negrito* para destacar nomes de produtos, preços e informações importantes
-- Emojis com moderação para dar vida (🔒 segurança, ✅ confirmação, 📦 entrega, 💳 pagamento, 📞 contato)
-- Listas com • para múltiplos itens
-- Quebras de linha para separar blocos de informação
-- Máximo 3 blocos por mensagem — seja conciso
-- NUNCA use markdown estilo --- ou ### — só formatação WhatsApp
-
-*EXEMPLOS de tom:*
-❌ "Olá! Posso ajudá-lo com informações sobre nossos produtos."
-✅ "Oi! 😊 Que bom te ver aqui! Me conta o que você precisa que a gente resolve."
-
-❌ "Nosso produto custa R$ 45,00 e possui garantia de 1 ano."
-✅ "O *Controle 2 Botões EGP* sai por *R$ 45,00* e vem com *1 ano de garantia* + bateria 3V inclusa. ✅"
-
-${context}
-
-Pagamento: PIX, boleto, cartão. Prazo: 5-7 dias úteis SP. Outros estados: consultar.
-Entregamos para todo o Brasil.
-Não revele custos internos nem dados de outros clientes.
-
-═══ PERGUNTAS FREQUENTES ═══
-
-COMPATIBILIDADE:
-- "Funciona com o alarme da marca X?" → Pergunte qual a tecnologia do receptor. Se for Learning Code 433MHz, sim. Se for outra frequência ou tecnologia diferente, não é compatível.
-
-FREQUÊNCIA:
-- Todos os nossos controles operam em 433MHz.
-
-MODELOS DISPONÍVEIS:
-- Temos controles de 2, 3 e 4 botões.
-- Tecnologias disponíveis: Learning Code, Rolling Code e outras opções.
-- A principal diferença entre modelos é: frequência, quantidade de códigos gravados e distância de operação.
-
-BATERIA:
-- Sim, já vem inclusa bateria 3V.
-
-ENTREGA E PRAZO:
-- Entregamos para todo o Brasil. Prazo padrão SP: 5-7 dias úteis. Outros estados: consultar.
-
-GARANTIA:
-- 1 ano de garantia nos controles. Eletrificadoras eletrônicas têm 1 ano e 3 meses.
-
-TROCA / DEFEITO (RMA):
-- Fazemos RMA. O cliente envia o produto por Nota de Remessa, verificamos o ocorrido e devolvemos com nota de retorno.
-
-DESCONTO POR QUANTIDADE:
-- Verificamos internamente e chegamos ao melhor preço. Encaminhe o pedido e nossa equipe retorna.
-
-DÚVIDAS TÉCNICAS (cadastro de controle, qual receptor usar):
-- Essas dúvidas são específicas por modelo e situação. Encaminhe para nossas vendedoras:
-  • Joane: (11) 97981-8472
-  • Nathanna: (11) 94105-9408
-
-Atendimento humano: se o cliente quiser falar com uma vendedora:
-"Você pode falar diretamente com nossas vendedoras:
-• Joane: (11) 97981-8472
-• Nathanna: (11) 94105-9408"
-
-Ao fechar pedido, colete: nome, produto(s)+quantidade, forma de pagamento. Confirme o resumo e inclua EXATAMENTE este bloco (invisível ao cliente):
-%%PEDIDO%%{"client_name":"NOME","items":[{"name":"PRODUTO","quantity":N,"unit_price":PRECO}],"forma_pagamento":"FORMA"}%%FIM%%
-Depois diga: "Pedido registrado! Nossa equipe confirma em até 1 hora útil."`;
-
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        system_instruction: { parts: [{ text: system }] },
-        contents: [...history, { role: 'user', parts: [{ text: userText }] }],
-        generationConfig: { temperature: 0.7, maxOutputTokens: 600 },
-      }),
-    }
-  );
-  const json = await res.json();
-  const text = json.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!text) throw new Error(`Gemini: ${JSON.stringify(json).slice(0, 150)}`);
-  return text;
+  } catch { return ''; }
 }
 
 // ── WhatsApp ──────────────────────────────────────────────────────────────────
@@ -198,38 +101,300 @@ async function logMsg(phone: string, direction: 'in' | 'out', text: string, wami
   }).catch(() => {});
 }
 
-// Valida e executa criação de pedido
-async function createOrder(phone: string, data: unknown): Promise<void> {
-  if (!data || typeof data !== 'object') {
-    console.error('createOrder: dado não é objeto:', String(data).slice(0, 100));
-    return;
+// ── Tools declarations ────────────────────────────────────────────────────────
+const TOOL_DECLARATIONS = [
+  {
+    name: 'check_stock',
+    description:
+      'Consulta a disponibilidade de estoque de um produto em tempo real. ' +
+      'SEMPRE chame esta tool antes de afirmar que um produto está disponível ou confirmar quantidade.',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        product_name: {
+          type: 'STRING',
+          description: 'Nome ou parte do nome do produto. Ex: "controle 2 botões", "eletrificadora".',
+        },
+      },
+      required: ['product_name'],
+    },
+  },
+  {
+    name: 'get_active_promotions',
+    description:
+      'Retorna promoções vigentes. Chame ao apresentar um produto para ver se há oferta ativa. ' +
+      'Mencione a promoção de forma natural dentro da resposta, nunca como abertura.',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        product_name: {
+          type: 'STRING',
+          description: 'Nome do produto para filtrar promoções. Omita para retornar todas as promoções ativas.',
+        },
+      },
+    },
+  },
+  {
+    name: 'create_order_intent',
+    description:
+      'Registra a intenção de compra após coletar nome do cliente, produto(s) e quantidade. ' +
+      'Use somente após o cliente confirmar o pedido. Não use para simples consultas de preço.',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        client_name: { type: 'STRING', description: 'Nome do cliente.' },
+        items: {
+          type: 'ARRAY',
+          description: 'Lista de produtos.',
+          items: {
+            type: 'OBJECT',
+            properties: {
+              name:       { type: 'STRING', description: 'Nome do produto.' },
+              quantity:   { type: 'NUMBER', description: 'Quantidade.' },
+              unit_price: { type: 'NUMBER', description: 'Preço unitário em BRL.' },
+            },
+            required: ['name', 'quantity'],
+          },
+        },
+        forma_pagamento: { type: 'STRING', description: 'Forma de pagamento. Ex: PIX, boleto, cartão.' },
+      },
+      required: ['client_name', 'items'],
+    },
+  },
+  {
+    name: 'escalate_to_human',
+    description:
+      'Transfere a conversa para uma vendedora humana. Use quando: ' +
+      'cliente pedir para falar com vendedora, dúvida técnica específica de instalação, ' +
+      'negociação de preço em volume, ou você não souber responder com certeza.',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        reason: {
+          type: 'STRING',
+          description: '"client_requested" | "technical_doubt" | "price_negotiation" | "bot_uncertain"',
+        },
+      },
+      required: ['reason'],
+    },
+  },
+];
+
+// ── Tool executor ─────────────────────────────────────────────────────────────
+async function executeTool(
+  name: string,
+  args: Record<string, unknown>,
+  phone: string,
+  sessionId: string,
+): Promise<string> {
+  try {
+    switch (name) {
+
+      case 'check_stock': {
+        const q = encodeURIComponent(String(args.product_name ?? ''));
+        const res = await fetch(
+          `${SUPA_URL}/rest/v1/stock_items` +
+          `?select=item_name,quantity,reserved_quantity,unit` +
+          `&item_name=ilike.*${q}*&order=item_name&limit=5`,
+          { headers: supaHeaders },
+        );
+        const rows: any[] = res.ok ? await res.json() : [];
+        if (rows.length === 0) {
+          return JSON.stringify({ available: false, message: `"${args.product_name}" não encontrado no estoque.` });
+        }
+        const items = rows.map(s => {
+          const qty = Number(s.quantity) - Number(s.reserved_quantity);
+          return {
+            name:      s.item_name,
+            available: qty > 0,
+            quantity:  qty,
+            unit:      s.unit ?? 'un',
+            message:   qty > 0
+              ? `${s.item_name}: *${qty} ${s.unit ?? 'un'}* disponíveis ✅`
+              : `${s.item_name}: sem estoque no momento ❌`,
+          };
+        });
+        return JSON.stringify(items);
+      }
+
+      case 'get_active_promotions': {
+        const now = new Date().toISOString();
+        const productName = String(args.product_name ?? '').trim();
+        const base =
+          `${SUPA_URL}/rest/v1/promotions` +
+          `?select=title,description_for_bot` +
+          `&active=eq.true` +
+          `&starts_at=lte.${now}` +
+          `&ends_at=gte.${now}` +
+          `&order=ends_at&limit=5`;
+        const url = productName
+          ? `${base}&or=(title.ilike.*${encodeURIComponent(productName)}*,sku.ilike.*${encodeURIComponent(productName)}*)`
+          : base;
+        const res  = await fetch(url, { headers: supaHeaders });
+        const rows: any[] = res.ok ? await res.json() : [];
+        if (rows.length === 0) return JSON.stringify({ promotions: [], message: 'Sem promoções ativas no momento.' });
+        return JSON.stringify({ promotions: rows.map(r => ({ title: r.title, description: r.description_for_bot })) });
+      }
+
+      case 'create_order_intent': {
+        const clientName = String(args.client_name ?? '').trim();
+        const items      = Array.isArray(args.items) ? args.items : [];
+        if (!clientName || items.length === 0) {
+          return JSON.stringify({ success: false, error: 'client_name e items são obrigatórios' });
+        }
+        const intent = await dbInsert('order_intents', {
+          session_id:      sessionId || null,
+          phone,
+          client_name:     clientName,
+          items:           JSON.stringify(items),
+          forma_pagamento: args.forma_pagamento ? String(args.forma_pagamento) : null,
+          status:          'pending',
+        });
+        if (!intent?.id) return JSON.stringify({ success: false, error: 'Falha ao registrar pedido no banco' });
+        const summary = items.map((it: any) => `${it.quantity}x ${it.name}`).join(', ');
+        return JSON.stringify({
+          success:   true,
+          intent_id: intent.id,
+          message:   `Pedido registrado com sucesso: ${summary} para ${clientName}. Nossa equipe confirmará em breve.`,
+        });
+      }
+
+      case 'escalate_to_human': {
+        // Busca primeira vendedora disponível
+        const selRes  = await fetch(
+          `${SUPA_URL}/rest/v1/sellers?select=id,name,whatsapp_number&status=eq.available&order=name&limit=1`,
+          { headers: supaHeaders },
+        );
+        const sellers: any[] = selRes.ok ? await selRes.json() : [];
+        const seller  = sellers[0] ?? { name: 'nossa equipe', whatsapp_number: null };
+
+        // Marca sessão como handoff
+        await dbUpdate('whatsapp_sessions', sessionId, {
+          status:               'handoff',
+          assigned_agent_phone: seller.whatsapp_number,
+          handoff_requested_at: new Date().toISOString(),
+        });
+
+        // Notifica vendedora no WhatsApp dela
+        if (seller.whatsapp_number) {
+          const notify =
+            `🔔 *Novo atendimento EGP*\n\n` +
+            `Cliente: ${phone}\n` +
+            `Motivo: ${args.reason ?? 'solicitado'}\n\n` +
+            `Responda diretamente para o número acima.`;
+          await sendWA(seller.whatsapp_number, notify).catch(() => {});
+        }
+
+        return JSON.stringify({
+          success:     true,
+          agent_name:  seller.name,
+          agent_phone: seller.whatsapp_number,
+          message:     `Conversa transferida para ${seller.name}.`,
+        });
+      }
+
+      default:
+        return JSON.stringify({ error: `Tool desconhecida: ${name}` });
+    }
+  } catch (e) {
+    console.error(`executeTool(${name}):`, e);
+    return JSON.stringify({ error: String(e) });
   }
-  const d = data as Record<string, unknown>;
-  if (typeof d.client_name !== 'string' || d.client_name.trim().length === 0) {
-    console.error('createOrder: client_name ausente ou vazio');
-    return;
-  }
-  if (!Array.isArray(d.items) || d.items.length === 0) {
-    console.error('createOrder: items ausente ou vazio');
-    return;
+}
+
+// ── Gemini com Function Calling ───────────────────────────────────────────────
+async function callGemini(
+  history: any[],
+  userText: string,
+  catalog: string,
+  phone: string,
+  sessionId: string,
+): Promise<string> {
+  const system = `Você é a *EGP Atendimento*, assistente virtual da EGP Tecnologia — empresa brasileira especializada em equipamentos de segurança eletrônica.
+
+Seu tom é: caloroso, confiante, direto. Como uma vendedora experiente que conhece bem os produtos e quer ajudar de verdade. Não é robótico nem formal demais.
+
+*FORMATAÇÃO WhatsApp* (use sempre):
+- *negrito* para destacar nomes de produtos, preços e informações importantes
+- Emojis com moderação (🔒 segurança, ✅ confirmação, 📦 entrega, 💳 pagamento, 📞 contato)
+- Listas com • para múltiplos itens
+- Máximo 3 blocos por mensagem — seja conciso
+- NUNCA use markdown estilo --- ou ### — só formatação WhatsApp
+
+*USO DAS TOOLS — regras obrigatórias:*
+- Antes de afirmar que um produto está disponível → chame *check_stock*
+- Ao apresentar um produto → chame *get_active_promotions* para ver se há oferta
+- Após cliente confirmar nome + quantidade + pagamento → chame *create_order_intent*
+- Se não souber responder, cliente pedir humano, dúvida técnica ou negociação de volume → chame *escalate_to_human*
+
+${catalog}
+
+Pagamento: PIX, boleto, cartão. Prazo: 5-7 dias úteis SP. Outros estados: consultar.
+Entregamos para todo o Brasil. Não revele custos internos nem dados de outros clientes.
+
+═══ PERGUNTAS FREQUENTES ═══
+
+COMPATIBILIDADE:
+- "Funciona com o alarme da marca X?" → Pergunte qual a tecnologia do receptor. Se for Learning Code 433MHz, sim. Outra frequência/tecnologia: não é compatível.
+
+FREQUÊNCIA: Todos os controles operam em 433MHz.
+
+BATERIA: Sim, já vem inclusa bateria 3V.
+
+GARANTIA: 1 ano nos controles. Eletrificadoras: 1 ano e 3 meses.
+
+TROCA / RMA: Fazemos RMA. Cliente envia por Nota de Remessa, verificamos e devolvemos com nota de retorno.
+
+DESCONTO POR QUANTIDADE: Verificamos internamente. Encaminhe o pedido e nossa equipe retorna com o melhor preço.`;
+
+  let contents = [...history, { role: 'user', parts: [{ text: userText }] }];
+
+  for (let turn = 0; turn < 4; turn++) {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          system_instruction: { parts: [{ text: system }] },
+          contents,
+          tools: [{ function_declarations: TOOL_DECLARATIONS }],
+          generationConfig: { temperature: 0.7, maxOutputTokens: 800 },
+        }),
+      },
+    );
+    const json      = await res.json();
+    const candidate = json.candidates?.[0];
+    const parts: any[] = candidate?.content?.parts ?? [];
+
+    const fnCalls = parts.filter(p => p.functionCall);
+
+    // Sem tool calls → retorna texto final
+    if (fnCalls.length === 0) {
+      const text = parts.find(p => p.text)?.text;
+      if (!text) throw new Error(`Gemini sem resposta: ${JSON.stringify(json).slice(0, 200)}`);
+      return text;
+    }
+
+    // Executa todas as tools (podem ser paralelas)
+    const fnResponses = await Promise.all(
+      fnCalls.map(async (part: any) => {
+        const { name, args } = part.functionCall;
+        console.log(`tool_call: ${name}`, JSON.stringify(args).slice(0, 100));
+        const result = await executeTool(name, args ?? {}, phone, sessionId);
+        return { functionResponse: { name, response: { result } } };
+      }),
+    );
+
+    // Adiciona resposta do modelo + resultados das tools e continua o loop
+    contents = [
+      ...contents,
+      { role: 'model', parts },
+      { role: 'user',  parts: fnResponses },
+    ];
   }
 
-  try {
-    const ship = await dbInsert('shipments', {
-      client_name: d.client_name, client_phone: phone,
-      forma_pagamento: typeof d.forma_pagamento === 'string' ? d.forma_pagamento : null,
-      notes: `Pedido via WhatsApp — ${phone}`, status: 'pending', origem: 'whatsapp',
-    });
-    if (!ship?.id) return;
-    for (const it of d.items as any[]) {
-      await dbInsert('shipment_items', {
-        shipment_id: ship.id,
-        item_name:   typeof it.name     === 'string' ? it.name     : String(it.name ?? ''),
-        quantity:    Number(it.quantity) || 1,
-        unit_price:  it.unit_price != null ? Number(it.unit_price) : null,
-      });
-    }
-  } catch (e) { console.error('createOrder:', e); }
+  throw new Error('Gemini: loop de tools excedeu limite de iterações');
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
@@ -247,11 +412,11 @@ Deno.serve(async (req) => {
 
   if (req.method !== 'POST') return new Response('ok');
 
-  // ── Lê o corpo raw uma única vez (necessário para HMAC) ──
+  // Lê corpo raw uma vez (necessário para HMAC)
   let rawBody: ArrayBuffer;
   try { rawBody = await req.arrayBuffer(); } catch { return new Response('ok'); }
 
-  // ── Valida assinatura Meta ──
+  // Valida assinatura Meta
   const sig = req.headers.get('x-hub-signature-256') ?? '';
   if (!(await verifyMetaSignature(rawBody, sig))) {
     console.error('Webhook: assinatura inválida — possível spoofing');
@@ -263,7 +428,7 @@ Deno.serve(async (req) => {
 
   const change = body?.entry?.[0]?.changes?.[0]?.value;
 
-  // ── Processa status de entrega (delivered / read / failed) ──
+  // ── Status de entrega (delivered / read / failed) ──
   const statuses = change?.statuses;
   if (Array.isArray(statuses) && statuses.length > 0) {
     for (const st of statuses) {
@@ -274,19 +439,13 @@ Deno.serve(async (req) => {
         rawStatus === 'read'      ? 'read'      :
         rawStatus === 'failed'    ? 'failed'    :
         rawStatus === 'sent'      ? 'sent'      : null;
-
       if (status && messageId) {
         await fetch(
           `${SUPA_URL}/rest/v1/whatsapp_messages?message_id=eq.${encodeURIComponent(messageId)}`,
-          {
-            method: 'PATCH',
-            headers: { ...supaHeaders, Prefer: 'return=minimal' },
-            body: JSON.stringify({ delivery_status: status }),
-          },
+          { method: 'PATCH', headers: { ...supaHeaders, Prefer: 'return=minimal' }, body: JSON.stringify({ delivery_status: status }) },
         ).catch(() => {});
-
         if (status === 'failed' && st.errors?.length) {
-          console.error(`Delivery failed for ${messageId}:`, JSON.stringify(st.errors));
+          console.error(`Delivery failed ${messageId}:`, JSON.stringify(st.errors));
         }
       }
     }
@@ -296,58 +455,60 @@ Deno.serve(async (req) => {
   const msg = change?.messages?.[0];
   if (!msg || msg.type !== 'text') return new Response('ok');
 
-  const phone  = msg.from as string;
-  const wamid  = msg.id   as string | undefined;
-  let   text   = (msg.text?.body ?? '') as string;
+  const phone = msg.from as string;
+  const wamid = msg.id   as string | undefined;
+  let   text  = (msg.text?.body ?? '') as string;
 
   if (!text || change?.metadata?.phone_number_id === phone) return new Response('ok');
 
-  // ── Dedup: ignora mensagem já processada (reenvio do Meta) ──
+  // Dedup: ignora mensagem já processada
   if (wamid) {
     const existing = await dbSelect('whatsapp_messages', { message_id: wamid });
     if (existing.length > 0) return new Response('ok');
   }
 
-  // ── Sanitização: remove marcadores internos que o cliente possa injetar ──
+  // Sanitização de input
   text = text
     .replace(/%%PEDIDO%%[\s\S]*?%%FIM%%/g, '')
     .replace(/%%PEDIDO%%|%%FIM%%/g, '')
     .trim()
-    .slice(0, 1500); // limite de comprimento para evitar abuse de tokens
-
+    .slice(0, 1500);
   if (!text) return new Response('ok');
 
   try {
     await logMsg(phone, 'in', text, wamid);
 
-    const [session, context] = await Promise.all([getSession(phone), buildContext()]);
-    const raw = await callGemini(session.history ?? [], text, context);
+    const session = await getSession(phone);
 
-    const match   = raw.match(/%%PEDIDO%%(.+?)%%FIM%%/s);
-    const visible = raw.replace(/%%PEDIDO%%.*?%%FIM%%/s, '').trim();
-
-    if (match) {
-      try {
-        await createOrder(phone, JSON.parse(match[1]));
-      } catch (e) {
-        console.error('createOrder JSON.parse falhou:', e, '| raw:', match[1].slice(0, 200));
+    // ── Se em handoff: não processa com IA, apenas loga ──
+    if (session.status === 'handoff') {
+      // Responde uma vez para o cliente saber que está aguardando
+      const lastMsgs = await dbSelect('whatsapp_messages', { phone }, '&direction=eq.out&order=created_at.desc&limit=2');
+      const alreadyNotified = lastMsgs.some(m => m.text?.includes('aguardando atendimento'));
+      if (!alreadyNotified) {
+        await sendWA(phone, 'Você está aguardando atendimento com uma de nossas consultoras. Ela responderá em breve! 📞');
+        await logMsg(phone, 'out', 'Você está aguardando atendimento com uma de nossas consultoras. Ela responderá em breve! 📞');
       }
+      return new Response('ok');
     }
+
+    const catalog = await buildCatalog();
+    const reply   = await callGemini(session.history, text, catalog, phone, session.id);
 
     const newHistory = [
       ...(session.history ?? []),
       { role: 'user',  parts: [{ text }] },
-      { role: 'model', parts: [{ text: visible }] },
+      { role: 'model', parts: [{ text: reply }] },
     ].slice(-20);
 
     await Promise.all([
       saveSession(session.id, newHistory),
-      logMsg(phone, 'out', visible),
-      sendWA(phone, visible),
+      logMsg(phone, 'out', reply),
+      sendWA(phone, reply),
     ]);
   } catch (e) {
     console.error('Webhook error:', e);
-    await sendWA(phone, 'Desculpe, ocorreu um erro. Tente novamente.').catch(() => {});
+    await sendWA(phone, 'Desculpe, ocorreu um erro. Tente novamente em instantes.').catch(() => {});
   }
 
   return new Response('ok', { status: 200 });
