@@ -611,15 +611,21 @@ export default function ImageGeneratorPage() {
           </div>
 
           {/* ══ Preview canvas ════════════════════════════════════════════ */}
-          <div className="flex flex-1 flex-col items-center justify-start overflow-auto bg-slate-100 p-6 gap-3">
-            <div className="flex items-center gap-2">
+          <div className="flex flex-1 flex-col items-center justify-start overflow-y-auto bg-slate-100 p-6 gap-3">
+            <div className="flex shrink-0 items-center gap-2">
               <p className="text-xs text-slate-500 font-medium">Preview ao vivo</p>
               {rendering && <Spinner className="text-slate-400" />}
             </div>
             <canvas
               ref={canvasRef}
-              className="rounded-xl shadow-xl max-w-full max-h-[calc(100vh-10rem)] object-contain"
-              style={{ width: Math.min(400, template.canvasW), height: 'auto' }}
+              className="rounded-xl shadow-xl"
+              style={{
+                aspectRatio: `${template.canvasW} / ${template.canvasH}`,
+                maxHeight: 'calc(100vh - 9rem)',
+                maxWidth: '100%',
+                width: 'auto',
+                height: 'auto',
+              }}
             />
           </div>
         </>
