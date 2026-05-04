@@ -40,6 +40,7 @@ Deno.serve(async (req) => {
       quality_rating: json.quality_rating ?? null,
       code_verification_status: json.code_verification_status ?? null,
       oba_status: json.official_business_account?.oba_status ?? 'NOT_STARTED',
+
       checked_at: new Date().toISOString(),
     }), {
       status: 200, headers: { ...CORS, 'Content-Type': 'application/json' },

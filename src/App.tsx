@@ -30,6 +30,7 @@ import ImageGeneratorPage from '@/routes/admin/ImageGeneratorPage';
 import ClientesPage from '@/routes/admin/ClientesPage';
 import CampanhasPage from '@/routes/admin/CampanhasPage';
 import ContaOficialPage from '@/routes/admin/ContaOficialPage';
+import WhatsAppTemplatesPage from '@/routes/admin/WhatsAppTemplatesPage';
 import NotFoundPage from '@/routes/NotFoundPage';
 import PrestadoresPage from '@/routes/admin/rh/PrestadoresPage';
 import CalculosPage from '@/routes/admin/rh/CalculosPage';
@@ -272,6 +273,7 @@ function AuthenticatedApp() {
         <Route path="clientes" element={<ClientesPage />} />
         <Route path="campanhas" element={<CampanhasPage />} />
         <Route path="conta-oficial" element={<ContaOficialPage />} />
+        <Route path="wa-templates" element={<WhatsAppTemplatesPage />} />
         <Route path="rh" element={<Navigate to="/admin/rh/prestadores" replace />} />
         <Route path="rh/prestadores" element={isRhUser ? <PrestadoresPage /> : <Navigate to="/admin" replace />} />
         <Route path="rh/calculos"    element={isRhUser ? <CalculosPage />    : <Navigate to="/admin" replace />} />
