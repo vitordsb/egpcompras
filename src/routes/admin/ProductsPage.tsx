@@ -29,17 +29,22 @@ function priceFor(cost: number, mode: PricingMode, customPct: number | null): nu
 
 interface CommercialForm {
   id: string;
-  name: string;            // read-only
-  unitCostBRL: number;     // read-only
+  name: string;
+  unitCostBRL: number;
   description: string;
   image_url: string | null;
   pricing_mode: PricingMode;
   custom_markup_pct: number | null;
   show_price: boolean;
   is_kit: boolean;
+  product_type: 'fabricacao' | 'revenda';
+  // revenda
+  unit: string;
+  direct_cost_brl: number | null;
 }
 
 export default function ProductsPage() {
+  const [tab, setTab] = useState<'fabricacao' | 'revenda'>('fabricacao');
   const [products, setProducts] = useState<ProductWithCost[]>([]);
   const [loading, setLoading] = useState(true);
   const [listError, setListError] = useState<string | null>(null);
@@ -151,8 +156,11 @@ export default function ProductsPage() {
       image_url: p.image_url,
       pricing_mode: p.pricing_mode,
       custom_markup_pct: p.custom_markup_pct != null ? Number(p.custom_markup_pct) : null,
-      show_price: (p as any).show_price ?? false,
-      is_kit: isKit,
+      show_price:      (p as any).show_price      ?? false,
+      is_kit:          isKit,
+      product_type:    ((p as any).product_type   ?? 'fabricacao') as 'fabricacao' | 'revenda',
+      unit:            (p as any).unit            ?? '',
+      direct_cost_brl: (p as any).direct_cost_brl != null ? Number((p as any).direct_cost_brl) : null,
     });
     if (isKit) { loadKitComponents(p.id); loadKitBomExpanded(p.id); }
   }
@@ -207,8 +215,11 @@ export default function ProductsPage() {
       pricing_mode: form.pricing_mode,
       custom_markup_pct: form.pricing_mode === 'custom' ? form.custom_markup_pct : null,
       sale_price_brl: computedSalePrice,
-      show_price: form.show_price,
-      is_kit:     form.is_kit,
+      show_price:      form.show_price,
+      is_kit:          form.is_kit,
+      product_type:    form.product_type,
+      unit:            form.unit.trim() || null,
+      direct_cost_brl: form.product_type === 'revenda' ? (form.direct_cost_brl ?? null) : null,
     } as any;
 
     const { error } = await supabase.from('products').update(productPayload).eq('id', form.id);
@@ -219,14 +230,37 @@ export default function ProductsPage() {
     await loadProducts();
   }
 
+  const tabProducts = products.filter(p => ((p as any).product_type ?? 'fabricacao') === tab);
+
   return (
     <div className="p-8">
-      <div className="mb-6">
+      <div className="mb-4">
         <h1 className="text-2xl font-semibold text-slate-900">Produtos</h1>
         <p className="text-sm text-slate-500">
-          Catálogo comercial. Edite foto, descrição de venda e markup. Pra alterar BOM e custo,
-          vá pra aba <strong>Custos</strong>.
+          Catálogo comercial. Edite foto, descrição e markup.
         </p>
+      </div>
+
+      {/* ── Tabs ── */}
+      <div className="mb-6 flex gap-1 border-b border-slate-200">
+        {([
+          { id: 'fabricacao', label: '🔧 Fabricação', hint: 'com BOM e componentes' },
+          { id: 'revenda',    label: '📦 Revenda',    hint: 'custo direto, sem BOM' },
+        ] as const).map(t => (
+          <button
+            key={t.id}
+            type="button"
+            onClick={() => setTab(t.id)}
+            className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
+              tab === t.id
+                ? 'border-brand-500 text-brand-700'
+                : 'border-transparent text-slate-500 hover:text-slate-700'
+            }`}
+          >
+            {t.label}
+            <span className="text-xs font-normal text-slate-400">({tabProducts.length > 0 && tab === t.id ? tabProducts.length : products.filter(p => ((p as any).product_type ?? 'fabricacao') === t.id).length})</span>
+          </button>
+        ))}
       </div>
 
       {listError && (
@@ -237,15 +271,17 @@ export default function ProductsPage() {
 
       {loading ? (
         <p className="text-sm text-slate-500">Carregando…</p>
-      ) : products.length === 0 ? (
+      ) : tabProducts.length === 0 ? (
         <Card>
           <div className="p-6 text-sm text-slate-600">
-            Nenhum produto cadastrado ainda. Crie o primeiro na aba <strong>Custos</strong>.
+            {tab === 'fabricacao'
+              ? <>Nenhum produto de fabricação cadastrado. Crie na aba <strong>Custos</strong>.</>
+              : 'Nenhum produto de revenda cadastrado ainda.'}
           </div>
         </Card>
       ) : (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-          {products.map((p) => (
+          {tabProducts.map((p) => (
             <button
               key={p.id}
               type="button"
@@ -254,11 +290,7 @@ export default function ProductsPage() {
             >
               <div className="aspect-[4/3] w-full overflow-hidden bg-slate-100">
                 {p.image_url ? (
-                  <img
-                    src={p.image_url}
-                    alt={p.name}
-                    className="h-full w-full object-cover transition-transform group-hover:scale-105"
-                  />
+                  <img src={p.image_url} alt={p.name} className="h-full w-full object-cover transition-transform group-hover:scale-105" />
                 ) : (
                   <div className="flex h-full w-full items-center justify-center text-slate-300">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="h-12 w-12">
@@ -269,19 +301,22 @@ export default function ProductsPage() {
               </div>
               <div className="flex-1 p-4">
                 <h3 className="font-medium text-slate-900 line-clamp-2">{p.name}</h3>
+                {(p as any).unit && (
+                  <span className="mt-1 inline-block rounded-full bg-slate-100 px-2 py-0.5 text-[10px] text-slate-500">{(p as any).unit}</span>
+                )}
                 <dl className="mt-3 space-y-1 text-sm">
-                  <div className="flex items-baseline justify-between">
-                    <dt className="text-xs uppercase tracking-wide text-slate-500">Venda</dt>
-                    <dd className="font-semibold text-brand-600">
-                      {p.sale_price_brl != null ? formatBRL(Number(p.sale_price_brl)) : '—'}
-                    </dd>
-                  </div>
                   <div className="flex items-baseline justify-between">
                     <dt className="text-xs uppercase tracking-wide text-slate-500">Custo</dt>
                     <dd className="text-slate-700">
                       {Number(p.unit_cost_brl) > 0 ? formatBRL(Number(p.unit_cost_brl)) : '—'}
                     </dd>
                   </div>
+                  {p.sale_price_brl != null && (
+                    <div className="flex items-baseline justify-between">
+                      <dt className="text-xs uppercase tracking-wide text-slate-500">Venda</dt>
+                      <dd className="font-semibold text-brand-600">{formatBRL(Number(p.sale_price_brl))}</dd>
+                    </div>
+                  )}
                 </dl>
               </div>
             </button>
@@ -349,28 +384,60 @@ export default function ProductsPage() {
                   </div>
 
                   <div className="space-y-4">
-                    <div>
-                      <Label>Custo unitário</Label>
-                      <div className="flex h-10 items-center rounded-md border border-slate-200 bg-slate-50 px-3 text-sm font-medium text-slate-700">
-                        {form.unitCostBRL > 0 ? formatBRL(form.unitCostBRL) : '—'}
+                    {form.product_type === 'revenda' ? (
+                      <>
+                        {/* Custo direto */}
+                        <div>
+                          <Label htmlFor="prd-cost">Custo direto (R$)</Label>
+                          <input
+                            id="prd-cost"
+                            type="number"
+                            min={0}
+                            step={0.01}
+                            value={form.direct_cost_brl ?? ''}
+                            onChange={e => patchForm({ direct_cost_brl: e.target.value === '' ? null : Number(e.target.value) })}
+                            placeholder="0,00"
+                            className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm focus:border-brand-500 focus:outline-none"
+                          />
+                        </div>
+                        {/* Unidade */}
+                        <div>
+                          <Label htmlFor="prd-unit">Unidade de medida</Label>
+                          <input
+                            id="prd-unit"
+                            type="text"
+                            value={form.unit}
+                            onChange={e => patchForm({ unit: e.target.value })}
+                            placeholder="ex: kg, rolo, metro, caixa, un"
+                            className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm focus:border-brand-500 focus:outline-none"
+                          />
+                        </div>
+                      </>
+                    ) : (
+                      <div>
+                        <Label>Custo unitário</Label>
+                        <div className="flex h-10 items-center rounded-md border border-slate-200 bg-slate-50 px-3 text-sm font-medium text-slate-700">
+                          {form.unitCostBRL > 0 ? formatBRL(form.unitCostBRL) : '—'}
+                        </div>
+                        <p className="mt-1 text-xs text-slate-400">Calculado a partir da BOM na aba Custos.</p>
                       </div>
-                      <p className="mt-1 text-xs text-slate-400">
-                        Definido na aba Custos a partir da BOM.
-                      </p>
-                    </div>
+                    )}
                     <div>
-                      <Label htmlFor="prd-desc">Descrição de venda</Label>
+                      <Label htmlFor="prd-desc">
+                        {form.product_type === 'revenda' ? 'Informações complementares' : 'Descrição de venda'}
+                      </Label>
                       <Textarea
                         id="prd-desc"
                         value={form.description}
                         onChange={(e) => patchForm({ description: e.target.value })}
-                        placeholder="Texto comercial pra catálogo / proposta"
+                        placeholder={form.product_type === 'revenda' ? 'Especificações, referência do fornecedor, observações…' : 'Texto comercial pra catálogo / proposta'}
                       />
                     </div>
                   </div>
                 </div>
 
-                {/* ── Toggle Kit ── */}
+                {/* Kit só para fabricação */}
+                {form.product_type === 'fabricacao' && (<>
                 <div>
                   <Label>Composição do produto</Label>
                   <label className="flex cursor-pointer items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
@@ -508,6 +575,7 @@ export default function ProductsPage() {
                     </div>
                   </div>
                 )}
+                </>)}
 
                 <div>
                   <Label>Visibilidade do preço no WhatsApp</Label>
@@ -536,7 +604,7 @@ export default function ProductsPage() {
                   </label>
                 </div>
 
-                <div>
+                {form.product_type === 'fabricacao' && <div>
                   <Label>Preço de venda (escolha o modo)</Label>
                   <div className="space-y-1 rounded-md border border-slate-200 bg-slate-50 p-2 text-sm">
                     {([
@@ -625,7 +693,7 @@ export default function ProductsPage() {
                       </span>
                     </label>
                   </div>
-                </div>
+                </div>}
               </div>
 
               <div className="flex justify-end gap-3 border-t border-slate-200 px-5 py-3">

@@ -220,13 +220,18 @@ export const toolDeclarations = [
   // ---------- ESCRITAS — PRODUTOS ----------
   {
     name: 'create_product',
-    description: 'Cria um novo produto (sem BOM ainda — adicione com add_bom_item depois). Para criar produto + BOM de uma vez, prefira setup_product_bom.',
+    description:
+      'Cria um novo produto. ' +
+      'Para fabricação (tem BOM): product_type="fabricacao" — use setup_product_bom para criar com BOM completa. ' +
+      'Para revenda (sem BOM): product_type="revenda", informe direct_cost_brl e unit (kg, rolo, metro, un, cx...).',
     parameters: {
       type: 'OBJECT' as Type,
       properties: {
-        name:         { type: 'STRING' as Type },
-        description:  { type: 'STRING' as Type },
-        product_type: { type: 'STRING' as Type, description: '"revenda" (default) ou "fabricacao".' },
+        name:            { type: 'STRING' as Type },
+        description:     { type: 'STRING' as Type, description: 'Informações complementares (revenda) ou descrição comercial (fabricação).' },
+        product_type:    { type: 'STRING' as Type, description: '"fabricacao" ou "revenda".' },
+        unit:            { type: 'STRING' as Type, description: 'Unidade de medida para revenda. Ex: kg, rolo, metro, caixa, un.' },
+        direct_cost_brl: { type: 'NUMBER' as Type,  description: 'Custo direto em R$ para produtos de revenda (sem BOM).' },
       },
       required: ['name'],
     },
@@ -234,18 +239,18 @@ export const toolDeclarations = [
   {
     name: 'update_product',
     description:
-      'Atualiza dados de um produto. Use pricing_mode pra mudar markup (markup_30, markup_50, ponto_7, custom). Se custom, passar custom_markup_pct.',
+      'Atualiza dados de um produto. Use pricing_mode pra mudar markup (markup_30, markup_50, ponto_7, custom). ' +
+      'Para revenda: pode atualizar direct_cost_brl e unit.',
     parameters: {
       type: 'OBJECT' as Type,
       properties: {
-        product_id: { type: 'STRING' as Type },
-        name: { type: 'STRING' as Type },
-        description: { type: 'STRING' as Type },
-        pricing_mode: {
-          type: 'STRING' as Type,
-          description: '"markup_30" | "markup_50" | "ponto_7" | "custom"',
-        },
+        product_id:      { type: 'STRING' as Type },
+        name:            { type: 'STRING' as Type },
+        description:     { type: 'STRING' as Type },
+        pricing_mode:    { type: 'STRING' as Type, description: '"markup_30" | "markup_50" | "ponto_7" | "custom"' },
         custom_markup_pct: { type: 'NUMBER' as Type },
+        unit:            { type: 'STRING' as Type, description: 'Unidade de medida (revenda).' },
+        direct_cost_brl: { type: 'NUMBER' as Type,  description: 'Custo direto (revenda).' },
       },
       required: ['product_id'],
     },
@@ -2595,6 +2600,8 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
         const updates: any = {};
         if (args.description) updates.description = String(args.description).trim();
         if (args.product_type) updates.product_type = String(args.product_type).trim();
+        if (args.unit) updates.unit = String(args.unit).trim();
+        if (args.direct_cost_brl != null) updates.direct_cost_brl = Number(args.direct_cost_brl);
         if (Object.keys(updates).length > 0) {
           await supabase.from('products').update(updates).eq('id', found.id);
         }
@@ -2604,6 +2611,8 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
       const payload: any = { name: pname };
       if (args.description) payload.description = String(args.description).trim();
       if (args.product_type) payload.product_type = String(args.product_type).trim();
+      if (args.unit) payload.unit = String(args.unit).trim();
+      if (args.direct_cost_brl != null) payload.direct_cost_brl = Number(args.direct_cost_brl);
       const { data, error } = await supabase
         .from('products').insert(payload).select('id, name').single();
       if (error) throw new Error(error.message);
@@ -2617,6 +2626,8 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
       if (args.name) payload.name = String(args.name).trim();
       if (args.description !== undefined)
         payload.description = args.description ? String(args.description).trim() : null;
+      if (args.unit !== undefined) payload.unit = args.unit ? String(args.unit).trim() : null;
+      if (args.direct_cost_brl != null) payload.direct_cost_brl = Number(args.direct_cost_brl);
       if (args.pricing_mode) {
         const allowed = ['markup_30', 'markup_50', 'ponto_7', 'custom'];
         if (!allowed.includes(args.pricing_mode)) {

@@ -607,14 +607,23 @@ Exemplo de resposta ideal: "Faltam 20 bobinas para o pedido SYVAL #5814. Já foi
 ## Produtos e BOM
 
 **Tipos de produto — IMPORTANTE:**
-Cada produto tem um tipo que define como o estoque é verificado:
-- **revenda**: compra o produto pronto e vende direto. Estoque = quantidade do próprio produto.
-- **fabricacao**: montado internamente com componentes do BOM. Estoque = componentes em mãos.
+- **fabricacao**: montado internamente com componentes (BOM). Aparece na aba Fabricação. Custo = soma da BOM.
+- **revenda**: comprado pronto e vendido direto. Aparece na aba Revenda. Custo = direct_cost_brl. Pode ter unidade (kg, rolo, metro, caixa, un). NÃO tem BOM.
 
-Quando o usuário disser o tipo:
-- "esse produto é de revenda" / "X é revenda" → set_product_type(product_name="X", product_type="revenda")
-- "esse produto é de fabricação/produção" → set_product_type(product_name="X", product_type="fabricacao")
-- Ao criar produto novo, sempre defina o tipo: setup_product_bom(product_type="fabricacao") ou create_product(product_type="revenda")
+Criar produto de revenda:
+- "cadastra o produto Cabo USB de revenda, custa R$12 o rolo" → create_product(name="Cabo USB", product_type="revenda", direct_cost_brl=12, unit="rolo")
+- "cadastra o arame galvanizado, R$45/kg" → create_product(name="Arame Galvanizado", product_type="revenda", direct_cost_brl=45, unit="kg")
+
+Criar produto de fabricação (com BOM):
+- use setup_product_bom(product_type="fabricacao") — cria o produto e já monta a BOM de uma vez
+
+Mudar o tipo de um produto existente:
+- "esse produto é de revenda" → set_product_type(product_name="X", product_type="revenda")
+- "esse produto é de fabricação" → set_product_type(product_name="X", product_type="fabricacao")
+
+Atualizar custo/unidade de revenda:
+- "atualiza o custo do Cabo USB para R$15" → update_product(product_id=..., direct_cost_brl=15)
+- "a unidade do arame é kg" → update_product(product_id=..., unit="kg")
 
 **Verificação inteligente de atendimento de pedidos:**
 - "consigo atender o pedido X?" / "tem estoque para o pedido 5814?" → check_order_fulfillment(numero_venda="5814")
