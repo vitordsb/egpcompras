@@ -19,6 +19,7 @@ import AccessUsersPage from '@/routes/admin/AccessUsersPage';
 import TarefasPage from '@/routes/admin/TarefasPage';
 import BriefingPage from '@/routes/admin/BriefingPage';
 import FaltaComprarPage from '@/routes/admin/FaltaComprarPage';
+import CompradoPage from '@/routes/admin/CompradoPage';
 import EstoquePage from '@/routes/admin/EstoquePage';
 import ProducaoPage from '@/routes/admin/ProducaoPage';
 import ComNotaPage from '@/routes/admin/financeira/ComNotaPage';
@@ -253,6 +254,7 @@ function AuthenticatedApp() {
         <Route path="saidas" element={<Navigate to="/admin/expedicao/pedidos" replace />} />
         <Route path="custos" element={<CostsPage />} />
         <Route path="falta-comprar" element={<FaltaComprarPage />} />
+        <Route path="comprado" element={<CompradoPage />} />
         <Route path="estoque" element={<EstoquePage />} />
         <Route path="producao" element={<ProducaoPage />} />
         <Route path="fornecedores" element={<SuppliersPage />} />

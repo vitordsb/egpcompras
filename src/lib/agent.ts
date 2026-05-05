@@ -588,6 +588,14 @@ Quando o usuário disser "todo dia às X", "toda segunda às Y", "marque pra..."
 - "material X, vai vir por tal transportadora, no dia tal" → register_incoming_material(...)
   Se já existe um purchase_need para esse item, atualiza. Senão, cria novo.
 
+**Marcar chegada (alimenta estoque AUTOMATICAMENTE):**
+- "chegou as 1000 argolas" / "as bobinas chegaram" / "marca como chegou X" → update_purchase_need_status(item_name="X", new_status="chegou")
+  Esta tool, ao receber new_status="chegou", além de mudar o status do purchase_need, AUTOMATICAMENTE:
+  1. Adiciona a quantidade ao stock_items (cria item se não existir)
+  2. Registra um stock_movement de tipo "entrada"
+  Não chame register_stock_entry separadamente — já é feito.
+  Confirme com o usuário a quantidade adicionada: "Chegou ✓ 1000 argolas adicionadas ao estoque."
+
 **Consultar o que está a caminho:**
 - "o que está chegando?" / "quando chega o BT151?" → list_incoming_materials(item_name="BT151")
 

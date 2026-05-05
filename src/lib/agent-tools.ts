@@ -5176,7 +5176,6 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
       if (!newStatus) throw new Error('new_status é obrigatório.');
       let needId = args.need_id ? String(args.need_id) : null;
       if (!needId) {
-        // Resolve por item_name + pedido
         let q = supabase.from('purchase_needs').select('id').limit(1);
         if (args.item_name) q = q.ilike('item_name', `%${String(args.item_name)}%`);
         if (args.shipment_id) q = q.eq('shipment_id', String(args.shipment_id));
@@ -5188,8 +5187,6 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
         needId = (data?.[0] as any)?.id ?? null;
       }
       if (!needId) {
-        // Item não existe ainda — cria direto com o status informado
-        // (caso comum: usuário diz "já temos X" sem ter registrado antes)
         const itemName = args.item_name ? String(args.item_name).trim() : null;
         if (!itemName) return { updated: false, message: 'Item não encontrado e item_name não informado para criar.' };
         let shipId: string | null = null;
@@ -5203,14 +5200,63 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
           .insert({ item_name: itemName, shipment_id: shipId, status: newStatus })
           .select('id').single();
         if (createErr) throw new Error(createErr.message);
-        return { updated: true, created: true, need_id: created?.id, new_status: newStatus };
+        needId = (created as any)?.id ?? null;
+      } else {
+        const { error } = await supabase
+          .from('purchase_needs')
+          .update({ status: newStatus, updated_at: new Date().toISOString() })
+          .eq('id', needId);
+        if (error) throw new Error(error.message);
       }
-      const { error } = await supabase
-        .from('purchase_needs')
-        .update({ status: newStatus, updated_at: new Date().toISOString() })
-        .eq('id', needId);
-      if (error) throw new Error(error.message);
-      return { updated: true, need_id: needId, new_status: newStatus };
+
+      // Quando marca como "chegou": alimenta o estoque automaticamente
+      let stockEntry: any = null;
+      if (newStatus === 'chegou' && needId) {
+        const { data: need } = await supabase
+          .from('purchase_needs')
+          .select('item_name, item_code, quantity, ordered_quantity, unit, carrier, shipment:shipments(numero_venda)')
+          .eq('id', needId)
+          .maybeSingle();
+        const n = need as any;
+        const qty = Number(n?.ordered_quantity ?? n?.quantity ?? 0);
+        if (qty > 0) {
+          const code = (n.item_code ?? n.item_name).trim().toUpperCase().replace(/\s+/g, '_');
+          const { data: existing } = await supabase
+            .from('stock_items')
+            .select('id, quantity')
+            .ilike('item_code', code)
+            .maybeSingle();
+          if (existing) {
+            await supabase
+              .from('stock_items')
+              .update({ quantity: Number((existing as any).quantity) + qty, updated_at: new Date().toISOString() })
+              .eq('id', (existing as any).id);
+          } else {
+            await supabase
+              .from('stock_items')
+              .insert({ item_code: code, item_name: n.item_name, quantity: qty, unit: n.unit ?? 'un' });
+          }
+          await supabase.from('stock_movements').insert({
+            item_code: code,
+            item_name: n.item_name,
+            type: 'entrada',
+            quantity: qty,
+            notes: `Chegada${n.shipment?.numero_venda ? ` do pedido #${n.shipment.numero_venda}` : ''}${n.carrier ? ` via ${n.carrier}` : ''}`,
+            created_by: ctx.currentUser ?? null,
+          });
+          stockEntry = { quantity: qty, item_code: code, item_name: n.item_name, unit: n.unit ?? 'un' };
+        }
+      }
+
+      return {
+        updated: true,
+        need_id: needId,
+        new_status: newStatus,
+        stock_entry: stockEntry,
+        message: stockEntry
+          ? `Marcado como chegou e ${stockEntry.quantity} ${stockEntry.unit} adicionado(s) ao estoque automaticamente.`
+          : undefined,
+      };
     }
 
     case 'add_purchase_need_note': {

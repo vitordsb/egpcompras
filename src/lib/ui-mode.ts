@@ -27,8 +27,9 @@ export function writeUIMode(mode: UIMode): void {
 const LAST_ADMIN_ROUTE_KEY = 'appCompras.lastAdminRoute';
 
 export function readLastAdminRoute(): string {
-  if (typeof window === 'undefined') return '/admin';
-  return window.localStorage.getItem(LAST_ADMIN_ROUTE_KEY) ?? '/admin';
+  const DEFAULT_ROUTE = '/admin/expedicao/pedidos';
+  if (typeof window === 'undefined') return DEFAULT_ROUTE;
+  return window.localStorage.getItem(LAST_ADMIN_ROUTE_KEY) ?? DEFAULT_ROUTE;
 }
 
 export function writeLastAdminRoute(path: string): void {
