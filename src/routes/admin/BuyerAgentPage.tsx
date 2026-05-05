@@ -16,6 +16,7 @@ import { Button } from '@/components/ui/Button';
 import MarkdownText from '@/components/MarkdownText';
 import { cn } from '@/lib/utils';
 import { isCorrection, proposeMemoryFromCorrection, type MemoryProposal } from '@/lib/correction-detector';
+import { startRecording, transcribeAudio, type ActiveRecording } from '@/lib/voice-input';
 
 const QUICK_SUGGESTIONS = [
   'Qual o custo do produto X?',
@@ -102,6 +103,10 @@ export default function BuyerAgentPage() {
   const [memoryProposal, setMemoryProposal] = useState<MemoryProposal | null>(null);
   const [memorySaving, setMemorySaving] = useState(false);
   const [memoryProposing, setMemoryProposing] = useState(false);
+  const [recording, setRecording] = useState<ActiveRecording | null>(null);
+  const [recordingMs, setRecordingMs] = useState(0);
+  const [transcribing, setTranscribing] = useState(false);
+  const [voiceError, setVoiceError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
 
@@ -403,6 +408,55 @@ export default function BuyerAgentPage() {
     e.preventDefault();
     setIsDragging(false);
     if (e.dataTransfer.files.length > 0) await attachFiles(e.dataTransfer.files);
+  }
+
+  // Atualiza o cronômetro de gravação enquanto está rolando
+  useEffect(() => {
+    if (!recording) return;
+    const id = setInterval(() => setRecordingMs(Date.now() - recording.startedAt), 200);
+    return () => clearInterval(id);
+  }, [recording]);
+
+  async function startVoice() {
+    if (recording || transcribing) return;
+    setVoiceError(null);
+    try {
+      const r = await startRecording();
+      setRecording(r);
+      setRecordingMs(0);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setVoiceError(/permission|denied/i.test(msg) ? 'Permita o acesso ao microfone do navegador.' : msg);
+    }
+  }
+
+  async function stopVoice() {
+    if (!recording) return;
+    const r = recording;
+    setRecording(null);
+    setTranscribing(true);
+    try {
+      const blob = await r.stop();
+      const text = await transcribeAudio(blob);
+      if (text) {
+        setInput((prev) => (prev ? `${prev} ${text}` : text));
+        // Devolve o foco pro textarea pra revisar antes de enviar
+        inputRef.current?.focus();
+      } else {
+        setVoiceError('Não consegui entender o áudio. Tente de novo.');
+      }
+    } catch (err) {
+      setVoiceError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setTranscribing(false);
+    }
+  }
+
+  function cancelVoice() {
+    if (!recording) return;
+    recording.cancel();
+    setRecording(null);
+    setRecordingMs(0);
   }
 
   async function send(text?: string) {
@@ -1151,6 +1205,13 @@ export default function BuyerAgentPage() {
 
         <div className="border-t border-slate-200 bg-white px-4 py-3 md:px-8 md:py-4">
           <div className="mx-auto max-w-3xl space-y-2">
+            {/* Erro de voz */}
+            {voiceError && (
+              <div className="flex items-center justify-between gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-1.5 text-xs text-red-700">
+                <span>🎙 {voiceError}</span>
+                <button type="button" onClick={() => setVoiceError(null)} className="text-red-400 hover:text-red-700">×</button>
+              </div>
+            )}
             {/* Sugestão de memória a partir de correção do usuário */}
             {(memoryProposing || memoryProposal) && (
               <div className="flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm">
@@ -1269,6 +1330,62 @@ export default function BuyerAgentPage() {
                   <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m.75 12 3 3m0 0 3-3m-3 3v-6m-1.5-9H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" />
                 </svg>
               </button>
+
+              {/* Botão de microfone — gravar e transcrever via Gemini */}
+              {recording ? (
+                <div className="flex h-10 shrink-0 items-center gap-1 rounded-md border border-red-300 bg-red-50 px-2">
+                  <button
+                    type="button"
+                    onClick={stopVoice}
+                    disabled={transcribing}
+                    title="Parar gravação e transcrever"
+                    aria-label="Parar gravação"
+                    className="flex h-7 w-7 items-center justify-center rounded text-red-600 hover:bg-red-100 disabled:opacity-50"
+                  >
+                    <span className="block h-2.5 w-2.5 rounded-sm bg-red-600" />
+                  </button>
+                  <span className="font-mono text-xs font-semibold tabular-nums text-red-700">
+                    {Math.floor(recordingMs / 1000).toString().padStart(2, '0')}:{Math.floor((recordingMs % 1000) / 10).toString().padStart(2, '0')}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={cancelVoice}
+                    title="Cancelar gravação"
+                    aria-label="Cancelar gravação"
+                    className="flex h-7 w-7 items-center justify-center rounded text-red-400 hover:bg-red-100"
+                  >
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" className="h-3 w-3">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M4 4l8 8M12 4l-8 8" />
+                    </svg>
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={startVoice}
+                  disabled={running || transcribing}
+                  title={transcribing ? 'Transcrevendo…' : 'Gravar mensagem por voz'}
+                  aria-label="Gravar mensagem por voz"
+                  className={cn(
+                    'flex h-10 w-10 shrink-0 items-center justify-center rounded-md border transition-colors',
+                    transcribing
+                      ? 'border-amber-300 bg-amber-50 text-amber-600'
+                      : 'border-slate-300 text-slate-500 hover:border-slate-400 hover:text-slate-700',
+                    (running || transcribing) && 'cursor-not-allowed opacity-50'
+                  )}
+                >
+                  {transcribing ? (
+                    <svg viewBox="0 0 24 24" className="h-[18px] w-[18px] animate-spin text-amber-600">
+                      <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" fill="none" opacity="0.25" />
+                      <path d="M12 2a10 10 0 0 1 10 10" stroke="currentColor" strokeWidth="3" fill="none" strokeLinecap="round" />
+                    </svg>
+                  ) : (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-[18px] w-[18px]">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 18.75a6 6 0 0 0 6-6v-1.5m-6 7.5a6 6 0 0 1-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 0 1-3-3V4.5a3 3 0 1 1 6 0v8.25a3 3 0 0 1-3 3Z" />
+                    </svg>
+                  )}
+                </button>
+              )}
 
               <div className="flex-1 rounded-md border border-slate-300 bg-white focus-within:border-brand-500 focus-within:ring-1 focus-within:ring-brand-500">
                 <textarea
