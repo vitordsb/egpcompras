@@ -89,15 +89,15 @@ export default function FaltaComprarPage() {
 
   async function load() {
     setLoading(true);
-    let q = supabase
+    // Carrega todos os status sempre, para que os counts dos cards fiquem corretos.
+    // Filtragem por status acontece in-memory (ver `filteredNeeds` abaixo).
+    const { data } = await supabase
       .from('purchase_needs')
       .select(`id, item_name, item_code, quantity, unit, status, updated_at,
                shipment:shipments(id, client_name, numero_venda, numero_nfe),
                notes:purchase_need_notes(id, content, author, created_at)`)
       .order('updated_at', { ascending: false })
-      .limit(200);
-    if (statusFilter !== 'all') q = q.eq('status', statusFilter);
-    const { data } = await q;
+      .limit(500);
     setNeeds((data ?? []) as unknown as PurchaseNeed[]);
     setLoading(false);
   }
@@ -114,7 +114,7 @@ export default function FaltaComprarPage() {
     load();
     const id = setInterval(load, 30000);
     return () => clearInterval(id);
-  }, [statusFilter]);
+  }, []);
   useEffect(() => { loadStock(); }, []);
 
   function toggleNotes(id: string) {
@@ -150,8 +150,13 @@ export default function FaltaComprarPage() {
     load();
   }
 
+  // Filtragem in-memory (load traz todos os status — assim os counts ficam corretos)
+  const filteredNeeds = statusFilter === 'all'
+    ? needs
+    : needs.filter((n) => n.status === statusFilter);
+
   // Agrupa por pedido
-  const grouped = needs.reduce<Record<string, { shipment: PurchaseNeed['shipment']; items: PurchaseNeed[] }>>((acc, n) => {
+  const grouped = filteredNeeds.reduce<Record<string, { shipment: PurchaseNeed['shipment']; items: PurchaseNeed[] }>>((acc, n) => {
     const key = n.shipment?.id ?? '__sem_pedido__';
     if (!acc[key]) acc[key] = { shipment: n.shipment, items: [] };
     acc[key].items.push(n);

@@ -209,7 +209,32 @@ export default function CompradoPage() {
         created_by: userLabel ?? null,
       });
 
-      toast.success('Chegou ✓', `${qty} ${r.unit ?? 'un'} de ${r.item_name} adicionado(s) ao estoque.`);
+      // 4) cobertura: verifica se algum pedido ficou pronto pra sair
+      let readyHint = '';
+      if (r.shipment?.id) {
+        const { data: stillPending } = await supabase
+          .from('purchase_needs')
+          .select('id')
+          .eq('shipment_id', r.shipment.id)
+          .in('status', ['pendente', 'pedido']);
+        if (!stillPending || stillPending.length === 0) {
+          const { data: ship } = await supabase
+            .from('shipments')
+            .select('client_name, numero_venda, status')
+            .eq('id', r.shipment.id)
+            .eq('status', 'pending')
+            .maybeSingle();
+          if (ship) {
+            const s = ship as any;
+            readyHint = ` Pedido pronto pra sair: ${s.client_name}${s.numero_venda ? ` #${s.numero_venda}` : ''}.`;
+          }
+        }
+      }
+
+      toast.success(
+        readyHint ? '🎯 Chegou + pedido pronto' : 'Chegou ✓',
+        `${qty} ${r.unit ?? 'un'} de ${r.item_name} adicionado(s) ao estoque.${readyHint}`
+      );
       await load();
     } catch (err) {
       toast.error('Erro', err instanceof Error ? err.message : String(err));

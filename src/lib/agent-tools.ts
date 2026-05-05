@@ -5211,10 +5211,11 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
 
       // Quando marca como "chegou": alimenta o estoque automaticamente
       let stockEntry: any = null;
+      let shipmentsNowReady: any[] = [];
       if (newStatus === 'chegou' && needId) {
         const { data: need } = await supabase
           .from('purchase_needs')
-          .select('item_name, item_code, quantity, ordered_quantity, unit, carrier, shipment:shipments(numero_venda)')
+          .select('shipment_id, item_name, item_code, quantity, ordered_quantity, unit, carrier, shipment:shipments(numero_venda)')
           .eq('id', needId)
           .maybeSingle();
         const n = need as any;
@@ -5246,16 +5247,41 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
           });
           stockEntry = { quantity: qty, item_code: code, item_name: n.item_name, unit: n.unit ?? 'un' };
         }
+
+        // Verificação de cobertura: identifica pedidos que agora podem sair
+        // (pedidos onde TODOS os purchase_needs estão chegou/cancelado).
+        if (n?.shipment_id) {
+          const { data: pendingNeeds } = await supabase
+            .from('purchase_needs')
+            .select('id')
+            .eq('shipment_id', n.shipment_id)
+            .in('status', ['pendente', 'pedido']);
+          if (!pendingNeeds || pendingNeeds.length === 0) {
+            const { data: ship } = await supabase
+              .from('shipments')
+              .select('id, client_name, numero_venda, status')
+              .eq('id', n.shipment_id)
+              .eq('status', 'pending')
+              .maybeSingle();
+            if (ship) shipmentsNowReady.push(ship);
+          }
+        }
       }
+
+      const baseMsg = stockEntry
+        ? `Marcado como chegou e ${stockEntry.quantity} ${stockEntry.unit} adicionado(s) ao estoque automaticamente.`
+        : undefined;
+      const readyMsg = shipmentsNowReady.length > 0
+        ? ` 🎯 Pedido${shipmentsNowReady.length > 1 ? 's' : ''} agora pronto${shipmentsNowReady.length > 1 ? 's' : ''} para sair: ${shipmentsNowReady.map((s) => `${s.client_name}${s.numero_venda ? ` #${s.numero_venda}` : ''}`).join(', ')}`
+        : '';
 
       return {
         updated: true,
         need_id: needId,
         new_status: newStatus,
         stock_entry: stockEntry,
-        message: stockEntry
-          ? `Marcado como chegou e ${stockEntry.quantity} ${stockEntry.unit} adicionado(s) ao estoque automaticamente.`
-          : undefined,
+        shipments_now_ready: shipmentsNowReady,
+        message: (baseMsg ?? '') + readyMsg || undefined,
       };
     }
 

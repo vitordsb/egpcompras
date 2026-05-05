@@ -6,6 +6,7 @@ import Header from '@/components/Header';
 import QuickChatDrawer from '@/components/QuickChatDrawer';
 import { useInternalAuth } from '@/lib/auth-context';
 import { canAccessPath, type PageKey } from '@/lib/roles';
+import { useNavBadges, type NavBadges } from '@/hooks/useNavBadges';
 import {
   writeUIMode,
   writeLastAdminRoute,
@@ -19,6 +20,8 @@ interface NavItem {
   icon: ReactNode;
   optional?: boolean;
   children?: NavItem[];   // sub-itens (sem suporte recursivo, só 1 nível)
+  /** Chave do badge em useNavBadges — quando > 0 mostra pílula vermelha */
+  badgeKey?: 'comprado_atrasado';
 }
 
 // Itens operacionais — uso diário/semanal. Ordem reflete fluxo natural do dia.
@@ -148,6 +151,7 @@ const mainLinks: NavItem[] = [
         to: '/admin/comprado',
         label: 'Comprado',
         description: 'Encomendados, chegada e estoque',
+        badgeKey: 'comprado_atrasado',
         icon: (
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-3.5 w-3.5">
             <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 18.75a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 0 0-3 0m3 0h6m-9 0H3.375a1.125 1.125 0 0 1-1.125-1.125V14.25m17.25 4.5a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 0 0-3 0m3 0h1.125c.621 0 1.129-.504 1.09-1.124a17.902 17.902 0 0 0-3.213-9.193 2.056 2.056 0 0 0-1.58-.86H14.25M16.5 18.75h-2.25m0-11.177v-.958c0-.568-.422-1.048-.987-1.106a48.554 48.554 0 0 0-10.026 0 1.106 1.106 0 0 0-.987 1.106v7.635m12-6.677v6.677m0 4.5v-4.5m0 0h-12" />
@@ -350,10 +354,12 @@ function NavItemRow({
   item,
   onNavigate,
   compact = false,
+  badgeCount = 0,
 }: {
   item: NavItem;
   onNavigate?: () => void;
   compact?: boolean;
+  badgeCount?: number;
 }) {
   if (!item.to) return null; // grupo (com children) é tratado separadamente
   return (
@@ -391,6 +397,14 @@ function NavItemRow({
                   opcional
                 </span>
               )}
+              {badgeCount > 0 && (
+                <span
+                  className="ml-auto inline-flex min-w-[18px] items-center justify-center rounded-full bg-red-500 px-1.5 py-0.5 text-[10px] font-semibold text-white"
+                  title={`${badgeCount} item(ns) precisa(m) de atenção`}
+                >
+                  {badgeCount > 99 ? '99+' : badgeCount}
+                </span>
+              )}
             </span>
             {!compact && (
               <span className="hidden text-xs text-slate-500 2xl:block">{item.description}</span>
@@ -405,11 +419,18 @@ function NavItemRow({
 function NavGroup({
   item,
   onNavigate,
+  badges,
 }: {
   item: NavItem;
   onNavigate?: () => void;
+  badges: NavBadges;
 }) {
   const location = useLocation();
+  // Soma dos badges dos filhos — quando o grupo está fechado, mostra o total
+  const childrenBadgeTotal = (item.children ?? []).reduce(
+    (sum, c) => sum + (c.badgeKey ? badges[c.badgeKey] : 0),
+    0
+  );
   // Mantém aberto quando alguma rota filha estiver ativa
   const childActive = (item.children ?? []).some(
     (c) => c.to && location.pathname.startsWith(c.to)
@@ -441,7 +462,17 @@ function NavGroup({
           {item.icon}
         </span>
         <span className="flex-1 min-w-0">
-          <span className="text-sm font-medium">{item.label}</span>
+          <span className="flex items-center gap-2">
+            <span className="text-sm font-medium">{item.label}</span>
+            {!open && childrenBadgeTotal > 0 && (
+              <span
+                className="inline-flex min-w-[18px] items-center justify-center rounded-full bg-red-500 px-1.5 py-0.5 text-[10px] font-semibold text-white"
+                title={`${childrenBadgeTotal} item(ns) precisa(m) de atenção`}
+              >
+                {childrenBadgeTotal > 99 ? '99+' : childrenBadgeTotal}
+              </span>
+            )}
+          </span>
           <span className="hidden text-xs text-slate-500 2xl:block">{item.description}</span>
         </span>
         <svg
@@ -460,7 +491,13 @@ function NavGroup({
       {open && item.children && (
         <div className="mt-0.5 ml-4 space-y-0.5 border-l border-slate-200 pl-2">
           {item.children.map((c) => (
-            <NavItemRow key={c.to ?? c.label} item={c} onNavigate={onNavigate} compact />
+            <NavItemRow
+              key={c.to ?? c.label}
+              item={c}
+              onNavigate={onNavigate}
+              compact
+              badgeCount={c.badgeKey ? badges[c.badgeKey] : 0}
+            />
           ))}
         </div>
       )}
@@ -476,6 +513,7 @@ export default function AdminLayout() {
   const mode = useUIMode();
   const { userEmail, userRole, allowedPageKeys } = useInternalAuth();
   const isRhUser = userEmail != null && RH_EMAILS.includes(userEmail.toLowerCase());
+  const navBadges = useNavBadges();
   const isAdmin = userRole === 'admin';
   const pageKeys = allowedPageKeys === '*' ? null : (allowedPageKeys ?? []) as PageKey[];
 
@@ -661,9 +699,13 @@ export default function AdminLayout() {
           {mainLinks.filter(sectionVisible).map((l) => {
             const filtered = filterChildren(l);
             return filtered.children ? (
-              <NavGroup key={filtered.label} item={filtered} />
+              <NavGroup key={filtered.label} item={filtered} badges={navBadges} />
             ) : (
-              <NavItemRow key={filtered.to ?? filtered.label} item={filtered} />
+              <NavItemRow
+                key={filtered.to ?? filtered.label}
+                item={filtered}
+                badgeCount={filtered.badgeKey ? navBadges[filtered.badgeKey] : 0}
+              />
             );
           })}
           {/* RH — visível apenas para vitor@grupoegp e joane@grupoegp */}
@@ -712,6 +754,7 @@ export default function AdminLayout() {
                     },
                   ],
                 }}
+                badges={navBadges}
               />
             </>
           )}
