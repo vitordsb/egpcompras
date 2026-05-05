@@ -652,6 +652,16 @@ export default function PedidosPage() {
           onCardClick={(id) => setDetailId(id)}
           onMarkShipped={(s) => changeStatus(s, 'shipped')}
           onMoveToColumn={(s, target) => moveToKanbanColumn(s, target)}
+          onAddObservation={async (shipmentId, content) => {
+            const { error } = await supabase
+              .from('shipment_observations')
+              .insert({ shipment_id: shipmentId, content });
+            if (error) {
+              alert(friendlyDbError(error));
+              return;
+            }
+            await loadList();
+          }}
         />
       ) : (
         <Card>

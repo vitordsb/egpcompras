@@ -35,6 +35,8 @@ interface ProductOption {
 interface BomLink {
   product_id: string;
   component_id: string;
+  target_price_brl: number | null;
+  created_at: string;
 }
 
 const PAGE_SIZE = 25;
@@ -60,7 +62,7 @@ export default function ComponentsPage() {
     const [{ data: comps, error: ce }, { data: prods }, { data: links }] = await Promise.all([
       supabase.from('components').select('*').order('name'),
       supabase.from('products').select('id, name').order('name'),
-      supabase.from('bom_items').select('product_id, component_id'),
+      supabase.from('bom_items').select('product_id, component_id, target_price_brl, created_at'),
     ]);
     if (ce) setError(ce.message);
     else setComponents((comps ?? []) as Component[]);
@@ -253,12 +255,25 @@ export default function ComponentsPage() {
                 <tr>
                   <th className="px-5 py-3">Nome</th>
                   <th className="px-5 py-3 text-center">Usado em</th>
+                  <th className="px-5 py-3 text-right">
+                    {productFilter ? 'Custo neste produto' : 'Último custo'}
+                  </th>
                   <th className="px-5 py-3"></th>
                 </tr>
               </thead>
               <tbody>
                 {visible.map((c) => {
-                  const usage = bomLinks.filter((l) => l.component_id === c.id).length;
+                  const links = bomLinks.filter((l) => l.component_id === c.id);
+                  const usage = links.length;
+                  // Quando filtrado por produto: mostra o target daquele bom_item.
+                  // Sem filtro: mostra o target mais recente entre os bom_items do componente.
+                  let cost: number | null = null;
+                  if (productFilter) {
+                    cost = links.find((l) => l.product_id === productFilter)?.target_price_brl ?? null;
+                  } else {
+                    const sorted = [...links].sort((a, b) => (b.created_at ?? '').localeCompare(a.created_at ?? ''));
+                    cost = sorted.find((l) => l.target_price_brl != null)?.target_price_brl ?? null;
+                  }
                   return (
                     <tr key={c.id} className="border-b border-slate-100 last:border-0">
                       <td className="px-5 py-3 font-medium text-slate-900">{c.name}</td>
@@ -270,6 +285,11 @@ export default function ComponentsPage() {
                             {usage} {usage === 1 ? 'produto' : 'produtos'}
                           </span>
                         )}
+                      </td>
+                      <td className="px-5 py-3 text-right text-slate-700">
+                        {cost != null
+                          ? <span className="font-medium">R$ {Number(cost).toLocaleString('pt-BR', { minimumFractionDigits: 4 })}</span>
+                          : <span className="text-xs text-slate-300">—</span>}
                       </td>
                       <td className="px-5 py-3 text-right">
                         <button

@@ -1,7 +1,9 @@
-import { useMemo, useState, type DragEvent } from 'react';
+import { useMemo, useState, type DragEvent, type FormEvent } from 'react';
 import type { Shipment } from '@/types/db';
 import { cn } from '@/lib/utils';
 import { isLate, isOnTime, formatDate } from './shared';
+import { Button } from '@/components/ui/Button';
+import { Textarea } from '@/components/ui/Input';
 
 interface ShipmentRow extends Shipment {
   observations_count?: number;
@@ -61,6 +63,7 @@ interface KanbanViewProps {
   onCardClick: (id: string) => void;
   onMarkShipped: (s: ShipmentRow) => void | Promise<void>;
   onMoveToColumn: (s: ShipmentRow, target: ColumnKey) => void | Promise<void>;
+  onAddObservation: (shipmentId: string, content: string) => Promise<void>;
 }
 
 export default function KanbanView({
@@ -68,9 +71,26 @@ export default function KanbanView({
   onCardClick,
   onMarkShipped,
   onMoveToColumn,
+  onAddObservation,
 }: KanbanViewProps) {
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [hoverColumn, setHoverColumn] = useState<ColumnKey | null>(null);
+  const [obsFor, setObsFor] = useState<ShipmentRow | null>(null);
+  const [obsText, setObsText] = useState('');
+  const [obsSaving, setObsSaving] = useState(false);
+
+  async function submitObservation(e: FormEvent) {
+    e.preventDefault();
+    if (!obsFor || !obsText.trim()) return;
+    setObsSaving(true);
+    try {
+      await onAddObservation(obsFor.id, obsText.trim());
+      setObsFor(null);
+      setObsText('');
+    } finally {
+      setObsSaving(false);
+    }
+  }
 
   const grouped = useMemo(() => {
     const acc: Record<ColumnKey, ShipmentRow[]> = {
@@ -120,6 +140,7 @@ export default function KanbanView({
   }
 
   return (
+    <>
     <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
       {COLUMNS.map((col) => (
         <div
@@ -153,7 +174,11 @@ export default function KanbanView({
                   onDragStart={(e) => onDragStart(e, s)}
                   onDragEnd={onDragEnd}
                   onMarkShipped={() => onMarkShipped(s)}
-                  showNextButton={col.key !== 'shipped'}
+                  onAddObservation={() => {
+                    setObsFor(s);
+                    setObsText('');
+                  }}
+                  showActions={col.key !== 'shipped'}
                 />
               ))
             )}
@@ -161,6 +186,53 @@ export default function KanbanView({
         </div>
       ))}
     </div>
+
+    {obsFor && (
+      <div
+        className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4"
+        onClick={() => !obsSaving && setObsFor(null)}
+      >
+        <div
+          className="w-full max-w-md rounded-lg bg-white shadow-lg"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <form onSubmit={submitObservation}>
+            <div className="border-b border-slate-200 px-5 py-4">
+              <h2 className="text-base font-semibold text-slate-900">
+                Nova observação
+              </h2>
+              <p className="mt-1 text-xs text-slate-500">
+                Para {obsFor.client_trade_name ?? obsFor.client_name}
+                {obsFor.numero_venda ? ` — Pedido #${obsFor.numero_venda}` : ''}
+              </p>
+            </div>
+            <div className="px-5 py-4">
+              <Textarea
+                value={obsText}
+                onChange={(e) => setObsText(e.target.value)}
+                placeholder="Ex: cliente pediu para entregar depois das 14h"
+                rows={4}
+                autoFocus
+              />
+            </div>
+            <div className="flex justify-end gap-3 border-t border-slate-200 px-5 py-3">
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => setObsFor(null)}
+                disabled={obsSaving}
+              >
+                Cancelar
+              </Button>
+              <Button type="submit" disabled={obsSaving || !obsText.trim()}>
+                {obsSaving ? 'Salvando…' : 'Salvar observação'}
+              </Button>
+            </div>
+          </form>
+        </div>
+      </div>
+    )}
+    </>
   );
 }
 
@@ -171,7 +243,8 @@ interface KanbanCardProps {
   onDragStart: (e: DragEvent<HTMLDivElement>) => void;
   onDragEnd: () => void;
   onMarkShipped: () => void;
-  showNextButton: boolean;
+  onAddObservation: () => void;
+  showActions: boolean;
 }
 
 function KanbanCard({
@@ -181,7 +254,8 @@ function KanbanCard({
   onDragStart,
   onDragEnd,
   onMarkShipped,
-  showNextButton,
+  onAddObservation,
+  showActions,
 }: KanbanCardProps) {
   const dateLabel = s.status === 'shipped' && s.data_saida
     ? `Saiu em ${formatDate(s.data_saida)}`
@@ -254,17 +328,38 @@ function KanbanCard({
         </div>
       )}
 
-      {showNextButton && (
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            onMarkShipped();
-          }}
-          className="mt-3 w-full rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1.5 text-xs font-semibold text-emerald-700 transition-colors hover:bg-emerald-100"
-        >
-          → Próxima etapa (Saiu)
-        </button>
+      {showActions && (
+        <div className="mt-2 flex items-center gap-1.5 text-[11px] text-slate-500">
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onMarkShipped();
+            }}
+            className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 hover:bg-emerald-50 hover:text-emerald-700"
+            title="Marcar como saiu"
+          >
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" className="h-3 w-3">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M3 8h10m-3-3 3 3-3 3" />
+            </svg>
+            Registrar saída
+          </button>
+          <span className="text-slate-300">·</span>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onAddObservation();
+            }}
+            className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 hover:bg-purple-50 hover:text-purple-700"
+            title="Adicionar observação"
+          >
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" className="h-3 w-3">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M3 4h10M3 8h10M3 12h6" />
+            </svg>
+            Observação
+          </button>
+        </div>
       )}
     </div>
   );
