@@ -14,6 +14,27 @@ import ShipmentAttachmentsPanel from '@/components/ShipmentAttachmentsPanel';
 import { useInternalAuth } from '@/lib/auth-context';
 import { useBodyScrollLock } from '@/hooks/useBodyScrollLock';
 import PortalOverlay from '@/components/ui/PortalOverlay';
+import KanbanView from './KanbanView';
+
+type ViewMode = 'table' | 'kanban';
+const VIEW_MODE_STORAGE_KEY = 'pedidos.viewMode';
+
+function loadViewMode(userKey: string): ViewMode {
+  try {
+    const v = localStorage.getItem(`${VIEW_MODE_STORAGE_KEY}:${userKey}`);
+    return v === 'kanban' ? 'kanban' : 'table';
+  } catch {
+    return 'table';
+  }
+}
+
+function saveViewMode(userKey: string, mode: ViewMode) {
+  try {
+    localStorage.setItem(`${VIEW_MODE_STORAGE_KEY}:${userKey}`, mode);
+  } catch {
+    /* ignore */
+  }
+}
 
 const PAGE_SIZE = 9;
 
@@ -77,12 +98,19 @@ const emptyForm: FormState = {
 
 export default function PedidosPage() {
   const { userLabel } = useInternalAuth();
+  const userKey = userLabel ?? 'anon';
   const [list, setList] = useState<ShipmentRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [listError, setListError] = useState<string | null>(null);
   // 'open' (default) = pendentes + atrasados — esconde saíram/voltaram/cancelados
   const [statusFilter, setStatusFilter] = useState<DisplayStatus | 'all' | 'open' | 'with-obs'>('open');
   const [search, setSearch] = useState('');
+  const [viewMode, setViewModeState] = useState<ViewMode>(() => loadViewMode(userKey));
+
+  function setViewMode(mode: ViewMode) {
+    setViewModeState(mode);
+    saveViewMode(userKey, mode);
+  }
 
   const [form, setForm] = useState<FormState | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
@@ -368,6 +396,39 @@ export default function PedidosPage() {
     await loadList();
   }
 
+  // Drag & drop entre colunas do kanban — ajusta status e/ou data_prevista
+  async function moveToKanbanColumn(
+    s: ShipmentRow,
+    target: 'late' | 'today' | 'on_time' | 'shipped'
+  ) {
+    const today = new Date();
+    const todayISO = today.toISOString().slice(0, 10);
+    const yesterday = new Date(today.getTime() - 86400000).toISOString().slice(0, 10);
+    const nextWeek = new Date(today.getTime() + 7 * 86400000).toISOString().slice(0, 10);
+
+    let payload: Record<string, any> = { updated_at: new Date().toISOString() };
+
+    if (target === 'shipped') {
+      if (!window.confirm(`Confirma que o pedido de ${s.client_name} saiu?`)) return;
+      payload.status = 'shipped';
+      payload.data_saida = new Date().toISOString();
+    } else {
+      // Voltando para pendente (vindo de "Saiu") ou movendo entre colunas pendentes
+      payload.status = 'pending';
+      if (s.status === 'shipped') payload.data_saida = null;
+      if (target === 'late') payload.data_prevista = yesterday;
+      else if (target === 'today') payload.data_prevista = todayISO;
+      else if (target === 'on_time') payload.data_prevista = nextWeek;
+    }
+
+    const { error } = await supabase.from('shipments').update(payload).eq('id', s.id);
+    if (error) {
+      alert(friendlyDbError(error));
+      return;
+    }
+    await loadList();
+  }
+
   // ---- Detalhes (modal de timeline) -------------------------------
 
   useEffect(() => {
@@ -536,6 +597,40 @@ export default function PedidosPage() {
             </button>
           )}
         </div>
+        <div className="inline-flex shrink-0 rounded-lg border border-slate-200 bg-white p-0.5">
+          <button
+            type="button"
+            onClick={() => setViewMode('table')}
+            className={cn(
+              'inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors',
+              viewMode === 'table'
+                ? 'bg-brand-600 text-white shadow-sm'
+                : 'text-slate-600 hover:bg-slate-100'
+            )}
+            title="Visualizar em tabela"
+          >
+            <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" className="h-3.5 w-3.5">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M3 5h14M3 10h14M3 15h14" />
+            </svg>
+            Tabela
+          </button>
+          <button
+            type="button"
+            onClick={() => setViewMode('kanban')}
+            className={cn(
+              'inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors',
+              viewMode === 'kanban'
+                ? 'bg-brand-600 text-white shadow-sm'
+                : 'text-slate-600 hover:bg-slate-100'
+            )}
+            title="Visualizar em kanban"
+          >
+            <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" className="h-3.5 w-3.5">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M4 4h4v12H4zM12 4h4v8h-4z" />
+            </svg>
+            Kanban
+          </button>
+        </div>
       </div>
 
       {loading ? (
@@ -550,6 +645,13 @@ export default function PedidosPage() {
             </p>
           </CardBody>
         </Card>
+      ) : viewMode === 'kanban' ? (
+        <KanbanView
+          shipments={filtered}
+          onCardClick={(id) => setDetailId(id)}
+          onMarkShipped={(s) => changeStatus(s, 'shipped')}
+          onMoveToColumn={(s, target) => moveToKanbanColumn(s, target)}
+        />
       ) : (
         <Card>
           <div className="overflow-x-auto">
