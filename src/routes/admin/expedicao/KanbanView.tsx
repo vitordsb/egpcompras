@@ -149,7 +149,7 @@ export default function KanbanView({
           onDragLeave={() => onDragLeave(col.key)}
           onDrop={(e) => onDrop(e, col.key)}
           className={cn(
-            'flex h-[calc(100vh-22rem)] min-h-[400px] flex-col rounded-lg border bg-slate-50/50 transition-colors',
+            'flex h-[calc(100vh-12rem)] min-h-[400px] flex-col rounded-lg border bg-slate-50/50 transition-colors',
             hoverColumn === col.key && 'border-brand-400 bg-brand-50/40 ring-2 ring-brand-200'
           )}
         >
