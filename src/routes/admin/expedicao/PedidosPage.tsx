@@ -545,40 +545,22 @@ export default function PedidosPage() {
         </div>
       )}
 
-      {/* Cards de stats — 'all' é o default (mostra todos os pedidos) */}
-      <div className="mb-6 grid gap-3 sm:grid-cols-3 lg:grid-cols-8">
-        {(
-          [
-            { key: 'all',      label: 'Todos',            value: list.length,   color: 'text-slate-900' },
-            { key: 'open',     label: 'Em aberto',        value: stats.open,    color: 'text-brand-700' },
-            { key: 'late',     label: 'Atrasados',        value: stats.late,    color: 'text-red-700' },
-            { key: 'pending',  label: 'Pendente (hoje)',  value: stats.pending, color: 'text-amber-700' },
-            { key: 'on_time',  label: 'No prazo',         value: stats.on_time, color: 'text-green-700' },
-            { key: 'shipped',  label: 'Saíram',           value: stats.shipped, color: 'text-emerald-700' },
-            { key: 'returned', label: 'Voltaram',         value: stats.returned, color: 'text-sky-700' },
-            { key: 'with-obs', label: 'Com observações',  value: stats.withObs, color: 'text-purple-700' },
-          ] as const
-        ).map((s) => (
-          <button
-            key={s.key}
-            type="button"
-            onClick={() => setStatusFilter(s.key as typeof statusFilter)}
-            className={cn(
-              'rounded-lg border p-3 text-left transition-colors',
-              statusFilter === s.key
-                ? 'border-brand-400 bg-brand-50 ring-1 ring-brand-200'
-                : s.key === 'late' && stats.late > 0
-                  ? 'border-red-200 bg-red-50 hover:bg-red-100'
-                  : 'border-slate-200 bg-white hover:bg-slate-50'
-            )}
-          >
-            <div className="text-xs uppercase tracking-wide text-slate-500">{s.label}</div>
-            <div className={cn('mt-1 text-2xl font-semibold', s.color)}>{s.value}</div>
-          </button>
-        ))}
-      </div>
-
+      {/* Filtro suspenso (esquerda), busca (centro), toggle de view (direita) */}
       <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center">
+        <FilterDropdown
+          value={statusFilter}
+          onChange={(v) => setStatusFilter(v)}
+          options={[
+            { key: 'all',      label: 'Todos',            count: list.length,   pillClass: 'bg-slate-100 text-slate-700' },
+            { key: 'open',     label: 'Em aberto',        count: stats.open,    pillClass: 'bg-brand-100 text-brand-700' },
+            { key: 'late',     label: 'Atrasados',        count: stats.late,    pillClass: 'bg-red-100 text-red-700' },
+            { key: 'pending',  label: 'Pendente (hoje)',  count: stats.pending, pillClass: 'bg-amber-100 text-amber-700' },
+            { key: 'on_time',  label: 'No prazo',         count: stats.on_time, pillClass: 'bg-green-100 text-green-700' },
+            { key: 'shipped',  label: 'Saíram',           count: stats.shipped, pillClass: 'bg-emerald-100 text-emerald-700' },
+            { key: 'returned', label: 'Voltaram',         count: stats.returned, pillClass: 'bg-sky-100 text-sky-700' },
+            { key: 'with-obs', label: 'Com observações',  count: stats.withObs, pillClass: 'bg-purple-100 text-purple-700' },
+          ]}
+        />
         <div className="flex flex-1 items-center gap-2">
           <Input
             value={search}
@@ -1313,6 +1295,103 @@ export default function PedidosPage() {
           </div>
         </div>
         </PortalOverlay>
+      )}
+    </div>
+  );
+}
+
+// ---------------- FilterDropdown ---------------------------------------
+
+type FilterKey = DisplayStatus | 'all' | 'open' | 'with-obs';
+
+interface FilterOption {
+  key: FilterKey;
+  label: string;
+  count: number;
+  pillClass: string;
+}
+
+function FilterDropdown({
+  value,
+  onChange,
+  options,
+}: {
+  value: FilterKey;
+  onChange: (v: FilterKey) => void;
+  options: FilterOption[];
+}) {
+  const [open, setOpen] = useState(false);
+  const current = options.find((o) => o.key === value) ?? options[0];
+
+  // Fecha ao clicar fora
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest('[data-filter-dropdown]')) setOpen(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [open]);
+
+  return (
+    <div className="relative shrink-0" data-filter-dropdown>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className={cn(
+          'inline-flex items-center gap-2 rounded-lg border bg-white px-3 py-2 text-sm font-medium shadow-sm transition-colors hover:bg-slate-50',
+          value !== 'all' ? 'border-brand-300 text-brand-700' : 'border-slate-200 text-slate-700'
+        )}
+      >
+        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" className="h-4 w-4">
+          <path strokeLinecap="round" strokeLinejoin="round" d="M3 5h14M5 10h10M8 15h4" />
+        </svg>
+        <span>{current.label}</span>
+        <span className={cn('inline-flex min-w-[20px] items-center justify-center rounded-full px-1.5 py-0.5 text-[10px] font-semibold', current.pillClass)}>
+          {current.count}
+        </span>
+        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" className={cn('h-3 w-3 transition-transform', open && 'rotate-180')}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M5 8l5 5 5-5" />
+        </svg>
+      </button>
+
+      {open && (
+        <div className="absolute left-0 top-full z-30 mt-1 w-64 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-lg">
+          <ul className="max-h-[70vh] overflow-y-auto py-1">
+            {options.map((opt) => (
+              <li key={opt.key}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onChange(opt.key);
+                    setOpen(false);
+                  }}
+                  className={cn(
+                    'flex w-full items-center justify-between gap-3 px-3 py-2 text-sm transition-colors',
+                    value === opt.key
+                      ? 'bg-brand-50 text-brand-800'
+                      : 'text-slate-700 hover:bg-slate-50'
+                  )}
+                >
+                  <span className="flex items-center gap-2">
+                    {value === opt.key && (
+                      <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2" className="h-3.5 w-3.5">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M4 10l4 4 8-8" />
+                      </svg>
+                    )}
+                    <span className={cn(value === opt.key ? 'font-medium' : '', value !== opt.key && 'pl-[22px]')}>
+                      {opt.label}
+                    </span>
+                  </span>
+                  <span className={cn('inline-flex min-w-[24px] items-center justify-center rounded-full px-1.5 py-0.5 text-[10px] font-semibold', opt.pillClass)}>
+                    {opt.count}
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
     </div>
   );
