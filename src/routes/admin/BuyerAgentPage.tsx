@@ -214,12 +214,26 @@ export default function BuyerAgentPage() {
   // ---- Selecionar / criar / excluir chat -------------------------------
 
   const lastChatKey = `egp-last-chat-${userLabel}`;
+  const lastChatTsKey = `egp-last-chat-ts-${userLabel}`;
+  const lastChatSessionKey = `egp-last-chat-session-${userLabel}`;
+  const RESTORE_WINDOW_MS = 24 * 60 * 60 * 1000; // 24h
+
+  function persistLastChat(id: string) {
+    localStorage.setItem(lastChatKey, id);
+    localStorage.setItem(lastChatTsKey, String(Date.now()));
+    // Carimba qual sessão de login pertence — se o usuário fizer login de novo,
+    // o expiresAt da sessão muda e o restore enxerga "outra sessão"
+    const sessionExpiresAt = localStorage.getItem('appCompras.internalSessionExpiresAt');
+    if (sessionExpiresAt) {
+      localStorage.setItem(lastChatSessionKey, sessionExpiresAt);
+    }
+  }
 
   async function selectChat(id: string, chatDate?: string) {
     if (running) return;
     setError(null);
     setCurrentChatId(id);
-    localStorage.setItem(lastChatKey, id);
+    persistLastChat(id);
     // Se o chat é de outro dia, sincroniza a sidebar para esse dia
     if (chatDate) {
       const d = chatDate.slice(0, 10);
@@ -242,9 +256,30 @@ export default function BuyerAgentPage() {
   }
 
   // Restaura o último chat aberto ao montar a página
+  // Exceções: não restaura se passou >24h ou se o login é de outra sessão
   useEffect(() => {
     const saved = localStorage.getItem(lastChatKey);
     if (!saved) return;
+
+    const savedTs = Number(localStorage.getItem(lastChatTsKey) ?? 0);
+    if (savedTs && Date.now() - savedTs > RESTORE_WINDOW_MS) {
+      // Passou de 24h — começa em chat novo
+      localStorage.removeItem(lastChatKey);
+      localStorage.removeItem(lastChatTsKey);
+      localStorage.removeItem(lastChatSessionKey);
+      return;
+    }
+
+    const savedSession = localStorage.getItem(lastChatSessionKey);
+    const currentSession = localStorage.getItem('appCompras.internalSessionExpiresAt');
+    if (savedSession && currentSession && savedSession !== currentSession) {
+      // Login diferente daquele que abriu o chat — começa novo
+      localStorage.removeItem(lastChatKey);
+      localStorage.removeItem(lastChatTsKey);
+      localStorage.removeItem(lastChatSessionKey);
+      return;
+    }
+
     // Verifica se o chat ainda existe antes de restaurar
     supabase
       .from('ai_chats')
@@ -261,13 +296,16 @@ export default function BuyerAgentPage() {
   // (cobre o caso de novo chat criado via envio de mensagem)
   useEffect(() => {
     if (currentChatId) {
-      localStorage.setItem(lastChatKey, currentChatId);
+      persistLastChat(currentChatId);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentChatId, lastChatKey]);
 
   function newChat() {
     if (running) return;
     localStorage.removeItem(lastChatKey);
+    localStorage.removeItem(lastChatTsKey);
+    localStorage.removeItem(lastChatSessionKey);
     setCurrentChatId(null);
     setHistory([]);
     setError(null);
