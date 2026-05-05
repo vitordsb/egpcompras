@@ -102,8 +102,8 @@ export default function PedidosPage() {
   const [list, setList] = useState<ShipmentRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [listError, setListError] = useState<string | null>(null);
-  // 'open' (default) = pendentes + atrasados — esconde saíram/voltaram/cancelados
-  const [statusFilter, setStatusFilter] = useState<DisplayStatus | 'all' | 'open' | 'with-obs'>('open');
+  // 'all' (default) = mostra todos os status — usuário filtra clicando nos cards
+  const [statusFilter, setStatusFilter] = useState<DisplayStatus | 'all' | 'open' | 'with-obs'>('all');
   const [search, setSearch] = useState('');
   const [viewMode, setViewModeState] = useState<ViewMode>(() => loadViewMode(userKey));
 
@@ -545,10 +545,11 @@ export default function PedidosPage() {
         </div>
       )}
 
-      {/* Cards de stats — 'open' é o default (todos os pendentes) */}
-      <div className="mb-6 grid gap-3 sm:grid-cols-3 lg:grid-cols-7">
+      {/* Cards de stats — 'all' é o default (mostra todos os pedidos) */}
+      <div className="mb-6 grid gap-3 sm:grid-cols-3 lg:grid-cols-8">
         {(
           [
+            { key: 'all',      label: 'Todos',            value: list.length,   color: 'text-slate-900' },
             { key: 'open',     label: 'Em aberto',        value: stats.open,    color: 'text-brand-700' },
             { key: 'late',     label: 'Atrasados',        value: stats.late,    color: 'text-red-700' },
             { key: 'pending',  label: 'Pendente (hoje)',  value: stats.pending, color: 'text-amber-700' },

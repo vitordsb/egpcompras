@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { supabase } from '@/lib/supabase';
 import type { Component } from '@/types/db';
 import { Button } from '@/components/ui/Button';
@@ -12,23 +12,44 @@ import { useBodyScrollLock } from '@/hooks/useBodyScrollLock';
 interface FormState {
   id: string | null;
   name: string;
+  originalName: string;
+  /** Quando true e há produto filtrado: cria um novo componente (fork) e troca a referência só nesse produto. */
+  forkForProduct: boolean;
+  /** Em quantos produtos este componente é usado (calculado ao abrir o modal). */
+  usageCount: number;
 }
 
 const emptyForm: FormState = {
   id: null,
   name: '',
+  originalName: '',
+  forkForProduct: false,
+  usageCount: 0,
 };
+
+interface ProductOption {
+  id: string;
+  name: string;
+}
+
+interface BomLink {
+  product_id: string;
+  component_id: string;
+}
 
 const PAGE_SIZE = 25;
 
 export default function ComponentsPage() {
   const toast = useToast();
   const [components, setComponents] = useState<Component[]>([]);
+  const [products, setProducts] = useState<ProductOption[]>([]);
+  const [bomLinks, setBomLinks] = useState<BomLink[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
+  const [productFilter, setProductFilter] = useState<string>(''); // '' = todos
   const [page, setPage] = useState(1);
-  const [form, setForm] = useState<FormState | null>(null); // null = modal fechado
+  const [form, setForm] = useState<FormState | null>(null);
   const [saving, setSaving] = useState(false);
   const [confirm, setConfirm] = useState<{ message: string; onConfirm: () => void } | null>(null);
 
@@ -36,12 +57,15 @@ export default function ComponentsPage() {
 
   async function load() {
     setLoading(true);
-    const { data, error } = await supabase
-      .from('components')
-      .select('*')
-      .order('name');
-    if (error) setError(error.message);
-    else setComponents((data ?? []) as Component[]);
+    const [{ data: comps, error: ce }, { data: prods }, { data: links }] = await Promise.all([
+      supabase.from('components').select('*').order('name'),
+      supabase.from('products').select('id, name').order('name'),
+      supabase.from('bom_items').select('product_id, component_id'),
+    ]);
+    if (ce) setError(ce.message);
+    else setComponents((comps ?? []) as Component[]);
+    setProducts((prods ?? []) as ProductOption[]);
+    setBomLinks((links ?? []) as BomLink[]);
     setLoading(false);
   }
 
@@ -50,11 +74,18 @@ export default function ComponentsPage() {
   }, []);
 
   function openCreate() {
-    setForm(emptyForm);
+    setForm({ ...emptyForm });
   }
 
   function openEdit(c: Component) {
-    setForm({ id: c.id, name: c.name });
+    const usageCount = bomLinks.filter((l) => l.component_id === c.id).length;
+    setForm({
+      id: c.id,
+      name: c.name,
+      originalName: c.name,
+      forkForProduct: usageCount > 1 && !!productFilter, // sugere fork por padrão quando há filtro
+      usageCount,
+    });
   }
 
   function closeForm() {
@@ -74,17 +105,36 @@ export default function ComponentsPage() {
 
     const payload = { name: form.name.trim() };
 
-    const result = form.id
-      ? await supabase.from('components').update(payload).eq('id', form.id)
-      : await supabase.from('components').insert(payload);
-
-    setSaving(false);
-    if (result.error) {
-      setError(result.error.message);
-      return;
+    try {
+      if (form.id && form.forkForProduct && productFilter) {
+        // Cria novo componente e troca a referência no bom_item desse produto
+        const { data: created, error: insErr } = await supabase
+          .from('components')
+          .insert(payload)
+          .select('id')
+          .single();
+        if (insErr || !created) throw new Error(insErr?.message ?? 'Falha ao criar fork');
+        const { error: updErr } = await supabase
+          .from('bom_items')
+          .update({ component_id: created.id })
+          .eq('product_id', productFilter)
+          .eq('component_id', form.id);
+        if (updErr) throw new Error(updErr.message);
+        toast.success('Componente "forkado"', `Criado "${form.name}" só para este produto. O original continua em ${form.usageCount - 1} outro(s).`);
+      } else if (form.id) {
+        const { error: updErr } = await supabase.from('components').update(payload).eq('id', form.id);
+        if (updErr) throw new Error(updErr.message);
+      } else {
+        const { error: insErr } = await supabase.from('components').insert(payload);
+        if (insErr) throw new Error(insErr.message);
+      }
+      closeForm();
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSaving(false);
     }
-    closeForm();
-    await load();
   }
 
   async function remove(c: Component) {
@@ -94,7 +144,6 @@ export default function ComponentsPage() {
         setConfirm(null);
         const { error } = await supabase.from('components').delete().eq('id', c.id);
         if (error) {
-          // Provável FK violation se já estiver em alguma BOM/cotação.
           toast.error('Erro', `Não foi possível remover: ${error.message}`);
           return;
         }
@@ -103,13 +152,29 @@ export default function ComponentsPage() {
     });
   }
 
-  const filtered = search.trim()
-    ? components.filter((c) => c.name.toLowerCase().includes(search.toLowerCase()))
-    : components;
+  // Filtros (memo)
+  const componentIdsInFilter = useMemo(() => {
+    if (!productFilter) return null;
+    return new Set(bomLinks.filter((l) => l.product_id === productFilter).map((l) => l.component_id));
+  }, [productFilter, bomLinks]);
+
+  const filtered = useMemo(() => {
+    let list = components;
+    if (componentIdsInFilter) list = list.filter((c) => componentIdsInFilter.has(c.id));
+    if (search.trim()) {
+      const q = search.toLowerCase();
+      list = list.filter((c) => c.name.toLowerCase().includes(q));
+    }
+    return list;
+  }, [components, componentIdsInFilter, search]);
 
   const visible = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
-  useEffect(() => { setPage(1); }, [search]);
+  useEffect(() => { setPage(1); }, [search, productFilter]);
+
+  const filteredProductName = productFilter
+    ? products.find((p) => p.id === productFilter)?.name ?? ''
+    : '';
 
   return (
     <div className="p-8">
@@ -123,13 +188,42 @@ export default function ComponentsPage() {
         <Button onClick={openCreate}>+ Novo componente</Button>
       </div>
 
-      <div className="mb-4 max-w-sm">
-        <Input
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Buscar por nome…"
-        />
+      <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center">
+        <div className="max-w-sm flex-1">
+          <Input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Buscar por nome…"
+          />
+        </div>
+        <div className="flex items-center gap-2">
+          <select
+            value={productFilter}
+            onChange={(e) => setProductFilter(e.target.value)}
+            className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm focus:border-brand-400 focus:outline-none focus:ring-1 focus:ring-brand-200"
+          >
+            <option value="">Todos os produtos</option>
+            {products.map((p) => (
+              <option key={p.id} value={p.id}>{p.name}</option>
+            ))}
+          </select>
+          {productFilter && (
+            <button
+              type="button"
+              onClick={() => setProductFilter('')}
+              className="text-xs text-slate-500 hover:underline whitespace-nowrap"
+            >
+              limpar
+            </button>
+          )}
+        </div>
       </div>
+
+      {productFilter && (
+        <div className="mb-3 rounded-md border border-brand-200 bg-brand-50 px-4 py-2 text-sm text-brand-800">
+          Mostrando componentes usados em <strong>{filteredProductName}</strong> ({filtered.length} {filtered.length === 1 ? 'item' : 'itens'}). Ao editar, você poderá criar uma versão exclusiva para este produto.
+        </div>
+      )}
 
       {error && !form && (
         <div className="mb-4 rounded-md border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">
@@ -145,7 +239,9 @@ export default function ComponentsPage() {
             <p className="text-sm text-slate-600">
               {components.length === 0
                 ? 'Nenhum componente cadastrado ainda.'
-                : 'Nenhum resultado para a busca.'}
+                : productFilter
+                  ? 'Esse produto não tem componentes na BOM.'
+                  : 'Nenhum resultado para a busca.'}
             </p>
           </CardBody>
         </Card>
@@ -156,31 +252,44 @@ export default function ComponentsPage() {
               <thead className="border-b border-slate-200 bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
                 <tr>
                   <th className="px-5 py-3">Nome</th>
+                  <th className="px-5 py-3 text-center">Usado em</th>
                   <th className="px-5 py-3"></th>
                 </tr>
               </thead>
               <tbody>
-                {visible.map((c) => (
-                  <tr key={c.id} className="border-b border-slate-100 last:border-0">
-                    <td className="px-5 py-3 font-medium text-slate-900">{c.name}</td>
-                    <td className="px-5 py-3 text-right">
-                      <button
-                        type="button"
-                        onClick={() => openEdit(c)}
-                        className="text-brand-600 hover:underline mr-4"
-                      >
-                        editar
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => remove(c)}
-                        className="text-red-600 hover:underline"
-                      >
-                        remover
-                      </button>
-                    </td>
-                  </tr>
-                ))}
+                {visible.map((c) => {
+                  const usage = bomLinks.filter((l) => l.component_id === c.id).length;
+                  return (
+                    <tr key={c.id} className="border-b border-slate-100 last:border-0">
+                      <td className="px-5 py-3 font-medium text-slate-900">{c.name}</td>
+                      <td className="px-5 py-3 text-center text-slate-600">
+                        {usage === 0 ? (
+                          <span className="text-xs text-slate-400">não usado</span>
+                        ) : (
+                          <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700">
+                            {usage} {usage === 1 ? 'produto' : 'produtos'}
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-5 py-3 text-right">
+                        <button
+                          type="button"
+                          onClick={() => openEdit(c)}
+                          className="text-brand-600 hover:underline mr-4"
+                        >
+                          editar
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => remove(c)}
+                          className="text-red-600 hover:underline"
+                        >
+                          remover
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
             <Pagination total={filtered.length} page={page} pageSize={PAGE_SIZE} onChange={setPage} className="px-5" />
@@ -213,6 +322,11 @@ export default function ComponentsPage() {
                 <h2 className="text-base font-semibold text-slate-900">
                   {form.id ? 'Editar componente' : 'Novo componente'}
                 </h2>
+                {form.id && form.usageCount > 0 && (
+                  <p className="mt-1 text-xs text-slate-500">
+                    Usado em {form.usageCount} {form.usageCount === 1 ? 'produto' : 'produtos'}
+                  </p>
+                )}
               </div>
               <div className="space-y-4 px-5 py-4">
                 {error && (
@@ -230,13 +344,31 @@ export default function ComponentsPage() {
                     autoFocus
                   />
                 </div>
+                {form.id && form.usageCount > 1 && productFilter && form.name !== form.originalName && (
+                  <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-3">
+                    <label className="flex items-start gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={form.forkForProduct}
+                        onChange={(e) => setForm({ ...form, forkForProduct: e.target.checked })}
+                        className="mt-0.5 h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500"
+                      />
+                      <span>
+                        <strong className="text-amber-900">Aplicar só para "{filteredProductName}"</strong>
+                        <span className="mt-1 block text-xs text-amber-700">
+                          Este componente é usado em {form.usageCount} produtos. Marcando esta opção, será criado um novo componente "{form.name.trim()}" exclusivo para este produto, e o original continua igual nos outros {form.usageCount - 1}.
+                        </span>
+                      </span>
+                    </label>
+                  </div>
+                )}
               </div>
               <div className="flex justify-end gap-3 border-t border-slate-200 px-5 py-3">
                 <Button type="button" variant="secondary" onClick={closeForm}>
                   Cancelar
                 </Button>
                 <Button type="submit" disabled={saving}>
-                  {saving ? 'Salvando…' : form.id ? 'Salvar' : 'Criar'}
+                  {saving ? 'Salvando…' : form.id ? (form.forkForProduct ? 'Criar versão exclusiva' : 'Salvar') : 'Criar'}
                 </Button>
               </div>
             </form>
