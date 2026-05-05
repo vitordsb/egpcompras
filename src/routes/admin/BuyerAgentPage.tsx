@@ -15,6 +15,7 @@ import { processXmlFile, processZipFile, type ParsedAttachment } from '@/lib/nfe
 import { Button } from '@/components/ui/Button';
 import MarkdownText from '@/components/MarkdownText';
 import { cn } from '@/lib/utils';
+import { isCorrection, proposeMemoryFromCorrection, type MemoryProposal } from '@/lib/correction-detector';
 
 const QUICK_SUGGESTIONS = [
   'Qual o custo do produto X?',
@@ -98,6 +99,9 @@ export default function BuyerAgentPage() {
   const [runStartedAt, setRunStartedAt] = useState<number | null>(null);
   const [elapsedSec, setElapsedSec] = useState(0);
   const [retryStatus, setRetryStatus] = useState<RetryStatus | null>(null);
+  const [memoryProposal, setMemoryProposal] = useState<MemoryProposal | null>(null);
+  const [memorySaving, setMemorySaving] = useState(false);
+  const [memoryProposing, setMemoryProposing] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
 
 
@@ -432,6 +436,13 @@ export default function BuyerAgentPage() {
     setRunStartedAt(Date.now());
     setRetryStatus(null);
 
+    // Captura snapshot pra detectar correção depois que a IA responder
+    const historyBeforeSend = [...history];
+    const lastModelTurn = [...history].reverse().find((t) => t.role === 'model');
+    const shouldCheckCorrection = !!message && isCorrection(message, lastModelTurn);
+    // Limpa qualquer proposta anterior — só uma de cada vez
+    setMemoryProposal(null);
+
     // AbortController + timeout client-side de 3min (impede UI travada eterna)
     const controller = new AbortController();
     abortRef.current = controller;
@@ -554,6 +565,20 @@ export default function BuyerAgentPage() {
         .update({ updated_at: new Date().toISOString() })
         .eq('id', chatId);
       await loadChats();
+
+      // Aprendizado de correções: roda em background depois que a IA respondeu
+      if (shouldCheckCorrection) {
+        setMemoryProposing(true);
+        proposeMemoryFromCorrection(
+          [...historyBeforeSend, { role: 'user', text: finalMessage }],
+          finalMessage
+        )
+          .then((proposal) => {
+            if (proposal) setMemoryProposal(proposal);
+          })
+          .catch((err) => console.warn('[memory-proposal] erro:', err))
+          .finally(() => setMemoryProposing(false));
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (controller.signal.aborted) {
@@ -1126,6 +1151,61 @@ export default function BuyerAgentPage() {
 
         <div className="border-t border-slate-200 bg-white px-4 py-3 md:px-8 md:py-4">
           <div className="mx-auto max-w-3xl space-y-2">
+            {/* Sugestão de memória a partir de correção do usuário */}
+            {(memoryProposing || memoryProposal) && (
+              <div className="flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="mt-0.5 h-4 w-4 shrink-0 text-amber-600">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 6.042A8.967 8.967 0 0 0 6 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 0 1 6 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 0 1 6-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0 0 18 18a8.967 8.967 0 0 0-6 2.292m0-14.25v14.25" />
+                </svg>
+                <div className="min-w-0 flex-1">
+                  {memoryProposing && !memoryProposal ? (
+                    <p className="text-amber-800">
+                      <span className="font-medium">Detectei uma correção…</span>{' '}
+                      <span className="text-amber-600">analisando se vale memorizar</span>
+                    </p>
+                  ) : memoryProposal ? (
+                    <>
+                      <p className="text-xs font-medium uppercase tracking-wide text-amber-700">Salvar como memória da IA?</p>
+                      <p className="mt-0.5 text-amber-900">{memoryProposal.content}</p>
+                      {memoryProposal.reason && (
+                        <p className="mt-0.5 text-xs text-amber-600 italic">{memoryProposal.reason}</p>
+                      )}
+                    </>
+                  ) : null}
+                </div>
+                {memoryProposal && (
+                  <div className="flex shrink-0 items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        if (!memoryProposal) return;
+                        setMemorySaving(true);
+                        const { error: insErr } = await supabase
+                          .from('agent_memories')
+                          .insert({ content: memoryProposal.content });
+                        setMemorySaving(false);
+                        if (insErr) {
+                          console.error('[memory] insert failed:', insErr);
+                          return;
+                        }
+                        setMemoryProposal(null);
+                      }}
+                      disabled={memorySaving}
+                      className="rounded-md bg-amber-600 px-3 py-1 text-xs font-semibold text-white hover:bg-amber-700 disabled:opacity-50"
+                    >
+                      {memorySaving ? 'Salvando…' : 'Salvar'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setMemoryProposal(null)}
+                      className="rounded-md px-2 py-1 text-xs font-medium text-amber-700 hover:bg-amber-100"
+                    >
+                      Ignorar
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
             {/* Fila de arquivos pendentes */}
             {(pendingFiles.length > 0 || pendingParseds.length > 0) && (
               <div className="flex flex-wrap gap-1.5">
