@@ -14,6 +14,14 @@ export function friendlyDbError(err: unknown): string {
   }
 
   if (/foreign key|violates foreign/i.test(msg)) {
+    // Tentativa de DELETE bloqueada por dependências
+    if (/update or delete on table/i.test(msg)) {
+      if (/quotations/i.test(msg)) return 'Esse produto está em cotações antigas. Aplique a migration 0053 para permitir excluir mantendo cotações como snapshot.';
+      if (/shipment/i.test(msg))   return 'Esse produto/componente está em pedidos já registrados — não dá pra excluir sem perder o histórico.';
+      if (/product_kits/i.test(msg)) return 'Esse produto faz parte de um kit. Remova-o do kit antes de excluir.';
+      if (/bom_items/i.test(msg))  return 'Esse componente está na BOM de algum produto. Remova das BOMs antes de excluir.';
+      return 'Não foi possível excluir: o registro está vinculado a outros lugares no sistema.';
+    }
     if (/financeira/i.test(msg))  return 'Financeira não encontrada. Selecione uma válida.';
     if (/product/i.test(msg))     return 'Produto não encontrado no catálogo.';
     if (/shipment/i.test(msg))    return 'Pedido não encontrado.';
