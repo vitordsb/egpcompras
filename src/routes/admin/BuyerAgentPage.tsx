@@ -439,9 +439,10 @@ export default function BuyerAgentPage() {
       const blob = await r.stop();
       const text = await transcribeAudio(blob);
       if (text) {
-        setInput((prev) => (prev ? `${prev} ${text}` : text));
-        // Devolve o foco pro textarea pra revisar antes de enviar
-        inputRef.current?.focus();
+        // Envia direto pra IA — concatena com o que já estiver no input
+        const fullMessage = input.trim() ? `${input.trim()} ${text}` : text;
+        setInput('');
+        await send(fullMessage);
       } else {
         setVoiceError('Não consegui entender o áudio. Tente de novo.');
       }
