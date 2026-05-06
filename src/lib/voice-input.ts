@@ -3,9 +3,47 @@
 // (segurança para comandos destrutivos).
 
 import { GoogleGenAI } from '@google/genai';
+import { supabase } from '@/lib/supabase';
 
 const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
 const MODEL = 'gemini-2.5-flash';
+
+// Cache do vocabulário da empresa — recarrega no máx a cada 5min
+let vocabCache: { items: string[]; loadedAt: number } | null = null;
+const VOCAB_TTL_MS = 5 * 60 * 1000;
+
+async function loadCompanyVocabulary(): Promise<string[]> {
+  if (vocabCache && Date.now() - vocabCache.loadedAt < VOCAB_TTL_MS) {
+    return vocabCache.items;
+  }
+  try {
+    const [contacts, products, clients, suppliers] = await Promise.all([
+      supabase.from('whatsapp_contacts').select('name').limit(50),
+      supabase.from('products').select('name').limit(80),
+      supabase.from('client_contacts').select('name, trade_name').limit(60),
+      supabase.from('suppliers').select('name').limit(40),
+    ]);
+    const set = new Set<string>();
+    for (const r of (contacts.data ?? []) as any[]) if (r.name) set.add(String(r.name).trim());
+    for (const r of (products.data ?? []) as any[]) if (r.name) set.add(String(r.name).trim());
+    for (const r of (clients.data ?? []) as any[]) {
+      if (r.name) set.add(String(r.name).trim());
+      if (r.trade_name) set.add(String(r.trade_name).trim());
+    }
+    for (const r of (suppliers.data ?? []) as any[]) if (r.name) set.add(String(r.name).trim());
+    const items = Array.from(set).filter((s) => s.length >= 3 && s.length <= 60);
+    vocabCache = { items, loadedAt: Date.now() };
+    return items;
+  } catch (err) {
+    console.warn('[voice-input] falha ao carregar vocabulário:', err);
+    return vocabCache?.items ?? [];
+  }
+}
+
+/** Limpa o cache — usado quando o usuário cadastra novo contato/produto */
+export function invalidateVoiceVocabulary() {
+  vocabCache = null;
+}
 
 export interface ActiveRecording {
   stop: () => Promise<Blob>;
@@ -96,13 +134,24 @@ async function blobToBase64(blob: Blob): Promise<string> {
 
 /**
  * Manda o áudio gravado pro Gemini Flash e retorna a transcrição em PT-BR.
- * Usa prompt curto pra evitar que o modelo invente respostas — só transcreve.
+ * Injeta vocabulário da empresa (nomes de contatos, produtos, clientes,
+ * fornecedores) pra melhorar a transcrição de termos próprios — ex: "Natana"
+ * vira "Nathanna", "no break" vira "nobreak".
  */
 export async function transcribeAudio(blob: Blob): Promise<string> {
   if (!apiKey) throw new Error('VITE_GEMINI_API_KEY não definida');
   if (blob.size < 200) throw new Error('Áudio muito curto. Tente de novo.');
 
-  const base64 = await blobToBase64(blob);
+  const [base64, vocab] = await Promise.all([blobToBase64(blob), loadCompanyVocabulary()]);
+
+  const vocabHint = vocab.length > 0
+    ? `\n\nNomes próprios e termos da empresa (use estes EXATAMENTE quando reconhecer fonemas similares na fala):\n${vocab.join(', ')}`
+    : '';
+
+  const promptText =
+    'Transcreva o áudio abaixo em português do Brasil. Retorne SOMENTE o texto falado, sem nenhuma observação, formatação extra, aspas ou tradução. Se não conseguir entender, retorne uma string vazia.' +
+    vocabHint;
+
   const ai = new GoogleGenAI({ apiKey });
   const res = await ai.models.generateContent({
     model: MODEL,
@@ -110,10 +159,7 @@ export async function transcribeAudio(blob: Blob): Promise<string> {
       {
         role: 'user',
         parts: [
-          {
-            text:
-              'Transcreva o áudio abaixo em português do Brasil. Retorne SOMENTE o texto falado, sem nenhuma observação, formatação extra, aspas ou tradução. Se não conseguir entender, retorne uma string vazia.',
-          },
+          { text: promptText },
           {
             inlineData: {
               mimeType: blob.type || 'audio/webm',
@@ -126,6 +172,5 @@ export async function transcribeAudio(blob: Blob): Promise<string> {
     config: { temperature: 0, maxOutputTokens: 600 },
   });
   const text = (res.text ?? '').trim();
-  // Limpa aspas e marcadores comuns que o modelo às vezes adiciona
   return text.replace(/^["“”']+|["“”']+$/g, '').trim();
 }

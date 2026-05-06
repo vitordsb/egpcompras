@@ -2308,6 +2308,24 @@ export interface ToolContext {
   currentUser?: string;
 }
 
+/**
+ * Fallback fuzzy search via pg_trgm — chamado quando o ilike padrão não encontrou nada.
+ * Lida silenciosamente com falha (RPC ausente / erro) retornando array vazio.
+ */
+async function fuzzyFallback<T = any>(rpcName: string, query: string): Promise<T[]> {
+  try {
+    const { data, error } = await supabase.rpc(rpcName as any, { q: query });
+    if (error) {
+      console.warn(`[fuzzy] ${rpcName} falhou:`, error.message);
+      return [];
+    }
+    return (data ?? []) as T[];
+  } catch (err) {
+    console.warn(`[fuzzy] ${rpcName} threw:`, err);
+    return [];
+  }
+}
+
 export async function executeTool(name: string, args: any, ctx: ToolContext = {}): Promise<unknown> {
   switch (name) {
     // ---------- LEITURAS ----------
@@ -2329,9 +2347,29 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
         .ilike('name', `%${search}%`)
         .order('name');
       if (error) throw new Error(error.message);
-      const products = data ?? [];
+      let products = data ?? [];
+      let matchedBy: 'exact' | 'fuzzy' = 'exact';
+      // Fallback fuzzy se ilike vazio (resolve transcrições/grafia variante)
       if (products.length === 0) {
-        return { found: false, message: `Nenhum produto encontrado com "${search}".` };
+        const fuzzy = await fuzzyFallback<{ id: string; name: string; sku: string; sim: number }>(
+          'search_products_fuzzy',
+          search
+        );
+        if (fuzzy.length > 0) {
+          // Re-busca os products_with_cost dos ids fuzzy
+          const ids = fuzzy.map((p) => p.id);
+          const { data: enriched } = await supabase
+            .from('products_with_cost')
+            .select('id, name, unit_cost_brl, sale_price_brl, pricing_mode')
+            .in('id', ids);
+          // Preserva ordem de similaridade
+          const byId = new Map((enriched ?? []).map((p: any) => [p.id, p]));
+          products = fuzzy.map((f) => byId.get(f.id)).filter(Boolean) as any[];
+          matchedBy = 'fuzzy';
+        }
+      }
+      if (products.length === 0) {
+        return { found: false, message: `Nenhum produto encontrado com "${search}".`, matched_by: matchedBy };
       }
       const best = products[0];
       const { bom } = await getProductWithBom(best.id);
@@ -3990,7 +4028,20 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
         .order('name')
         .limit(10);
       if (error) throw new Error(error.message);
-      return { found: (data ?? []).length, contacts: data ?? [] };
+      let contacts = (data ?? []) as any[];
+      let matchedBy: 'exact' | 'fuzzy' = 'exact';
+      // Fallback fuzzy se o ilike não encontrou nada (resolve transcrições imperfeitas)
+      if (contacts.length === 0) {
+        const fuzzy = await fuzzyFallback<{ id: string; name: string; phone: string; sim: number }>(
+          'search_whatsapp_contacts_fuzzy',
+          query
+        );
+        if (fuzzy.length > 0) {
+          contacts = fuzzy.map((c) => ({ id: c.id, name: c.name, phone: c.phone, similarity: c.sim }));
+          matchedBy = 'fuzzy';
+        }
+      }
+      return { found: contacts.length, contacts, matched_by: matchedBy };
     }
 
     case 'list_whatsapp_contacts': {
@@ -4451,10 +4502,29 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
 
       const { data, error } = await q;
       if (error) throw new Error(error.message);
-      const list = (data ?? []) as any[];
-      if (list.length === 0) return { found: 0, message: `Nenhum cliente encontrado para "${query}"` };
+      let list = (data ?? []) as any[];
+      let matchedBy: 'exact' | 'fuzzy' = 'exact';
+      // Fallback fuzzy só para busca por nome (não pra cnpj/telefone)
+      if (list.length === 0 && !phoneNorm && !/^\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}$/.test(query) && digits.length !== 14) {
+        const fuzzy = await fuzzyFallback<{ id: string; name: string; whatsapp_phone: string; cnpj: string; sim: number }>(
+          'search_client_contacts_fuzzy',
+          query
+        );
+        if (fuzzy.length > 0) {
+          const ids = fuzzy.map((f) => f.id);
+          const { data: enriched } = await supabase
+            .from('client_contacts')
+            .select('id, name, trade_name, cnpj, whatsapp_phone, email, total_orders, total_spent, last_purchase_at, tags, opt_in_promo, opt_in_catalog')
+            .in('id', ids);
+          const byId = new Map((enriched ?? []).map((c: any) => [c.id, c]));
+          list = fuzzy.map((f) => byId.get(f.id)).filter(Boolean) as any[];
+          matchedBy = 'fuzzy';
+        }
+      }
+      if (list.length === 0) return { found: 0, message: `Nenhum cliente encontrado para "${query}"`, matched_by: matchedBy };
       return {
         found: list.length,
+        matched_by: matchedBy,
         best_match: list[0],
         candidates: list.slice(1, 5),
       };
@@ -6924,11 +6994,23 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
         .ilike('nome', `%${q}%`)
         .limit(5);
       if (error) throw new Error(error.message);
-      const results = data ?? [];
+      let results = (data ?? []) as any[];
+      let matchedBy: 'exact' | 'fuzzy' = 'exact';
       if (results.length === 0) {
-        return { found: false, message: `Nenhuma financeira com nome parecido com "${q}". Use create_financeira para cadastrar.` };
+        const fuzzy = await fuzzyFallback<{ id: string; nome: string; sim: number }>('search_financeiras_fuzzy', q);
+        if (fuzzy.length > 0) {
+          const ids = fuzzy.map((f) => f.id);
+          const { data: enriched } = await supabase
+            .from('financeiras').select('id, nome, contato, notes').in('id', ids);
+          const byId = new Map((enriched ?? []).map((r: any) => [r.id, r]));
+          results = fuzzy.map((f) => byId.get(f.id)).filter(Boolean) as any[];
+          matchedBy = 'fuzzy';
+        }
       }
-      return { found: true, financeiras: results };
+      if (results.length === 0) {
+        return { found: false, message: `Nenhuma financeira com nome parecido com "${q}". Use create_financeira para cadastrar.`, matched_by: matchedBy };
+      }
+      return { found: true, financeiras: results, matched_by: matchedBy };
     }
 
     case 'list_financeiras': {
