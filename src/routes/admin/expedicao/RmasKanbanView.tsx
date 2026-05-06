@@ -126,7 +126,7 @@ export default function RmasKanbanView({
             onDrop={(e) => onDrop(e, col.key)}
             className={cn(
               'flex h-[calc(100vh-12rem)] min-h-[400px] flex-col rounded-lg border bg-slate-50/50 transition-colors',
-              hoverColumn === col.key && 'border-brand-500 bg-brand-50/60 ring-4 ring-brand-200/50 scale-[1.01]'
+              hoverColumn === col.key && 'border-brand-500 bg-brand-50/60 ring-4 ring-brand-200/50'
             )}
           >
             <div className={cn('flex items-center justify-between rounded-t-lg border-b px-3 py-2', col.headerClass)}>
@@ -152,10 +152,11 @@ export default function RmasKanbanView({
                       onDragEnd={onDragEnd}
                       onClick={() => onCardClick(r.id)}
                       className={cn(
-                        'group cursor-grab rounded-md border border-slate-200 bg-white p-3 shadow-sm transition-all',
-                        'hover:-translate-y-0.5 hover:border-brand-300 hover:shadow-lg',
-                        'active:cursor-grabbing active:scale-[0.98]',
-                        draggingId === r.id && 'scale-95 opacity-30 shadow-none'
+                        'group cursor-grab rounded-md border border-slate-200 bg-white p-3 shadow-sm',
+                        'transition-[box-shadow,border-color] duration-150',
+                        'hover:border-brand-300 hover:shadow-lg',
+                        'active:cursor-grabbing',
+                        draggingId === r.id && 'opacity-30 shadow-none'
                       )}
                       title="Clique para detalhes — segure e arraste para mover"
                     >
