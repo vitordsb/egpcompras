@@ -55,8 +55,12 @@ export default function ComponentsPage() {
   const [form, setForm] = useState<FormState | null>(null);
   const [saving, setSaving] = useState(false);
   const [confirm, setConfirm] = useState<{ message: string; onConfirm: () => void } | null>(null);
+  // Assimilação manual: componente que vai virar variante de outro
+  const [assimilateTarget, setAssimilateTarget] = useState<Component | null>(null);
+  const [assimilateSearch, setAssimilateSearch] = useState('');
+  const [assimilateSaving, setAssimilateSaving] = useState(false);
 
-  useBodyScrollLock(!!form || !!confirm);
+  useBodyScrollLock(!!form || !!confirm || !!assimilateTarget);
 
   async function load() {
     setLoading(true);
@@ -140,6 +144,61 @@ export default function ComponentsPage() {
     } finally {
       setSaving(false);
     }
+  }
+
+  function openAssimilate(c: Component) {
+    setAssimilateTarget(c);
+    setAssimilateSearch('');
+  }
+
+  function closeAssimilate() {
+    setAssimilateTarget(null);
+    setAssimilateSearch('');
+  }
+
+  // Calcula descendentes recursivamente — usado pra evitar ciclos na assimilação
+  function getDescendantIds(rootId: string, accumulator: Set<string> = new Set()): Set<string> {
+    const children = components.filter((c) => c.parent_component_id === rootId);
+    for (const child of children) {
+      if (!accumulator.has(child.id)) {
+        accumulator.add(child.id);
+        getDescendantIds(child.id, accumulator);
+      }
+    }
+    return accumulator;
+  }
+
+  async function applyAssimilate(parentId: string | null) {
+    if (!assimilateTarget) return;
+    if (parentId === assimilateTarget.id) {
+      toast.error('Inválido', 'Componente não pode ser variante de si mesmo.');
+      return;
+    }
+    if (parentId) {
+      const descendants = getDescendantIds(assimilateTarget.id);
+      if (descendants.has(parentId)) {
+        toast.error('Ciclo detectado', 'O componente escolhido como pai já é uma variante deste — assimilar criaria um loop.');
+        return;
+      }
+    }
+    setAssimilateSaving(true);
+    const { error: updErr } = await supabase
+      .from('components')
+      .update({ parent_component_id: parentId })
+      .eq('id', assimilateTarget.id);
+    setAssimilateSaving(false);
+    if (updErr) {
+      toast.error('Erro', updErr.message);
+      return;
+    }
+    if (parentId) {
+      const parent = components.find((c) => c.id === parentId);
+      toast.success('Assimilado', `"${assimilateTarget.name}" agora é variante de "${parent?.name ?? '?'}".`);
+    } else {
+      toast.success('Desvinculado', `"${assimilateTarget.name}" voltou a ser componente independente.`);
+    }
+    closeAssimilate();
+    await load();
   }
 
   async function remove(c: Component) {
@@ -369,13 +428,21 @@ export default function ComponentsPage() {
                           ? <span className="font-medium">R$ {Number(cost).toLocaleString('pt-BR', { minimumFractionDigits: 4 })}</span>
                           : <span className="text-xs text-slate-300">—</span>}
                       </td>
-                      <td className="px-5 py-3 text-right">
+                      <td className="px-5 py-3 text-right whitespace-nowrap">
                         <button
                           type="button"
                           onClick={() => openEdit(c)}
-                          className="text-brand-600 hover:underline mr-4"
+                          className="text-brand-600 hover:underline mr-3"
                         >
                           editar
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => openAssimilate(c)}
+                          className="text-purple-600 hover:underline mr-3"
+                          title="Marcar este componente como variante de outro"
+                        >
+                          assimilar
                         </button>
                         <button
                           type="button"
@@ -405,6 +472,110 @@ export default function ComponentsPage() {
           onCancel={() => setConfirm(null)}
         />
       )}
+
+      {assimilateTarget && (() => {
+        const target = assimilateTarget;
+        const targetDescendants = getDescendantIds(target.id);
+        const currentParent = target.parent_component_id ? componentById.get(target.parent_component_id) : null;
+        const q = assimilateSearch.trim().toLowerCase();
+        const candidates = components
+          .filter((c) => c.id !== target.id && !targetDescendants.has(c.id))
+          .filter((c) => !q || c.name.toLowerCase().includes(q))
+          .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'))
+          .slice(0, 50);
+        return (
+          <div
+            className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/40 p-4"
+            onClick={closeAssimilate}
+          >
+            <div
+              className="flex max-h-[80vh] w-full max-w-lg flex-col overflow-hidden rounded-lg bg-white shadow-lg"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="border-b border-slate-200 px-5 py-4">
+                <h2 className="text-base font-semibold text-slate-900">
+                  Assimilar componente
+                </h2>
+                <p className="mt-1 text-sm text-slate-600">
+                  <strong>{target.name}</strong> vai ser registrado como variante do componente que você escolher abaixo.
+                </p>
+                {currentParent && (
+                  <p className="mt-2 rounded bg-purple-50 px-2 py-1 text-xs text-purple-700">
+                    Atualmente assimilado a: <strong>{currentParent.name}</strong>. Escolher outro pai vai substituir.
+                  </p>
+                )}
+              </div>
+
+              <div className="border-b border-slate-200 px-5 py-3">
+                <Input
+                  value={assimilateSearch}
+                  onChange={(e) => setAssimilateSearch(e.target.value)}
+                  placeholder="Buscar componente pai…"
+                  autoFocus
+                />
+              </div>
+
+              <div className="flex-1 overflow-y-auto">
+                {candidates.length === 0 ? (
+                  <p className="px-5 py-6 text-center text-sm text-slate-500">
+                    Nenhum componente encontrado para "{assimilateSearch}".
+                  </p>
+                ) : (
+                  <ul className="divide-y divide-slate-100">
+                    {candidates.map((c) => {
+                      const isCurrent = c.id === target.parent_component_id;
+                      return (
+                        <li key={c.id}>
+                          <button
+                            type="button"
+                            onClick={() => applyAssimilate(c.id)}
+                            disabled={assimilateSaving || isCurrent}
+                            className={cn(
+                              'flex w-full items-center justify-between gap-3 px-5 py-3 text-left text-sm transition-colors',
+                              isCurrent
+                                ? 'bg-purple-50 text-purple-700'
+                                : 'text-slate-700 hover:bg-brand-50 hover:text-brand-700',
+                              assimilateSaving && 'cursor-not-allowed opacity-50'
+                            )}
+                          >
+                            <div className="min-w-0 flex-1">
+                              <div className="truncate font-medium">{c.name}</div>
+                              {c.parent_component_id && (
+                                <div className="text-[11px] text-slate-400">
+                                  variante de {componentById.get(c.parent_component_id)?.name ?? '?'}
+                                </div>
+                              )}
+                            </div>
+                            {isCurrent && <span className="text-xs">(atual)</span>}
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </div>
+
+              <div className="flex items-center justify-between gap-3 border-t border-slate-200 px-5 py-3">
+                {currentParent ? (
+                  <button
+                    type="button"
+                    onClick={() => applyAssimilate(null)}
+                    disabled={assimilateSaving}
+                    className="text-sm text-red-600 hover:underline disabled:opacity-50"
+                  >
+                    Remover assimilação
+                  </button>
+                ) : (
+                  <span />
+                )}
+                <Button type="button" variant="secondary" onClick={closeAssimilate} disabled={assimilateSaving}>
+                  Cancelar
+                </Button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {form && (
         <div
