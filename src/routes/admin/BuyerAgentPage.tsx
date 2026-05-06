@@ -435,21 +435,28 @@ export default function BuyerAgentPage() {
     const r = recording;
     setRecording(null);
     setTranscribing(true);
+    let textToSend = '';
+    let extraInput = '';
     try {
       const blob = await r.stop();
       const text = await transcribeAudio(blob);
-      if (text) {
-        // Envia direto pra IA — concatena com o que já estiver no input
-        const fullMessage = input.trim() ? `${input.trim()} ${text}` : text;
-        setInput('');
-        await send(fullMessage);
-      } else {
+      if (!text) {
         setVoiceError('Não consegui entender o áudio. Tente de novo.');
+        return;
       }
+      extraInput = input.trim();
+      textToSend = extraInput ? `${extraInput} ${text}` : text;
     } catch (err) {
       setVoiceError(err instanceof Error ? err.message : String(err));
+      return;
     } finally {
       setTranscribing(false);
+    }
+    // Dispara o envio FORA do try/finally pra garantir que transcribing já
+    // foi desativado e o estado tá limpo antes de send() rodar
+    if (textToSend) {
+      setInput('');
+      await send(textToSend);
     }
   }
 
