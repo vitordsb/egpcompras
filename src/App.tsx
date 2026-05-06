@@ -11,6 +11,7 @@ import QuotationsPage from '@/routes/admin/QuotationsPage';
 import PedidosPage from '@/routes/admin/expedicao/PedidosPage';
 import SaidasHistoricoPage from '@/routes/admin/expedicao/SaidasHistoricoPage';
 import ObservacoesPage from '@/routes/admin/expedicao/ObservacoesPage';
+import RmasPage from '@/routes/admin/expedicao/RmasPage';
 import CostsPage from '@/routes/admin/CostsPage';
 import AiUsagePage from '@/routes/admin/AiUsagePage';
 import MemoriesPage from '@/routes/admin/MemoriesPage';
@@ -250,6 +251,7 @@ function AuthenticatedApp() {
         <Route path="expedicao/pedidos" element={<PedidosPage />} />
         <Route path="expedicao/saidas" element={<SaidasHistoricoPage />} />
         <Route path="expedicao/observacoes" element={<ObservacoesPage />} />
+        <Route path="expedicao/rmas" element={<RmasPage />} />
         {/* Compat: /admin/saidas → /admin/expedicao/pedidos */}
         <Route path="saidas" element={<Navigate to="/admin/expedicao/pedidos" replace />} />
         <Route path="custos" element={<CostsPage />} />
