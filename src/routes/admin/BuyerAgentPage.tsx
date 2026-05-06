@@ -142,12 +142,12 @@ export default function BuyerAgentPage() {
   }, [running, runStartedAt]);
 
   // Auto-grow do textarea conforme o usuário digita.
-  // Cresce de ~2 linhas até ~12 linhas, depois ativa scroll interno.
+  // Mantém altura mínima de 50px (alinha com os botões de 52px do form).
   useEffect(() => {
     const el = inputRef.current;
     if (!el) return;
     el.style.height = 'auto';
-    const next = Math.min(el.scrollHeight, 320); // ~12 linhas
+    const next = Math.min(Math.max(el.scrollHeight, 50), 320);
     el.style.height = `${next}px`;
   }, [input]);
 
@@ -1462,7 +1462,7 @@ export default function BuyerAgentPage() {
                 </button>
               )}
 
-              <div className="flex-1 rounded-md border border-slate-300 bg-white focus-within:border-brand-500 focus-within:ring-1 focus-within:ring-brand-500">
+              <div className="flex min-h-[52px] flex-1 items-stretch rounded-md border border-slate-300 bg-white focus-within:border-brand-500 focus-within:ring-1 focus-within:ring-brand-500">
                 <textarea
                   ref={inputRef}
                   value={input}
@@ -1474,10 +1474,10 @@ export default function BuyerAgentPage() {
                     }
                   }}
                   placeholder={(pendingFiles.length > 0 || pendingParseds.length > 0) ? 'Ex: "saída pra 15/06, financeira Bradesco" — Enter envia' : 'Diga o que você quer fazer… (Enter envia, Shift+Enter quebra linha)'}
-                  rows={2}
+                  rows={1}
                   disabled={running || !provider.isConfigured()}
-                  className="block w-full resize-none rounded-md bg-transparent px-3 py-2 text-sm leading-6 outline-none disabled:bg-slate-50"
-                  style={{ minHeight: '52px', maxHeight: '320px' }}
+                  className="block w-full resize-none rounded-md bg-transparent px-3 py-3 text-sm leading-6 outline-none disabled:bg-slate-50"
+                  style={{ minHeight: '50px', maxHeight: '320px' }}
                 />
                 {input.length > 200 && (
                   <div className="flex items-center justify-end border-t border-slate-100 px-3 py-1 text-[11px] text-slate-400">
