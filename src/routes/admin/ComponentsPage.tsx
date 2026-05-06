@@ -51,6 +51,7 @@ interface ProductOption {
 }
 
 interface BomLink {
+  id: string;
   product_id: string;
   component_id: string;
   target_price_brl: number | null;
@@ -76,6 +77,10 @@ export default function ComponentsPage() {
   const [assimilateTarget, setAssimilateTarget] = useState<Component | null>(null);
   const [assimilateSearch, setAssimilateSearch] = useState('');
   const [assimilateSaving, setAssimilateSaving] = useState(false);
+  // Edição inline da coluna "Último custo"
+  const [editingCostId, setEditingCostId] = useState<string | null>(null);
+  const [editingCostValue, setEditingCostValue] = useState<string>('');
+  const [savingCostId, setSavingCostId] = useState<string | null>(null);
 
   useBodyScrollLock(!!form || !!confirm || !!assimilateTarget);
 
@@ -84,7 +89,7 @@ export default function ComponentsPage() {
     const [{ data: comps, error: ce }, { data: prods }, { data: links }] = await Promise.all([
       supabase.from('components').select('*').order('name'),
       supabase.from('products').select('id, name').order('name'),
-      supabase.from('bom_items').select('product_id, component_id, target_price_brl, created_at'),
+      supabase.from('bom_items').select('id, product_id, component_id, target_price_brl, created_at'),
     ]);
     if (ce) setError(ce.message);
     else setComponents((comps ?? []) as Component[]);
@@ -256,6 +261,67 @@ export default function ComponentsPage() {
     } finally {
       setSaving(false);
     }
+  }
+
+  /**
+   * Salva inline o "último custo" da coluna. Identifica qual bom_item editar:
+   * com filtro de produto → o bom_item daquele produto;
+   * sem filtro → o bom_item mais recente do componente (que é o que está sendo exibido).
+   */
+  async function saveCostInline(componentId: string, rawValue: string) {
+    const trimmed = rawValue.trim();
+    const newPrice = trimmed === '' ? null : Number(trimmed.replace(',', '.'));
+    if (newPrice != null && !Number.isFinite(newPrice)) {
+      toast.error('Valor inválido', 'Use número (ex: 0.12 ou 0,12).');
+      return;
+    }
+    const links = bomLinks.filter((l) => l.component_id === componentId);
+    let target: BomLink | undefined;
+    if (productFilter) {
+      target = links.find((l) => l.product_id === productFilter);
+    } else {
+      target = [...links].sort((a, b) => (b.created_at ?? '').localeCompare(a.created_at ?? ''))[0];
+    }
+    if (!target) {
+      toast.error('Sem vínculo', 'Componente não está em nenhuma BOM. Edite e adicione em "Uso em produtos".');
+      return;
+    }
+    const current = target.target_price_brl;
+    if ((current ?? null) === newPrice) return; // nada mudou
+    setSavingCostId(componentId);
+    const { error: updErr } = await supabase
+      .from('bom_items')
+      .update({ target_price_brl: newPrice })
+      .eq('id', target.id);
+    setSavingCostId(null);
+    if (updErr) {
+      toast.error('Erro', updErr.message);
+      return;
+    }
+    // Atualiza estado local sem refetch completo
+    setBomLinks((prev) =>
+      prev.map((l) => (l.id === target!.id ? { ...l, target_price_brl: newPrice } : l))
+    );
+    toast.success(
+      'Custo atualizado',
+      `${newPrice != null ? `R$ ${newPrice.toLocaleString('pt-BR', { minimumFractionDigits: 4 })}` : 'sem valor'}`
+    );
+  }
+
+  function startEditCost(componentId: string, current: number | null) {
+    setEditingCostId(componentId);
+    setEditingCostValue(current != null ? String(current) : '');
+  }
+
+  function cancelEditCost() {
+    setEditingCostId(null);
+    setEditingCostValue('');
+  }
+
+  async function commitEditCost() {
+    if (!editingCostId) return;
+    await saveCostInline(editingCostId, editingCostValue);
+    cancelEditCost();
   }
 
   function openAssimilate(c: Component) {
@@ -536,9 +602,40 @@ export default function ComponentsPage() {
                         )}
                       </td>
                       <td className="px-5 py-3 text-right text-slate-700">
-                        {cost != null
-                          ? <span className="font-medium">R$ {Number(cost).toLocaleString('pt-BR', { minimumFractionDigits: 4 })}</span>
-                          : <span className="text-xs text-slate-300">—</span>}
+                        {editingCostId === c.id ? (
+                          <input
+                            type="number"
+                            step="0.0001"
+                            min="0"
+                            value={editingCostValue}
+                            onChange={(e) => setEditingCostValue(e.target.value)}
+                            onBlur={commitEditCost}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                e.preventDefault();
+                                (e.target as HTMLInputElement).blur();
+                              } else if (e.key === 'Escape') {
+                                e.preventDefault();
+                                cancelEditCost();
+                              }
+                            }}
+                            disabled={savingCostId === c.id}
+                            autoFocus
+                            placeholder="0,0000"
+                            className="w-24 rounded border border-brand-300 bg-white px-2 py-1 text-right text-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
+                          />
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => startEditCost(c.id, cost)}
+                            title="Clique para editar o último custo"
+                            className="rounded px-2 py-0.5 text-right transition-colors hover:bg-brand-50 hover:text-brand-700"
+                          >
+                            {cost != null
+                              ? <span className="font-medium">R$ {Number(cost).toLocaleString('pt-BR', { minimumFractionDigits: 4 })}</span>
+                              : <span className="text-xs text-slate-400">— editar</span>}
+                          </button>
+                        )}
                       </td>
                       <td className="px-5 py-3 text-right whitespace-nowrap">
                         <button
