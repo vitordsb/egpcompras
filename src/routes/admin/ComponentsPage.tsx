@@ -10,6 +10,17 @@ import { ConfirmModal } from '@/components/ui/ConfirmModal';
 import { useBodyScrollLock } from '@/hooks/useBodyScrollLock';
 import { cn } from '@/lib/utils';
 
+interface BomEditRow {
+  /** id do bom_items existente. null = linha nova (insert no submit) */
+  bom_item_id: string | null;
+  product_id: string;
+  product_name: string;
+  quantity: number;
+  target_price_brl: number | null;
+  /** Marcado pra delete no submit */
+  _toDelete?: boolean;
+}
+
 interface FormState {
   id: string | null;
   name: string;
@@ -18,6 +29,10 @@ interface FormState {
   forkForProduct: boolean;
   /** Em quantos produtos este componente é usado (calculado ao abrir o modal). */
   usageCount: number;
+  /** Linhas editáveis do bom — cada linha = 1 produto que usa este componente */
+  usageRows: BomEditRow[];
+  /** Snapshot original pra detectar mudanças no submit */
+  usageRowsOriginal: BomEditRow[];
 }
 
 const emptyForm: FormState = {
@@ -26,6 +41,8 @@ const emptyForm: FormState = {
   originalName: '',
   forkForProduct: false,
   usageCount: 0,
+  usageRows: [],
+  usageRowsOriginal: [],
 };
 
 interface ProductOption {
@@ -84,20 +101,114 @@ export default function ComponentsPage() {
     setForm({ ...emptyForm });
   }
 
-  function openEdit(c: Component) {
+  async function openEdit(c: Component) {
     const usageCount = bomLinks.filter((l) => l.component_id === c.id).length;
+    // Carrega bom_items detalhados (com id, qty, target) pra edição inline
+    const { data: bomRows } = await supabase
+      .from('bom_items')
+      .select('id, product_id, quantity, target_price_brl, product:products(id, name)')
+      .eq('component_id', c.id);
+    const usageRows: BomEditRow[] = ((bomRows ?? []) as any[]).map((r) => ({
+      bom_item_id: r.id,
+      product_id: r.product_id,
+      product_name: r.product?.name ?? '?',
+      quantity: Number(r.quantity ?? 0),
+      target_price_brl: r.target_price_brl != null ? Number(r.target_price_brl) : null,
+    }));
     setForm({
       id: c.id,
       name: c.name,
       originalName: c.name,
-      forkForProduct: usageCount > 1 && !!productFilter, // sugere fork por padrão quando há filtro
+      forkForProduct: usageCount > 1 && !!productFilter,
       usageCount,
+      usageRows,
+      usageRowsOriginal: usageRows.map((r) => ({ ...r })),
     });
   }
 
   function closeForm() {
     setForm(null);
     setError(null);
+  }
+
+  function updateUsageRow(idx: number, patch: Partial<BomEditRow>) {
+    if (!form) return;
+    setForm({
+      ...form,
+      usageRows: form.usageRows.map((r, i) => (i === idx ? { ...r, ...patch } : r)),
+    });
+  }
+
+  function removeUsageRow(idx: number) {
+    if (!form) return;
+    const row = form.usageRows[idx];
+    if (row.bom_item_id) {
+      // Linha existente: marca pra delete (não remove visualmente até salvar)
+      // Pra ficar simples, removo já visualmente; o sync detecta pelo original
+      setForm({ ...form, usageRows: form.usageRows.filter((_, i) => i !== idx) });
+    } else {
+      // Linha nova: tira da lista
+      setForm({ ...form, usageRows: form.usageRows.filter((_, i) => i !== idx) });
+    }
+  }
+
+  function addUsageRow(productId: string) {
+    if (!form || !productId) return;
+    const product = products.find((p) => p.id === productId);
+    if (!product) return;
+    if (form.usageRows.some((r) => r.product_id === productId)) {
+      toast.error('Duplicado', `Já existe uma linha para "${product.name}".`);
+      return;
+    }
+    setForm({
+      ...form,
+      usageRows: [
+        ...form.usageRows,
+        { bom_item_id: null, product_id: productId, product_name: product.name, quantity: 1, target_price_brl: null },
+      ],
+    });
+  }
+
+  /**
+   * Compara usageRows atual vs original e aplica insert/update/delete
+   * em bom_items pra refletir as mudanças. Linhas existentes detectadas
+   * por bom_item_id.
+   */
+  async function syncUsageRows(componentId: string, current: BomEditRow[], original: BomEditRow[]) {
+    const originalById = new Map(original.filter((r) => r.bom_item_id).map((r) => [r.bom_item_id!, r]));
+    const currentIds = new Set(current.filter((r) => r.bom_item_id).map((r) => r.bom_item_id!));
+
+    // 1. Deletes: estava no original, sumiu do current
+    const toDelete = original.filter((r) => r.bom_item_id && !currentIds.has(r.bom_item_id));
+    for (const r of toDelete) {
+      await supabase.from('bom_items').delete().eq('id', r.bom_item_id!);
+    }
+
+    // 2. Updates e Inserts
+    for (const r of current) {
+      const qty = Number(r.quantity);
+      if (!(qty > 0)) continue; // ignora linhas com qty zero/inválida
+      const target = r.target_price_brl != null && Number.isFinite(Number(r.target_price_brl))
+        ? Number(r.target_price_brl)
+        : null;
+      if (r.bom_item_id) {
+        // Update se mudou
+        const orig = originalById.get(r.bom_item_id);
+        if (!orig) continue;
+        const changed = orig.quantity !== qty || (orig.target_price_brl ?? null) !== target;
+        if (changed) {
+          await supabase
+            .from('bom_items')
+            .update({ quantity: qty, target_price_brl: target })
+            .eq('id', r.bom_item_id);
+        }
+      } else {
+        // Insert nova vinculação
+        await supabase
+          .from('bom_items')
+          .insert({ component_id: componentId, product_id: r.product_id, quantity: qty, target_price_brl: target });
+      }
+    }
   }
 
   async function submit(e: FormEvent) {
@@ -133,6 +244,7 @@ export default function ComponentsPage() {
       } else if (form.id) {
         const { error: updErr } = await supabase.from('components').update(payload).eq('id', form.id);
         if (updErr) throw new Error(updErr.message);
+        await syncUsageRows(form.id, form.usageRows, form.usageRowsOriginal);
       } else {
         const { error: insErr } = await supabase.from('components').insert(payload);
         if (insErr) throw new Error(insErr.message);
@@ -583,10 +695,10 @@ export default function ComponentsPage() {
           onClick={closeForm}
         >
           <div
-            className="w-full max-w-lg rounded-lg bg-white shadow-lg"
+            className="flex max-h-[90vh] w-full max-w-xl flex-col overflow-hidden rounded-lg bg-white shadow-lg"
             onClick={(e) => e.stopPropagation()}
           >
-            <form onSubmit={submit}>
+            <form onSubmit={submit} className="flex flex-1 flex-col overflow-hidden">
               <div className="border-b border-slate-200 px-5 py-4">
                 <h2 className="text-base font-semibold text-slate-900">
                   {form.id ? 'Editar componente' : 'Novo componente'}
@@ -617,7 +729,7 @@ export default function ComponentsPage() {
                   </p>
                 )}
               </div>
-              <div className="space-y-4 px-5 py-4">
+              <div className="flex-1 space-y-4 overflow-y-auto px-5 py-4">
                 {error && (
                   <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
                     {error}
@@ -649,6 +761,98 @@ export default function ComponentsPage() {
                         </span>
                       </span>
                     </label>
+                  </div>
+                )}
+
+                {/* Uso em produtos — edição inline de qty + custo target por produto */}
+                {form.id && (
+                  <div className="border-t border-slate-200 pt-4">
+                    <div className="mb-2 flex items-center justify-between">
+                      <Label>Uso em produtos</Label>
+                      <span className="text-xs text-slate-400">
+                        {form.usageRows.length} {form.usageRows.length === 1 ? 'vínculo' : 'vínculos'}
+                      </span>
+                    </div>
+
+                    {form.usageRows.length === 0 ? (
+                      <p className="rounded-md border border-dashed border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-500">
+                        Este componente ainda não está em nenhuma BOM. Vincule a um produto abaixo.
+                      </p>
+                    ) : (
+                      <div className="space-y-1.5">
+                        {form.usageRows.map((r, idx) => (
+                          <div key={r.bom_item_id ?? `new-${idx}`} className="flex items-center gap-2 rounded-md border border-slate-200 bg-white px-2 py-1.5">
+                            <span className="flex-1 truncate text-sm text-slate-800" title={r.product_name}>
+                              {r.product_name}
+                              {!r.bom_item_id && <span className="ml-1 text-[10px] font-semibold uppercase text-emerald-600">novo</span>}
+                            </span>
+                            <div className="flex items-center gap-1">
+                              <input
+                                type="number"
+                                value={r.quantity}
+                                onChange={(e) => updateUsageRow(idx, { quantity: Number(e.target.value) })}
+                                step="any"
+                                min="0"
+                                className="w-16 rounded border border-slate-300 px-2 py-1 text-right text-xs"
+                                title="Quantidade por unidade do produto"
+                              />
+                              <span className="text-[10px] text-slate-400">×</span>
+                            </div>
+                            <div className="flex items-center gap-1">
+                              <span className="text-[10px] text-slate-400">R$</span>
+                              <input
+                                type="number"
+                                value={r.target_price_brl ?? ''}
+                                onChange={(e) =>
+                                  updateUsageRow(idx, {
+                                    target_price_brl: e.target.value === '' ? null : Number(e.target.value),
+                                  })
+                                }
+                                step="0.0001"
+                                min="0"
+                                placeholder="custo"
+                                className="w-24 rounded border border-slate-300 px-2 py-1 text-right text-xs"
+                                title="Último custo / target por unidade"
+                              />
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => removeUsageRow(idx)}
+                              className="text-slate-400 hover:text-red-600"
+                              title="Remover este vínculo"
+                              aria-label="Remover vínculo"
+                            >
+                              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" className="h-3.5 w-3.5">
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M4 4l8 8M12 4l-8 8" />
+                              </svg>
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Adicionar nova vinculação */}
+                    {(() => {
+                      const usedIds = new Set(form.usageRows.map((r) => r.product_id));
+                      const available = products.filter((p) => !usedIds.has(p.id));
+                      return (
+                        <div className="mt-2">
+                          <select
+                            value=""
+                            onChange={(e) => addUsageRow(e.target.value)}
+                            disabled={available.length === 0}
+                            className="w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm focus:border-brand-400 focus:outline-none focus:ring-1 focus:ring-brand-200 disabled:opacity-50"
+                          >
+                            <option value="">
+                              {available.length === 0 ? 'Já está vinculado a todos os produtos' : '+ Vincular a um produto…'}
+                            </option>
+                            {available.map((p) => (
+                              <option key={p.id} value={p.id}>{p.name}</option>
+                            ))}
+                          </select>
+                        </div>
+                      );
+                    })()}
                   </div>
                 )}
               </div>
