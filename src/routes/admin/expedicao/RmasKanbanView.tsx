@@ -67,6 +67,7 @@ export default function RmasKanbanView({
   onAddObservation,
 }: RmasKanbanViewProps) {
   const [activeId, setActiveId] = useState<string | null>(null);
+  const [activeWidth, setActiveWidth] = useState<number | null>(null);
   const [hoverColumn, setHoverColumn] = useState<BucketKey | null>(null);
   const [obsFor, setObsFor] = useState<RmaRow | null>(null);
   const [obsText, setObsText] = useState('');
@@ -102,6 +103,8 @@ export default function RmasKanbanView({
 
   function handleDragStart(e: DragStartEvent) {
     setActiveId(String(e.active.id));
+    const rect = e.active.rect.current.initial;
+    if (rect) setActiveWidth(rect.width);
   }
   function handleDragOver(e: DragOverEvent) {
     const overId = e.over?.id;
@@ -171,7 +174,7 @@ export default function RmasKanbanView({
 
         {/* Overlay que segue o cursor — esse é o "card flutuando" */}
         <DragOverlay dropAnimation={{ duration: 200, easing: 'cubic-bezier(0.18, 0.67, 0.6, 1.22)' }}>
-          {activeRma ? <CardPreview rma={activeRma} /> : null}
+          {activeRma ? <CardPreview rma={activeRma} width={activeWidth} /> : null}
         </DragOverlay>
       </DndContext>
 
@@ -283,11 +286,11 @@ function DraggableCard({
 
 // ── Preview que segue o cursor (DragOverlay) ─────────────────────────────────
 
-function CardPreview({ rma }: { rma: RmaRow }) {
+function CardPreview({ rma, width }: { rma: RmaRow; width: number | null }) {
   return (
     <div
       className="rotate-[-2deg] cursor-grabbing rounded-md border border-brand-300 bg-white p-3 shadow-2xl ring-1 ring-brand-100"
-      style={{ width: '100%', maxWidth: 360 }}
+      style={{ width: width ?? 320 }}
     >
       <CardContent rma={rma} canMarkSaiu={false} onMarkSaiu={() => {}} onAskObservation={() => {}} />
     </div>

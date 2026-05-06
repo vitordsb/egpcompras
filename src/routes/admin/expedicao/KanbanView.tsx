@@ -86,6 +86,7 @@ export default function KanbanView({
   onAddObservation,
 }: KanbanViewProps) {
   const [activeId, setActiveId] = useState<string | null>(null);
+  const [activeWidth, setActiveWidth] = useState<number | null>(null);
   const [hoverColumn, setHoverColumn] = useState<ColumnKey | null>(null);
   const [obsFor, setObsFor] = useState<ShipmentRow | null>(null);
   const [obsText, setObsText] = useState('');
@@ -120,7 +121,11 @@ export default function KanbanView({
     [shipments, activeId]
   );
 
-  function handleDragStart(e: DragStartEvent) { setActiveId(String(e.active.id)); }
+  function handleDragStart(e: DragStartEvent) {
+    setActiveId(String(e.active.id));
+    const rect = e.active.rect.current.initial;
+    if (rect) setActiveWidth(rect.width);
+  }
   function handleDragOver(e: DragOverEvent) {
     const overId = e.over?.id;
     setHoverColumn(overId ? (String(overId) as ColumnKey) : null);
@@ -183,7 +188,7 @@ export default function KanbanView({
         </div>
 
         <DragOverlay dropAnimation={{ duration: 200, easing: 'cubic-bezier(0.18, 0.67, 0.6, 1.22)' }}>
-          {activeShipment ? <CardPreview shipment={activeShipment} /> : null}
+          {activeShipment ? <CardPreview shipment={activeShipment} width={activeWidth} /> : null}
         </DragOverlay>
       </DndContext>
 
@@ -294,11 +299,11 @@ function DraggableCard({
 
 // ── Preview que segue o cursor ────────────────────────────────────────────
 
-function CardPreview({ shipment }: { shipment: ShipmentRow }) {
+function CardPreview({ shipment, width }: { shipment: ShipmentRow; width: number | null }) {
   return (
     <div
       className="rotate-[-2deg] cursor-grabbing rounded-md border border-brand-300 bg-white p-3 shadow-2xl ring-1 ring-brand-100"
-      style={{ width: '100%', maxWidth: 320 }}
+      style={{ width: width ?? 320 }}
     >
       <CardContent shipment={shipment} showActions={false} onMarkShipped={() => {}} onAskObservation={() => {}} />
     </div>
