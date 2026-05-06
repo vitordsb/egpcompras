@@ -1,10 +1,21 @@
-import { useEffect, useMemo, useState, type DragEvent, type FormEvent } from 'react';
+import { useMemo, useState, type FormEvent } from 'react';
+import {
+  DndContext,
+  DragOverlay,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  useDraggable,
+  useDroppable,
+  type DragStartEvent,
+  type DragEndEvent,
+  type DragOverEvent,
+} from '@dnd-kit/core';
 import type { Shipment } from '@/types/db';
 import { cn } from '@/lib/utils';
 import { isLate, isOnTime, formatDate } from './shared';
 import { Button } from '@/components/ui/Button';
 import { Textarea } from '@/components/ui/Input';
-import { setupDragImage } from '@/lib/drag-feedback';
 
 interface ShipmentRow extends Shipment {
   observations_count?: number;
@@ -74,11 +85,13 @@ export default function KanbanView({
   onMoveToColumn,
   onAddObservation,
 }: KanbanViewProps) {
-  const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [activeId, setActiveId] = useState<string | null>(null);
   const [hoverColumn, setHoverColumn] = useState<ColumnKey | null>(null);
   const [obsFor, setObsFor] = useState<ShipmentRow | null>(null);
   const [obsText, setObsText] = useState('');
   const [obsSaving, setObsSaving] = useState(false);
+
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
 
   async function submitObservation(e: FormEvent) {
     e.preventDefault();
@@ -94,189 +107,214 @@ export default function KanbanView({
   }
 
   const grouped = useMemo(() => {
-    const acc: Record<ColumnKey, ShipmentRow[]> = {
-      late: [],
-      today: [],
-      on_time: [],
-      shipped: [],
-    };
+    const acc: Record<ColumnKey, ShipmentRow[]> = { late: [], today: [], on_time: [], shipped: [] };
     for (const s of shipments) {
-      const key = classify(s);
-      if (key) acc[key].push(s);
+      const k = classify(s);
+      if (k) acc[k].push(s);
     }
     return acc;
   }, [shipments]);
 
-  function onDragStart(e: DragEvent<HTMLDivElement>, s: ShipmentRow) {
-    setDraggingId(s.id);
-    e.dataTransfer.effectAllowed = 'move';
-    e.dataTransfer.setData('text/plain', s.id);
-    setupDragImage(e);
-  }
+  const activeShipment = useMemo(
+    () => shipments.find((s) => s.id === activeId) ?? null,
+    [shipments, activeId]
+  );
 
-  function onDragEnd() {
-    setDraggingId(null);
+  function handleDragStart(e: DragStartEvent) { setActiveId(String(e.active.id)); }
+  function handleDragOver(e: DragOverEvent) {
+    const overId = e.over?.id;
+    setHoverColumn(overId ? (String(overId) as ColumnKey) : null);
+  }
+  function handleDragEnd(e: DragEndEvent) {
+    const overId = e.over?.id;
+    setActiveId(null);
     setHoverColumn(null);
-  }
-
-  // Cleanup defensivo: garante limpar o estado se o drag for cancelado
-  // (Esc, blur, drop fora). Sem isso o card fica preso como "dragging".
-  useEffect(() => {
-    if (!draggingId) return;
-    const cleanup = () => {
-      setDraggingId(null);
-      setHoverColumn(null);
-    };
-    document.addEventListener('dragend', cleanup);
-    document.addEventListener('drop', cleanup);
-    window.addEventListener('blur', cleanup);
-    return () => {
-      document.removeEventListener('dragend', cleanup);
-      document.removeEventListener('drop', cleanup);
-      window.removeEventListener('blur', cleanup);
-    };
-  }, [draggingId]);
-
-  function onDragOver(e: DragEvent<HTMLDivElement>, col: ColumnKey) {
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
-    if (hoverColumn !== col) setHoverColumn(col);
-  }
-
-  function onDragLeave(col: ColumnKey) {
-    if (hoverColumn === col) setHoverColumn(null);
-  }
-
-  function onDrop(e: DragEvent<HTMLDivElement>, target: ColumnKey) {
-    e.preventDefault();
-    setHoverColumn(null);
-    const id = e.dataTransfer.getData('text/plain');
-    const s = shipments.find((x) => x.id === id);
-    setDraggingId(null);
+    if (!overId) return;
+    const s = shipments.find((x) => x.id === e.active.id);
     if (!s) return;
-    const current = classify(s);
-    if (current === target) return;
+    const target = String(overId) as ColumnKey;
+    if (classify(s) === target) return;
     onMoveToColumn(s, target);
+  }
+  function handleDragCancel() {
+    setActiveId(null);
+    setHoverColumn(null);
   }
 
   return (
     <>
-    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-      {COLUMNS.map((col) => (
-        <div
-          key={col.key}
-          onDragOver={(e) => onDragOver(e, col.key)}
-          onDragLeave={() => onDragLeave(col.key)}
-          onDrop={(e) => onDrop(e, col.key)}
-          className={cn(
-            'flex h-[calc(100vh-12rem)] min-h-[400px] flex-col rounded-lg border bg-slate-50/50 transition-colors',
-            hoverColumn === col.key && 'border-brand-500 bg-brand-50/60 ring-4 ring-brand-200/50'
-          )}
-        >
-          <div className={cn('flex items-center justify-between rounded-t-lg border-b px-3 py-2', col.headerClass)}>
-            <span className="text-sm font-semibold uppercase tracking-wide">{col.label}</span>
-            <span className={cn('inline-flex min-w-[24px] items-center justify-center rounded-full px-2 py-0.5 text-xs font-semibold', col.countClass)}>
-              {grouped[col.key].length}
-            </span>
-          </div>
-          <div className="flex-1 space-y-2 overflow-y-auto p-2">
-            {grouped[col.key].length === 0 ? (
-              <div className="flex h-full items-center justify-center px-2 py-8 text-center text-xs text-slate-400">
-                {col.emptyHint}
-              </div>
-            ) : (
-              grouped[col.key].map((s) => (
-                <KanbanCard
-                  key={s.id}
-                  shipment={s}
-                  isDragging={draggingId === s.id}
-                  onClick={() => onCardClick(s.id)}
-                  onDragStart={(e) => onDragStart(e, s)}
-                  onDragEnd={onDragEnd}
-                  onMarkShipped={() => onMarkShipped(s)}
-                  onAddObservation={() => {
-                    setObsFor(s);
-                    setObsText('');
-                  }}
-                  showActions={col.key !== 'shipped'}
-                />
-              ))
-            )}
-          </div>
-        </div>
-      ))}
-    </div>
-
-    {obsFor && (
-      <div
-        className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4"
-        onClick={() => !obsSaving && setObsFor(null)}
+      <DndContext
+        sensors={sensors}
+        onDragStart={handleDragStart}
+        onDragOver={handleDragOver}
+        onDragEnd={handleDragEnd}
+        onDragCancel={handleDragCancel}
       >
-        <div
-          className="w-full max-w-md rounded-lg bg-white shadow-lg"
-          onClick={(e) => e.stopPropagation()}
-        >
-          <form onSubmit={submitObservation}>
-            <div className="border-b border-slate-200 px-5 py-4">
-              <h2 className="text-base font-semibold text-slate-900">
-                Nova observação
-              </h2>
-              <p className="mt-1 text-xs text-slate-500">
-                Para {obsFor.client_trade_name ?? obsFor.client_name}
-                {obsFor.numero_venda ? ` — Pedido #${obsFor.numero_venda}` : ''}
-              </p>
-            </div>
-            <div className="px-5 py-4">
-              <Textarea
-                value={obsText}
-                onChange={(e) => setObsText(e.target.value)}
-                placeholder="Ex: cliente pediu para entregar depois das 14h"
-                rows={4}
-                autoFocus
-              />
-            </div>
-            <div className="flex justify-end gap-3 border-t border-slate-200 px-5 py-3">
-              <Button
-                type="button"
-                variant="secondary"
-                onClick={() => setObsFor(null)}
-                disabled={obsSaving}
-              >
-                Cancelar
-              </Button>
-              <Button type="submit" disabled={obsSaving || !obsText.trim()}>
-                {obsSaving ? 'Salvando…' : 'Salvar observação'}
-              </Button>
-            </div>
-          </form>
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          {COLUMNS.map((col) => (
+            <DroppableColumn
+              key={col.key}
+              col={col}
+              count={grouped[col.key].length}
+              hovered={hoverColumn === col.key}
+            >
+              {grouped[col.key].length === 0 ? (
+                <div className="flex h-full items-center justify-center px-2 py-8 text-center text-xs text-slate-400">
+                  {col.emptyHint}
+                </div>
+              ) : (
+                grouped[col.key].map((s) => (
+                  <DraggableCard
+                    key={s.id}
+                    shipment={s}
+                    isDragging={activeId === s.id}
+                    showActions={col.key !== 'shipped'}
+                    onCardClick={onCardClick}
+                    onMarkShipped={() => onMarkShipped(s)}
+                    onAskObservation={() => {
+                      setObsFor(s);
+                      setObsText('');
+                    }}
+                  />
+                ))
+              )}
+            </DroppableColumn>
+          ))}
         </div>
-      </div>
-    )}
+
+        <DragOverlay dropAnimation={{ duration: 200, easing: 'cubic-bezier(0.18, 0.67, 0.6, 1.22)' }}>
+          {activeShipment ? <CardPreview shipment={activeShipment} /> : null}
+        </DragOverlay>
+      </DndContext>
+
+      {obsFor && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4"
+          onClick={() => !obsSaving && setObsFor(null)}
+        >
+          <div className="w-full max-w-md rounded-lg bg-white shadow-lg" onClick={(e) => e.stopPropagation()}>
+            <form onSubmit={submitObservation}>
+              <div className="border-b border-slate-200 px-5 py-4">
+                <h2 className="text-base font-semibold text-slate-900">Nova observação</h2>
+                <p className="mt-1 text-xs text-slate-500">
+                  Para {obsFor.client_trade_name ?? obsFor.client_name}
+                  {obsFor.numero_venda ? ` — Pedido #${obsFor.numero_venda}` : ''}
+                </p>
+              </div>
+              <div className="px-5 py-4">
+                <Textarea
+                  value={obsText}
+                  onChange={(e) => setObsText(e.target.value)}
+                  placeholder="Ex: cliente pediu para entregar depois das 14h"
+                  rows={4}
+                  autoFocus
+                />
+              </div>
+              <div className="flex justify-end gap-3 border-t border-slate-200 px-5 py-3">
+                <Button type="button" variant="secondary" onClick={() => setObsFor(null)} disabled={obsSaving}>
+                  Cancelar
+                </Button>
+                <Button type="submit" disabled={obsSaving || !obsText.trim()}>
+                  {obsSaving ? 'Salvando…' : 'Salvar observação'}
+                </Button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </>
   );
 }
 
-interface KanbanCardProps {
-  shipment: ShipmentRow;
-  isDragging: boolean;
-  onClick: () => void;
-  onDragStart: (e: DragEvent<HTMLDivElement>) => void;
-  onDragEnd: () => void;
-  onMarkShipped: () => void;
-  onAddObservation: () => void;
-  showActions: boolean;
+// ── Coluna ─────────────────────────────────────────────────────────────
+
+function DroppableColumn({
+  col, count, hovered, children,
+}: {
+  col: ColumnDef;
+  count: number;
+  hovered: boolean;
+  children: React.ReactNode;
+}) {
+  const { setNodeRef, isOver } = useDroppable({ id: col.key });
+  const active = hovered || isOver;
+  return (
+    <div
+      ref={setNodeRef}
+      className={cn(
+        'flex h-[calc(100vh-12rem)] min-h-[400px] flex-col rounded-lg border bg-slate-50/50 transition-colors duration-150',
+        active && 'border-brand-500 bg-brand-50/60 ring-4 ring-brand-200/50'
+      )}
+    >
+      <div className={cn('flex items-center justify-between rounded-t-lg border-b px-3 py-2', col.headerClass)}>
+        <span className="text-sm font-semibold uppercase tracking-wide">{col.label}</span>
+        <span className={cn('inline-flex min-w-[24px] items-center justify-center rounded-full px-2 py-0.5 text-xs font-semibold', col.countClass)}>
+          {count}
+        </span>
+      </div>
+      <div className="flex-1 space-y-2 overflow-y-auto p-2">
+        {children}
+      </div>
+    </div>
+  );
 }
 
-function KanbanCard({
-  shipment: s,
-  isDragging,
-  onClick,
-  onDragStart,
-  onDragEnd,
-  onMarkShipped,
-  onAddObservation,
-  showActions,
-}: KanbanCardProps) {
+// ── Card arrastável ───────────────────────────────────────────────────────
+
+function DraggableCard({
+  shipment, isDragging, showActions, onCardClick, onMarkShipped, onAskObservation,
+}: {
+  shipment: ShipmentRow;
+  isDragging: boolean;
+  showActions: boolean;
+  onCardClick: (id: string) => void;
+  onMarkShipped: () => void;
+  onAskObservation: () => void;
+}) {
+  const { attributes, listeners, setNodeRef } = useDraggable({ id: shipment.id });
+  return (
+    <div
+      ref={setNodeRef}
+      {...attributes}
+      {...listeners}
+      onClick={() => onCardClick(shipment.id)}
+      className={cn(
+        'cursor-grab touch-none rounded-md border border-slate-200 bg-white p-3 shadow-sm',
+        'transition-[box-shadow,border-color] duration-150',
+        'hover:border-brand-300 hover:shadow-lg',
+        'active:cursor-grabbing',
+        isDragging && 'opacity-30'
+      )}
+      title="Clique para detalhes — segure e arraste para mover"
+    >
+      <CardContent shipment={shipment} showActions={showActions} onMarkShipped={onMarkShipped} onAskObservation={onAskObservation} />
+    </div>
+  );
+}
+
+// ── Preview que segue o cursor ────────────────────────────────────────────
+
+function CardPreview({ shipment }: { shipment: ShipmentRow }) {
+  return (
+    <div
+      className="rotate-[-2deg] cursor-grabbing rounded-md border border-brand-300 bg-white p-3 shadow-2xl ring-1 ring-brand-100"
+      style={{ width: '100%', maxWidth: 320 }}
+    >
+      <CardContent shipment={shipment} showActions={false} onMarkShipped={() => {}} onAskObservation={() => {}} />
+    </div>
+  );
+}
+
+// ── Conteúdo do card ───────────────────────────────────────────────────────
+
+function CardContent({
+  shipment: s, showActions, onMarkShipped, onAskObservation,
+}: {
+  shipment: ShipmentRow;
+  showActions: boolean;
+  onMarkShipped: () => void;
+  onAskObservation: () => void;
+}) {
   const dateLabel = s.status === 'shipped' && s.data_saida
     ? `Saiu em ${formatDate(s.data_saida)}`
     : s.data_prevista
@@ -284,20 +322,7 @@ function KanbanCard({
       : 'Sem data prevista';
 
   return (
-    <div
-      draggable
-      onDragStart={onDragStart}
-      onDragEnd={onDragEnd}
-      onClick={onClick}
-      className={cn(
-        'group cursor-grab rounded-md border border-slate-200 bg-white p-3 shadow-sm',
-        'transition-[box-shadow,border-color] duration-150',
-        'hover:border-brand-300 hover:shadow-lg',
-        'active:cursor-grabbing',
-        isDragging && 'opacity-30 shadow-none'
-      )}
-      title="Clique para detalhes — segure e arraste para mover"
-    >
+    <>
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0 flex-1">
           <div className="truncate text-sm font-semibold text-slate-900">
@@ -355,6 +380,7 @@ function KanbanCard({
         <div className="mt-2 flex items-center gap-1.5 text-[11px] text-slate-500">
           <button
             type="button"
+            onPointerDown={(e) => e.stopPropagation()}
             onClick={(e) => {
               e.stopPropagation();
               onMarkShipped();
@@ -370,9 +396,10 @@ function KanbanCard({
           <span className="text-slate-300">·</span>
           <button
             type="button"
+            onPointerDown={(e) => e.stopPropagation()}
             onClick={(e) => {
               e.stopPropagation();
-              onAddObservation();
+              onAskObservation();
             }}
             className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 hover:bg-purple-50 hover:text-purple-700"
             title="Adicionar observação"
@@ -384,6 +411,6 @@ function KanbanCard({
           </button>
         </div>
       )}
-    </div>
+    </>
   );
 }
