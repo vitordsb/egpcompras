@@ -136,17 +136,36 @@ const TOOL_DECLARATIONS = [
     },
   },
   {
-    name: 'create_order_intent',
+    name: 'lookup_client_by_cnpj',
     description:
-      'Registra a intenção de compra após coletar nome do cliente, produto(s) e quantidade. ' +
-      'Use somente após o cliente confirmar o pedido. Não use para simples consultas de preço.',
+      'Verifica se um CNPJ já está cadastrado no sistema da EGP. Use quando o cliente disser que já é cliente e fornecer o CNPJ, antes de pedir mais dados de cadastro. Se encontrar, retorna razão social e nome do comprador conhecido — assim você não precisa pedir de novo.',
     parameters: {
       type: 'OBJECT',
       properties: {
-        client_name: { type: 'STRING', description: 'Nome do cliente.' },
+        cnpj: { type: 'STRING', description: 'CNPJ informado pelo cliente. Aceita com ou sem máscara.' },
+      },
+      required: ['cnpj'],
+    },
+  },
+  {
+    name: 'create_order_intent',
+    description:
+      'Registra a intenção de compra DEPOIS de coletar todos os dados de qualificação B2B. NUNCA chame antes de ter: produto+quantidade, identificação do cliente (CNPJ + razão social) e nome do comprador. Para cliente novo, também precisa de endereço completo. Não use para simples consultas de preço.',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        cnpj:           { type: 'STRING', description: 'CNPJ do cliente (obrigatório em B2B).' },
+        razao_social:   { type: 'STRING', description: 'Razão social da empresa.' },
+        comprador_nome: { type: 'STRING', description: 'Nome da pessoa que está fazendo o pedido (comprador/responsável).' },
+        endereco_rua:        { type: 'STRING', description: 'Apenas para cliente novo. Logradouro.' },
+        endereco_numero:     { type: 'STRING', description: 'Apenas para cliente novo. Número do endereço.' },
+        endereco_cidade:     { type: 'STRING', description: 'Apenas para cliente novo.' },
+        endereco_estado:     { type: 'STRING', description: 'Apenas para cliente novo. UF (ex: SP, MG).' },
+        endereco_complemento:{ type: 'STRING', description: 'Apenas para cliente novo. Complemento ou observação de entrega.' },
+        is_existing_client:  { type: 'BOOLEAN', description: 'true se o CNPJ já estava cadastrado (lookup_client_by_cnpj retornou found=true).' },
         items: {
           type: 'ARRAY',
-          description: 'Lista de produtos.',
+          description: 'Lista de produtos do pedido.',
           items: {
             type: 'OBJECT',
             properties: {
@@ -159,7 +178,7 @@ const TOOL_DECLARATIONS = [
         },
         forma_pagamento: { type: 'STRING', description: 'Forma de pagamento. Ex: PIX, boleto, cartão.' },
       },
-      required: ['client_name', 'items'],
+      required: ['cnpj', 'razao_social', 'comprador_nome', 'items', 'is_existing_client'],
     },
   },
   {
@@ -252,16 +271,88 @@ async function executeTool(
         return JSON.stringify({ promotions: rows.map(r => ({ title: r.title, description: r.description_for_bot })) });
       }
 
-      case 'create_order_intent': {
-        const clientName = String(args.client_name ?? '').trim();
-        const items      = Array.isArray(args.items) ? args.items : [];
-        if (!clientName || items.length === 0) {
-          return JSON.stringify({ success: false, error: 'client_name e items são obrigatórios' });
+      case 'lookup_client_by_cnpj': {
+        const rawCnpj = String(args.cnpj ?? '').trim();
+        const digits = rawCnpj.replace(/\D/g, '');
+        if (digits.length !== 14) {
+          return JSON.stringify({ found: false, message: 'CNPJ deve ter 14 dígitos. Peça pro cliente conferir.' });
         }
+        // Tenta com máscara e sem máscara
+        const masked = `${digits.slice(0, 2)}.${digits.slice(2, 5)}.${digits.slice(5, 8)}/${digits.slice(8, 12)}-${digits.slice(12, 14)}`;
+        const res = await fetch(
+          `${SUPA_URL}/rest/v1/client_contacts?select=id,name,trade_name,cnpj,whatsapp_phone,email,address&or=(cnpj.eq.${digits},cnpj.eq.${encodeURIComponent(masked)})&limit=1`,
+          { headers: supaHeaders },
+        );
+        const rows: any[] = res.ok ? await res.json() : [];
+        if (rows.length === 0) {
+          return JSON.stringify({ found: false, message: 'CNPJ não encontrado. Cliente é novo — peça os dados de cadastro (razão social, nome do comprador, endereço completo).' });
+        }
+        const c = rows[0];
+        return JSON.stringify({
+          found: true,
+          razao_social: c.name,
+          trade_name: c.trade_name,
+          comprador_conhecido: null, // pode ser estendido futuramente
+          message: `Cliente já cadastrado: ${c.name}. Confirme com o comprador o nome dele e siga com o pedido — não peça os dados de endereço, já temos.`,
+        });
+      }
+
+      case 'create_order_intent': {
+        const cnpjRaw       = String(args.cnpj ?? '').trim();
+        const cnpjDigits    = cnpjRaw.replace(/\D/g, '');
+        const razaoSocial   = String(args.razao_social ?? '').trim();
+        const compradorNome = String(args.comprador_nome ?? '').trim();
+        const items         = Array.isArray(args.items) ? args.items : [];
+        const isExisting    = Boolean(args.is_existing_client);
+        if (cnpjDigits.length !== 14 || !razaoSocial || !compradorNome || items.length === 0) {
+          return JSON.stringify({ success: false, error: 'cnpj válido (14 dígitos), razao_social, comprador_nome e items são obrigatórios.' });
+        }
+        const cnpjMasked = `${cnpjDigits.slice(0, 2)}.${cnpjDigits.slice(2, 5)}.${cnpjDigits.slice(5, 8)}/${cnpjDigits.slice(8, 12)}-${cnpjDigits.slice(12, 14)}`;
+
+        // Monta endereço (só esperamos pra cliente novo)
+        const enderecoParts: string[] = [];
+        if (args.endereco_rua) enderecoParts.push(String(args.endereco_rua).trim());
+        if (args.endereco_numero) enderecoParts.push(String(args.endereco_numero).trim());
+        if (args.endereco_cidade || args.endereco_estado) {
+          enderecoParts.push([args.endereco_cidade, args.endereco_estado].filter(Boolean).map(String).map((s) => s.trim()).join('/'));
+        }
+        if (args.endereco_complemento) enderecoParts.push(`obs: ${String(args.endereco_complemento).trim()}`);
+        const enderecoCompleto = enderecoParts.length > 0 ? enderecoParts.join(', ') : null;
+
+        // Cria/atualiza client_contacts (cadastro CRM)
+        const lookupRes = await fetch(
+          `${SUPA_URL}/rest/v1/client_contacts?select=id&or=(cnpj.eq.${cnpjDigits},cnpj.eq.${encodeURIComponent(cnpjMasked)})&limit=1`,
+          { headers: supaHeaders },
+        );
+        const existingRows: any[] = lookupRes.ok ? await lookupRes.json() : [];
+        const existingId = existingRows[0]?.id ?? null;
+
+        if (existingId) {
+          // Atualiza WhatsApp e endereço (se vier) sem sobrescrever razão social
+          const updates: Record<string, unknown> = { whatsapp_phone: phone };
+          if (enderecoCompleto) updates.address = enderecoCompleto;
+          await dbUpdate('client_contacts', existingId, updates);
+        } else {
+          await dbInsert('client_contacts', {
+            name: razaoSocial,
+            cnpj: cnpjMasked,
+            whatsapp_phone: phone,
+            address: enderecoCompleto,
+          });
+        }
+
+        // Cria intent enriquecida
         const intent = await dbInsert('order_intents', {
           session_id:      sessionId || null,
           phone,
-          client_name:     clientName,
+          client_name:     razaoSocial,
+          collected_lead_data: JSON.stringify({
+            cnpj: cnpjMasked,
+            razao_social: razaoSocial,
+            comprador_nome: compradorNome,
+            endereco: enderecoCompleto,
+            is_existing_client: isExisting,
+          }),
           items:           JSON.stringify(items),
           forma_pagamento: args.forma_pagamento ? String(args.forma_pagamento) : null,
           status:          'pending',
@@ -271,7 +362,7 @@ async function executeTool(
         return JSON.stringify({
           success:   true,
           intent_id: intent.id,
-          message:   `Pedido registrado com sucesso: ${summary} para ${clientName}. Nossa equipe confirmará em breve.`,
+          message:   `Pedido registrado: ${summary} para ${razaoSocial} (${cnpjMasked}). Comprador: ${compradorNome}. A vendedora vai entrar em contato em breve.`,
         });
       }
 
@@ -326,46 +417,75 @@ async function callGemini(
   phone: string,
   sessionId: string,
 ): Promise<string> {
-  const system = `Você é a assistente de vendas da EGP Tecnologia, empresa brasileira de equipamentos de segurança eletrônica (controles, eletrificadoras, fontes, cabos).
+  const system = `Você é a assistente comercial da EGP Tecnologia — indústria brasileira B2B de equipamentos de segurança eletrônica (controles, eletrificadoras, fontes, cabos). Atende revendedores, instaladores e distribuidores.
 
-Escreva como uma pessoa real mandando mensagem pelo WhatsApp. Respostas curtas, descontraídas, sem enrolação. Uma ideia por mensagem. Sem listas longas, sem parágrafos, sem formalidade.
+═══ TOM E ESTILO B2B ═══
+- Profissional e direto, sem ser frio. Escreva como um atendimento comercial competente.
+- SEM emojis. NUNCA use 😊 😉 🎉 🙏 etc.
+- SEM gírias: nada de "Show!", "Perfeito!", "Anotado!", "Beleza", "Tranquilo".
+- Trate o cliente formalmente (você, sem "amigo"/"meu querido"). "Sr/Sra" só se o cliente usar primeiro.
+- *Negrito* SÓ em nome de produto e valor. Nada de markdown decorativo (###, ---, bullets desnecessários).
+- Frases curtas e completas. Máximo 4 linhas por mensagem.
+- UMA pergunta por mensagem. Não enche o cliente com 3 perguntas de uma vez.
+- PROIBIDO repetir o que o cliente disse antes de responder.
 
-*Como escrever:*
-- Frases curtas. Máximo 3 linhas por mensagem.
-- Use *negrito* só em nome de produto e preço.
-- Emoji com moderação — 1 por mensagem no máximo, só quando faz sentido.
-- PROIBIDO: markdown (###, ---), listas com bullet quando não necessário, linguagem corporativa.
-- PROIBIDO: repetir o que o cliente disse. Vá direto ao ponto.
+Exemplos:
+❌ "Show! 50 peças do Eletrificador EGP 12.000. Só me fala seu nome..."
+✅ "Confere: 50 unidades do *Eletrificador EGP 12.000*. Você já é cliente da EGP?"
 
-*Exemplos de tom:*
-❌ "Olá! Fico feliz em ajudá-lo com sua solicitação de compra."
-✅ "Oi! Qual produto você precisa?"
+❌ "Anotado! 📝 Pedido registrado, nossa consultora fala em breve."
+✅ "Pedido registrado. A vendedora entrará em contato pra confirmar prazo e condição comercial."
 
-❌ "Entendido! Você deseja adquirir 150 peças do Eletrificador EGP 12.000."
-✅ "Show! Só preciso do seu nome pra registrar. 😊"
+❌ "Olá! 😊 Como posso te ajudar hoje?"
+✅ "Bom dia. Em que posso ajudar?"
 
-❌ "Por favor, me informe seu nome completo para que possamos prosseguir."
-✅ "Qual seu nome?"
+═══ REGRAS DE PRODUTO E PREÇO ═══
+- Produto com preço no catálogo → pode informar.
+- Produto SEM preço no catálogo → nunca invente. Responda: "Vou pedir pra vendedora te passar a melhor condição." e chame escalate_to_human(reason="price_negotiation").
+- NUNCA mencione estoque, "indisponível", "sem estoque", "esgotado" — proibido em qualquer contexto.
 
-*REGRAS ABSOLUTAS:*
-- Se o produto tiver preço no catálogo → pode informar normalmente
-- Se o produto NÃO tiver preço → nunca invente valor. Diga: "Vou chamar uma de nossas consultoras pra te passar a melhor oferta! 😊" e chame escalate_to_human com reason "price_negotiation"
-- Nunca mencione estoque, "sem estoque", "indisponível", "esgotado" — proibido
-- Sempre registre o pedido e diga que a consultora confirma prazo e detalhes
+═══ FLUXO DE VENDA (B2B — vendedora fecha) ═══
 
-*Fluxo de pedido:*
-1. Produto vago ("controle", "12V", "cerca") → chame find_products → mostre opções simples: "Qual desses? 1️⃣ X  2️⃣ Y"
-2. Cliente escolheu produto e quantidade → pergunte só o nome, nada mais
-3. Tem nome → chame create_order_intent → "Anotado! Nossa consultora fala com você em breve. 📞"
-4. Oferta ativa → chame get_active_promotions e mencione naturalmente
-5. Dúvida técnica, negociação ou pedido de humano → chame escalate_to_human
+PASSO 1 — Identificar produto e quantidade
+- Cliente menciona produto vago ("controle", "12V") → find_products → mostre opções numeradas: "1. *Produto X* — R$ Y\\n2. *Produto Z* — R$ W"
+- Pergunte qual quer e a quantidade.
 
-*Informações úteis:*
-- Pagamento: PIX, boleto ou cartão
-- Entrega: 5-7 dias úteis em SP, restante do Brasil consultar
-- Compatibilidade dos controles: Learning Code 433MHz
-- Garantia: 1 ano controles, 1 ano e 3 meses eletrificadoras
-- RMA: cliente envia por Nota de Remessa, devolvemos com nota de retorno
+PASSO 2 — Qualificação B2B (OBRIGATÓRIO antes de criar pedido)
+Quando tiver produto+quantidade, pergunte: "Você já é cliente cadastrado da EGP?"
+
+  CASO A — JÁ É CLIENTE:
+  - Peça apenas o CNPJ.
+  - Quando receber, chame lookup_client_by_cnpj.
+  - Se found=true: peça SOMENTE o nome do comprador (quem está fazendo o pedido). Não peça endereço.
+  - Se found=false: avise "Não encontrei esse CNPJ no nosso sistema. Vou cadastrar como cliente novo." e siga pro CASO B coletando o resto.
+
+  CASO B — CLIENTE NOVO (ou CNPJ não localizado):
+  Colete em mensagens separadas, UMA pergunta por vez (não despeje checklist):
+  1. CNPJ
+  2. Razão social
+  3. Nome do comprador (quem está fazendo o pedido)
+  4. Endereço de entrega: rua e número
+  5. Cidade e estado (UF)
+  6. Complemento ou observação de entrega (opcional — pode pular se cliente não tiver)
+
+PASSO 3 — Confirmação e registro
+- Quando tiver TUDO (produto+qty + CNPJ + razão social + comprador + endereço se novo), faça uma confirmação resumida:
+  "Confirmando o pedido:
+  *2x Eletrificador EGP 12.000*
+  CNPJ: 00.000.000/0001-00
+  Comprador: Fulano de Tal
+  Posso registrar?"
+- Após o cliente confirmar (sim/ok/pode), chame create_order_intent com is_existing_client=true ou false conforme o lookup.
+- Resposta final: "Pedido registrado. A vendedora vai entrar em contato em breve pra confirmar prazo, frete e condição comercial."
+
+═══ OUTROS ═══
+- Promoção ativa relevante → get_active_promotions e mencione naturalmente no fluxo.
+- Cliente pede pra falar com humano, dúvida técnica de instalação, negociação fora do tabelado → escalate_to_human.
+- Pagamento: PIX, boleto ou cartão. A condição é negociada com a vendedora.
+- Entrega: prazo confirmado pela vendedora.
+- Compatibilidade controles: Learning Code 433MHz.
+- Garantia: 1 ano controles, 1 ano e 3 meses eletrificadoras.
+- RMA: cliente envia por Nota de Remessa, devolvemos com nota de retorno.
 
 ${catalog}`;
 
