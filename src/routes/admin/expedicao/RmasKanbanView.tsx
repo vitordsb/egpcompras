@@ -1,4 +1,4 @@
-import { useMemo, useState, type DragEvent, type FormEvent } from 'react';
+import { useEffect, useMemo, useState, type DragEvent, type FormEvent } from 'react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/Button';
 import { Textarea } from '@/components/ui/Input';
@@ -94,6 +94,25 @@ export default function RmasKanbanView({
     setDraggingId(null);
     setHoverColumn(null);
   }
+
+  // Cleanup defensivo: se o drag for cancelado por qualquer motivo (Esc,
+  // soltar fora, mudar de tab) garantimos limpar o estado pra não deixar
+  // o card "preso" como dragging.
+  useEffect(() => {
+    if (!draggingId) return;
+    const cleanup = () => {
+      setDraggingId(null);
+      setHoverColumn(null);
+    };
+    document.addEventListener('dragend', cleanup);
+    document.addEventListener('drop', cleanup);
+    window.addEventListener('blur', cleanup);
+    return () => {
+      document.removeEventListener('dragend', cleanup);
+      document.removeEventListener('drop', cleanup);
+      window.removeEventListener('blur', cleanup);
+    };
+  }, [draggingId]);
   function onDragOver(e: DragEvent<HTMLDivElement>, col: BucketKey) {
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';

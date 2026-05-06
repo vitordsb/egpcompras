@@ -1,4 +1,4 @@
-import { useMemo, useState, type DragEvent, type FormEvent } from 'react';
+import { useEffect, useMemo, useState, type DragEvent, type FormEvent } from 'react';
 import type { Shipment } from '@/types/db';
 import { cn } from '@/lib/utils';
 import { isLate, isOnTime, formatDate } from './shared';
@@ -118,6 +118,24 @@ export default function KanbanView({
     setDraggingId(null);
     setHoverColumn(null);
   }
+
+  // Cleanup defensivo: garante limpar o estado se o drag for cancelado
+  // (Esc, blur, drop fora). Sem isso o card fica preso como "dragging".
+  useEffect(() => {
+    if (!draggingId) return;
+    const cleanup = () => {
+      setDraggingId(null);
+      setHoverColumn(null);
+    };
+    document.addEventListener('dragend', cleanup);
+    document.addEventListener('drop', cleanup);
+    window.addEventListener('blur', cleanup);
+    return () => {
+      document.removeEventListener('dragend', cleanup);
+      document.removeEventListener('drop', cleanup);
+      window.removeEventListener('blur', cleanup);
+    };
+  }, [draggingId]);
 
   function onDragOver(e: DragEvent<HTMLDivElement>, col: ColumnKey) {
     e.preventDefault();
