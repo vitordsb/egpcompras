@@ -334,7 +334,7 @@ export const toolDeclarations = [
   {
     name: 'setup_product_bom',
     description:
-      'Define ou redefine a BOM completa de um produto de uma vez. Cria o produto se não existir. Para cada componente: busca no catálogo por nome/SKU (fuzzy); se não encontrar, cria automaticamente. Use quando o usuário disser "o produto X usa os componentes A, B, C" ou "o acervo do produto X é...".',
+      'Define ou redefine a BOM completa de um produto de uma vez. Cria o produto se não existir. Para cada componente: busca no catálogo por nome/SKU (fuzzy); se não encontrar, cria automaticamente. Aceita preço-alvo (target_price_brl) por componente — usado no cálculo de custo do produto. Use quando o usuário disser "o produto X usa os componentes A, B, C" ou listar componentes com preços ao lado.',
     parameters: {
       type: 'OBJECT' as Type,
       properties: {
@@ -349,7 +349,7 @@ export const toolDeclarations = [
         },
         components: {
           type: 'ARRAY' as Type,
-          description: 'Lista completa de componentes do produto.',
+          description: 'Lista completa de componentes do produto. Inclua target_price_brl se o usuário informou preços.',
           items: {
             type: 'OBJECT' as Type,
             properties: {
@@ -357,6 +357,7 @@ export const toolDeclarations = [
               sku:      { type: 'STRING' as Type, description: 'SKU/código (opcional).' },
               quantity: { type: 'NUMBER' as Type, description: 'Quantidade por unidade do produto.' },
               unit:     { type: 'STRING' as Type, description: 'Unidade (opcional, default un).' },
+              target_price_brl: { type: 'NUMBER' as Type, description: 'Preço-alvo unitário em BRL (opcional). Se o usuário disse "Resistor 10k R$ 0,12", passe 0.12 aqui.' },
             },
             required: ['name', 'quantity'],
           },
@@ -3850,7 +3851,10 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
 
     case 'setup_product_bom': {
       const productName = String(args.product_name ?? '').trim();
-      const components = (args.components ?? []) as Array<{ name: string; sku?: string; quantity: number; unit?: string }>;
+      const components = (args.components ?? []) as Array<{
+        name: string; sku?: string; quantity: number; unit?: string;
+        target_price_brl?: number; value_unit?: number; price?: number;
+      }>;
       if (!components.length) throw new Error('Informe pelo menos um componente.');
 
       // 1. Localiza ou cria o produto
@@ -3924,20 +3928,33 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
           .eq('component_id', componentId)
           .maybeSingle();
 
+        // Aceita target_price_brl (preferido), value_unit ou price (aliases tolerados)
+        const rawPrice = comp.target_price_brl ?? comp.value_unit ?? comp.price;
+        const targetPrice = rawPrice != null && Number.isFinite(Number(rawPrice))
+          ? Number(rawPrice)
+          : null;
+
         if (existingBom) {
-          await supabase.from('bom_items').update({ quantity: comp.quantity }).eq('id', existingBom.id);
-          results.push({ component: comp.name, action: 'atualizado', quantity: comp.quantity });
+          const update: Record<string, unknown> = { quantity: comp.quantity };
+          if (targetPrice != null) update.target_price_brl = targetPrice;
+          await supabase.from('bom_items').update(update).eq('id', existingBom.id);
+          results.push({ component: comp.name, action: 'atualizado', quantity: comp.quantity, target_price_brl: targetPrice });
         } else {
-          await supabase.from('bom_items').insert({ product_id: productId, component_id: componentId, quantity: comp.quantity });
-          results.push({ component: comp.name, action: 'adicionado', quantity: comp.quantity });
+          const insert: Record<string, unknown> = { product_id: productId, component_id: componentId, quantity: comp.quantity };
+          if (targetPrice != null) insert.target_price_brl = targetPrice;
+          await supabase.from('bom_items').insert(insert);
+          results.push({ component: comp.name, action: 'adicionado', quantity: comp.quantity, target_price_brl: targetPrice });
         }
       }
 
+      const totalCost = results.reduce((sum, r) => sum + (r.target_price_brl != null ? r.target_price_brl * (r.quantity ?? 0) : 0), 0);
       return {
         product: productName,
         product_id: productId,
         created_product: !existing,
         components_processed: results.length,
+        components_with_price: results.filter((r) => r.target_price_brl != null).length,
+        unit_cost_brl: totalCost > 0 ? Number(totalCost.toFixed(4)) : null,
         bom: results,
       };
     }
