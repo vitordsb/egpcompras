@@ -17,11 +17,14 @@ async function loadCompanyVocabulary(): Promise<string[]> {
     return vocabCache.items;
   }
   try {
-    const [contacts, products, clients, suppliers] = await Promise.all([
-      supabase.from('whatsapp_contacts').select('name').limit(50),
-      supabase.from('products').select('name').limit(80),
-      supabase.from('client_contacts').select('name, trade_name').limit(60),
-      supabase.from('suppliers').select('name').limit(40),
+    const [contacts, products, clients, suppliers, sellers, templates, components] = await Promise.all([
+      supabase.from('whatsapp_contacts').select('name').limit(100),
+      supabase.from('products').select('name').limit(150),
+      supabase.from('client_contacts').select('name, trade_name').limit(120),
+      supabase.from('suppliers').select('name').limit(80),
+      supabase.from('sellers').select('name').limit(20),
+      supabase.from('marketing_templates').select('name').limit(40),
+      supabase.from('components').select('name').limit(60),
     ]);
     const set = new Set<string>();
     for (const r of (contacts.data ?? []) as any[]) if (r.name) set.add(String(r.name).trim());
@@ -31,7 +34,10 @@ async function loadCompanyVocabulary(): Promise<string[]> {
       if (r.trade_name) set.add(String(r.trade_name).trim());
     }
     for (const r of (suppliers.data ?? []) as any[]) if (r.name) set.add(String(r.name).trim());
-    const items = Array.from(set).filter((s) => s.length >= 3 && s.length <= 60);
+    for (const r of (sellers.data ?? []) as any[]) if (r.name) set.add(String(r.name).trim());
+    for (const r of (templates.data ?? []) as any[]) if (r.name) set.add(String(r.name).trim());
+    for (const r of (components.data ?? []) as any[]) if (r.name) set.add(String(r.name).trim());
+    const items = Array.from(set).filter((s) => s.length >= 2 && s.length <= 60);
     vocabCache = { items, loadedAt: Date.now() };
     return items;
   } catch (err) {
@@ -145,7 +151,7 @@ export async function transcribeAudio(blob: Blob): Promise<string> {
   const [base64, vocab] = await Promise.all([blobToBase64(blob), loadCompanyVocabulary()]);
 
   const vocabHint = vocab.length > 0
-    ? `\n\nNomes próprios e termos da empresa (use estes EXATAMENTE quando reconhecer fonemas similares na fala):\n${vocab.join(', ')}`
+    ? `\n\nIMPORTANTE — Esta empresa (EGP, fabricante de eletrônicos) tem termos próprios. Quando o áudio falar algo FONETICAMENTE PARECIDO com qualquer item desta lista, escreva EXATAMENTE como está aqui (mesma grafia, sem traduzir, sem corrigir, sem separar palavras):\n\n${vocab.join(' · ')}\n\nExemplos do tipo de correção esperada: "Natana"→"Nathanna", "no break"→"nobreak", "iktek"→"HIKTEC". Sempre prefira o termo da lista se houver match razoável.`
     : '';
 
   const promptText =

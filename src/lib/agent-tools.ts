@@ -2326,6 +2326,79 @@ async function fuzzyFallback<T = any>(rpcName: string, query: string): Promise<T
   }
 }
 
+/**
+ * Resolve um nome (ex: "Nathanna", "Felipe Enbracon") em um número de
+ * WhatsApp, buscando em 3 tabelas na ordem: whatsapp_contacts → sellers →
+ * client_contacts. Tenta ilike primeiro; se falha, fuzzy fallback.
+ * Retorna null se nada encontrado.
+ */
+async function resolveRecipientPhoneByName(name: string): Promise<string | null> {
+  const q = name.trim();
+  if (!q) return null;
+
+  // Pass 1: ilike em paralelo nas 3 tabelas
+  const [waRes, sellersRes, clientsRes] = await Promise.all([
+    supabase.from('whatsapp_contacts').select('phone').ilike('name', `%${q}%`).limit(1),
+    supabase.from('sellers').select('whatsapp_number').ilike('name', `%${q}%`).limit(1),
+    supabase.from('client_contacts').select('whatsapp_phone').ilike('name', `%${q}%`).not('whatsapp_phone', 'is', null).limit(1),
+  ]);
+  const waPhone = (waRes.data as any[])?.[0]?.phone;
+  if (waPhone) return String(waPhone);
+  const sellerPhone = (sellersRes.data as any[])?.[0]?.whatsapp_number;
+  if (sellerPhone) return String(sellerPhone);
+  const clientPhone = (clientsRes.data as any[])?.[0]?.whatsapp_phone;
+  if (clientPhone) return String(clientPhone);
+
+  // Pass 2: fuzzy fallback nas mesmas 3 tabelas
+  const [fuzzyWa, fuzzyClients] = await Promise.all([
+    fuzzyFallback<{ phone: string; sim: number }>('search_whatsapp_contacts_fuzzy', q),
+    fuzzyFallback<{ whatsapp_phone: string; sim: number }>('search_client_contacts_fuzzy', q),
+  ]);
+  if (fuzzyWa[0]?.phone) return String(fuzzyWa[0].phone);
+  // Sellers in-memory (poucos registros)
+  const { data: allSellers } = await supabase.from('sellers').select('name, whatsapp_number');
+  const bestSeller = ((allSellers ?? []) as any[])
+    .map((s) => ({ ...s, sim: stringSimilarity(q, s.name) }))
+    .filter((s) => s.sim > 0.4)
+    .sort((a, b) => b.sim - a.sim)[0];
+  if (bestSeller?.whatsapp_number) return String(bestSeller.whatsapp_number);
+  const fuzzyClient = fuzzyClients.find((c) => c.whatsapp_phone);
+  if (fuzzyClient?.whatsapp_phone) return String(fuzzyClient.whatsapp_phone);
+
+  return null;
+}
+
+/**
+ * Similaridade simples baseada em bigrams (Dice coefficient). Usado quando
+ * a tabela é pequena (ex: sellers) e não vale criar RPC pg_trgm dedicada.
+ * Retorna 0..1.
+ */
+function stringSimilarity(a: string, b: string): number {
+  const norm = (s: string) => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ').trim();
+  const x = norm(a), y = norm(b);
+  if (!x || !y) return 0;
+  if (x === y) return 1;
+  if (x.length < 2 || y.length < 2) return x === y ? 1 : 0;
+  const bigrams = (s: string) => {
+    const out: string[] = [];
+    for (let i = 0; i < s.length - 1; i++) out.push(s.slice(i, i + 2));
+    return out;
+  };
+  const xb = bigrams(x);
+  const yb = bigrams(y);
+  const ySet = new Map<string, number>();
+  for (const bg of yb) ySet.set(bg, (ySet.get(bg) ?? 0) + 1);
+  let inter = 0;
+  for (const bg of xb) {
+    const n = ySet.get(bg);
+    if (n && n > 0) {
+      inter++;
+      ySet.set(bg, n - 1);
+    }
+  }
+  return (2 * inter) / (xb.length + yb.length);
+}
+
 export async function executeTool(name: string, args: any, ctx: ToolContext = {}): Promise<unknown> {
   switch (name) {
     // ---------- LEITURAS ----------
@@ -4021,26 +4094,44 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
     case 'find_whatsapp_contact': {
       const query = String(args.name ?? '').trim();
       if (!query) throw new Error('name é obrigatório');
-      const { data, error } = await supabase
-        .from('whatsapp_contacts')
-        .select('id, name, phone, notes')
-        .ilike('name', `%${query}%`)
-        .order('name')
-        .limit(10);
-      if (error) throw new Error(error.message);
-      let contacts = (data ?? []) as any[];
+
+      // Busca unificada em 3 tabelas: whatsapp_contacts (agenda), sellers
+      // (vendedoras), client_contacts (clientes/CRM). Tenta ilike primeiro;
+      // se nada encontrado em nenhuma, faz fuzzy fallback em todas.
+      const [waRes, sellersRes, clientsRes] = await Promise.all([
+        supabase.from('whatsapp_contacts').select('id, name, phone').ilike('name', `%${query}%`).limit(5),
+        supabase.from('sellers').select('id, name, whatsapp_number').ilike('name', `%${query}%`).limit(5),
+        supabase.from('client_contacts').select('id, name, whatsapp_phone').ilike('name', `%${query}%`).not('whatsapp_phone', 'is', null).limit(5),
+      ]);
+
+      let contacts: any[] = [
+        ...((waRes.data ?? []) as any[]).map((c: any) => ({ id: c.id, name: c.name, phone: c.phone, source: 'agenda' })),
+        ...((sellersRes.data ?? []) as any[]).map((s: any) => ({ id: s.id, name: s.name, phone: s.whatsapp_number, source: 'vendedora' })),
+        ...((clientsRes.data ?? []) as any[]).map((c: any) => ({ id: c.id, name: c.name, phone: c.whatsapp_phone, source: 'cliente' })),
+      ];
       let matchedBy: 'exact' | 'fuzzy' = 'exact';
-      // Fallback fuzzy se o ilike não encontrou nada (resolve transcrições imperfeitas)
+
+      // Fallback fuzzy se ilike não encontrou em nenhuma tabela
       if (contacts.length === 0) {
-        const fuzzy = await fuzzyFallback<{ id: string; name: string; phone: string; sim: number }>(
-          'search_whatsapp_contacts_fuzzy',
-          query
-        );
-        if (fuzzy.length > 0) {
-          contacts = fuzzy.map((c) => ({ id: c.id, name: c.name, phone: c.phone, similarity: c.sim }));
-          matchedBy = 'fuzzy';
-        }
+        const [fuzzyWa, fuzzyClients] = await Promise.all([
+          fuzzyFallback<{ id: string; name: string; phone: string; sim: number }>('search_whatsapp_contacts_fuzzy', query),
+          fuzzyFallback<{ id: string; name: string; whatsapp_phone: string; sim: number }>('search_client_contacts_fuzzy', query),
+        ]);
+        // Sellers: como são poucos (~5), faz match in-memory
+        const { data: allSellers } = await supabase.from('sellers').select('id, name, whatsapp_number');
+        const fuzzySellers = ((allSellers ?? []) as any[])
+          .map((s) => ({ ...s, sim: stringSimilarity(query, s.name) }))
+          .filter((s) => s.sim > 0.3)
+          .sort((a, b) => b.sim - a.sim);
+
+        contacts = [
+          ...fuzzyWa.map((c) => ({ id: c.id, name: c.name, phone: c.phone, source: 'agenda', similarity: c.sim })),
+          ...fuzzySellers.map((s: any) => ({ id: s.id, name: s.name, phone: s.whatsapp_number, source: 'vendedora', similarity: s.sim })),
+          ...fuzzyClients.filter((c) => c.whatsapp_phone).map((c) => ({ id: c.id, name: c.name, phone: c.whatsapp_phone, source: 'cliente', similarity: c.sim })),
+        ];
+        if (contacts.length > 0) matchedBy = 'fuzzy';
       }
+
       return { found: contacts.length, contacts, matched_by: matchedBy };
     }
 
@@ -4299,16 +4390,31 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
       if (!templateName)       throw new Error('template_name é obrigatório');
       if (recipients.length === 0) throw new Error('recipients deve ter pelo menos 1 destinatário');
 
-      // Busca template por nome (busca fuzzy case-insensitive)
-      const { data: found } = await supabase
+      // Busca template por nome — ilike primeiro, fuzzy fallback se não achou
+      let found: any[] = [];
+      const { data: ilikeData } = await supabase
         .from('marketing_templates')
         .select('*')
         .ilike('name', `%${templateName}%`)
         .order('name')
         .limit(3);
+      found = (ilikeData ?? []) as any[];
 
-      if (!found?.length) {
-        // Retorna lista de templates disponíveis
+      if (found.length === 0) {
+        const fuzzy = await fuzzyFallback<{ id: string; name: string; sim: number }>(
+          'search_marketing_templates_fuzzy',
+          templateName
+        );
+        if (fuzzy.length > 0) {
+          const ids = fuzzy.map((f) => f.id);
+          const { data: enriched } = await supabase
+            .from('marketing_templates').select('*').in('id', ids);
+          const byId = new Map((enriched ?? []).map((t: any) => [t.id, t]));
+          found = fuzzy.map((f) => byId.get(f.id)).filter(Boolean) as any[];
+        }
+      }
+
+      if (!found.length) {
         const { data: all } = await supabase
           .from('marketing_templates')
           .select('name, template_id')
@@ -4338,17 +4444,13 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
       const results: { recipient: string; phone: string | null; success: boolean; via?: string; error?: string }[] = [];
 
       for (const recipient of recipients) {
-        // Resolve número
+        // Resolve número — se já é dígitos, usa direto. Senão busca em
+        // whatsapp_contacts → sellers → client_contacts (com fuzzy fallback).
         let phone = recipient.replace(/\D/g, '');
         if (!phone || phone.length < 8) {
-          const { data: byName } = await supabase
-            .from('whatsapp_contacts')
-            .select('phone')
-            .ilike('name', `%${recipient}%`)
-            .limit(1);
-          const resolved = (byName as any)?.[0]?.phone;
+          const resolved = await resolveRecipientPhoneByName(recipient);
           if (!resolved) {
-            results.push({ recipient, phone: null, success: false, error: `Contato "${recipient}" não encontrado` });
+            results.push({ recipient, phone: null, success: false, error: `Contato "${recipient}" não encontrado em agenda, vendedoras ou clientes` });
             continue;
           }
           phone = resolved;
