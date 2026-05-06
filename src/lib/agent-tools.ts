@@ -2105,6 +2105,115 @@ export const toolDeclarations = [
       required: ['quotation_id'],
     },
   },
+
+  // ─── RMA (Return Merchandise Authorization) ─────────────────────────────────
+  {
+    name: 'list_rmas',
+    description:
+      'Lista RMAs (devoluções de cliente). Use pra "quais RMAs estão pendentes?", "RMAs do Mundial Distribuidora", "RMAs em conserto".',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        status: { type: 'STRING' as Type, description: 'Filtra por status: recebido | analise | conserto | pronto | devolvido | cancelado.' },
+        client_name: { type: 'STRING' as Type, description: 'Filtra por nome de cliente (fuzzy).' },
+        tecnico: { type: 'STRING' as Type, description: 'Filtra por nome do técnico.' },
+        limit: { type: 'NUMBER' as Type },
+      },
+    },
+  },
+  {
+    name: 'get_rma_details',
+    description:
+      'Retorna o RMA completo: cabeçalho + lista de itens (com componentes trocados, status, valor) + observações. Use pra "detalhes do RMA #5", "o que tem no RMA da OS 01050625".',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        numero: { type: 'NUMBER' as Type, description: 'Número do RMA (ex: 5).' },
+        numero_os: { type: 'STRING' as Type, description: 'Alternativa: número da OS interna.' },
+        rma_id: { type: 'STRING' as Type, description: 'UUID do RMA.' },
+      },
+    },
+  },
+  {
+    name: 'create_rma',
+    description:
+      'Cria um novo RMA pra um cliente. Use quando o usuário disser "abre um RMA do cliente X", "registra retorno do Mundial". Pode passar itens já no momento da criação.',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        client_name: { type: 'STRING' as Type, description: 'Razão social do distribuidor/cliente.' },
+        client_cnpj: { type: 'STRING' as Type },
+        client_phone: { type: 'STRING' as Type },
+        motivo: { type: 'STRING' as Type, description: 'defeito | desistencia | garantia | outro. Default: defeito.' },
+        tecnico_nome: { type: 'STRING' as Type },
+        tecnico_phone: { type: 'STRING' as Type },
+        numero_os: { type: 'STRING' as Type, description: 'Número da OS interna (ex: 01050625).' },
+        volume: { type: 'NUMBER' as Type, description: 'Quantos lotes/caixas chegaram.' },
+        data_recebido: { type: 'STRING' as Type, description: 'Data de entrada (ISO YYYY-MM-DD).' },
+        diagnostico: { type: 'STRING' as Type },
+        items: {
+          type: 'ARRAY' as Type,
+          items: {
+            type: 'OBJECT' as Type,
+            properties: {
+              item_name: { type: 'STRING' as Type, description: 'Ex: "EGP 12V".' },
+              componentes_trocados: { type: 'STRING' as Type, description: 'Ex: "Res. 100K 3W, BD140".' },
+              observacao_status: { type: 'STRING' as Type, description: 'Desgaste do Componente | Testada | Erro de Ligação | Sem Defeito.' },
+              data_fabricacao: { type: 'STRING' as Type, description: 'ISO YYYY-MM-DD.' },
+              tem_garantia: { type: 'BOOLEAN' as Type },
+              valor_total: { type: 'NUMBER' as Type },
+            },
+          },
+        },
+      },
+      required: ['client_name'],
+    },
+  },
+  {
+    name: 'add_rma_item',
+    description:
+      'Adiciona uma linha de item a um RMA existente. Use pra "no RMA #5, adiciona uma linha: EGP 12V, componentes Res 100K 3W, observação Desgaste, R$ 5".',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        numero: { type: 'NUMBER' as Type },
+        rma_id: { type: 'STRING' as Type },
+        item_name: { type: 'STRING' as Type },
+        componentes_trocados: { type: 'STRING' as Type },
+        observacao_status: { type: 'STRING' as Type },
+        data_fabricacao: { type: 'STRING' as Type },
+        tem_garantia: { type: 'BOOLEAN' as Type },
+        valor_total: { type: 'NUMBER' as Type },
+      },
+    },
+  },
+  {
+    name: 'update_rma_status',
+    description:
+      'Muda o status do RMA. Use pra "marca o RMA #5 como em conserto", "RMA da OS X foi devolvido". Status válidos: recebido, analise, conserto, pronto, devolvido, cancelado. Quando virar devolvido, preenche data_devolvido automaticamente.',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        numero: { type: 'NUMBER' as Type },
+        rma_id: { type: 'STRING' as Type },
+        status: { type: 'STRING' as Type, description: 'recebido | analise | conserto | pronto | devolvido | cancelado.' },
+      },
+      required: ['status'],
+    },
+  },
+  {
+    name: 'add_rma_observation',
+    description: 'Anota uma observação na timeline de um RMA. Use pra "anota no RMA #5: cliente confirmou recebimento por WhatsApp".',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        numero: { type: 'NUMBER' as Type },
+        rma_id: { type: 'STRING' as Type },
+        content: { type: 'STRING' as Type },
+      },
+      required: ['content'],
+    },
+  },
 ];
 
 // ===== Implementations ====================================================
@@ -7350,6 +7459,173 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
       const { error } = await supabase.from('titulos').delete().eq('id', id);
       if (error) throw new Error(error.message);
       return { deleted: true, titulo_id: id };
+    }
+
+    // ─── RMA ────────────────────────────────────────────────────────────────
+    case 'list_rmas': {
+      const limit = Math.min(Number(args.limit ?? 50), 200);
+      let q = supabase
+        .from('rmas')
+        .select(`id, numero, client_name, client_trade_name, motivo, status, solucao,
+                 tecnico_nome, numero_os, data_recebido, data_devolvido, volume, desconto,
+                 created_at`)
+        .order('data_recebido', { ascending: false, nullsFirst: false })
+        .limit(limit);
+      if (args.status)      q = q.eq('status', String(args.status));
+      if (args.client_name) q = q.ilike('client_name', `%${String(args.client_name)}%`);
+      if (args.tecnico)     q = q.ilike('tecnico_nome', `%${String(args.tecnico)}%`);
+      const { data, error } = await q;
+      if (error) throw new Error(error.message);
+      return { count: (data ?? []).length, rmas: data ?? [] };
+    }
+
+    case 'get_rma_details': {
+      let rmaId: string | null = args.rma_id ? String(args.rma_id) : null;
+      if (!rmaId && args.numero != null) {
+        const { data } = await supabase.from('rmas').select('id').eq('numero', Number(args.numero)).maybeSingle();
+        rmaId = (data as any)?.id ?? null;
+      }
+      if (!rmaId && args.numero_os) {
+        const { data } = await supabase.from('rmas').select('id').eq('numero_os', String(args.numero_os)).maybeSingle();
+        rmaId = (data as any)?.id ?? null;
+      }
+      if (!rmaId) return { found: false, message: 'RMA não encontrado.' };
+
+      const [rmaRes, itemsRes, obsRes] = await Promise.all([
+        supabase.from('rmas').select('*').eq('id', rmaId).single(),
+        supabase.from('rma_items').select('*').eq('rma_id', rmaId).order('posicao', { ascending: true, nullsFirst: false }),
+        supabase.from('rma_observations').select('content, author, created_at').eq('rma_id', rmaId).order('created_at', { ascending: false }),
+      ]);
+      if (rmaRes.error) throw new Error(rmaRes.error.message);
+      const rma: any = rmaRes.data;
+      const items = (itemsRes.data ?? []) as any[];
+      const subtotal = items.reduce((s, i) => s + (Number(i.valor_total) || 0), 0);
+      const total = subtotal - (Number(rma.desconto) || 0);
+      return {
+        found: true,
+        rma,
+        items,
+        observations: obsRes.data ?? [],
+        subtotal,
+        total,
+      };
+    }
+
+    case 'create_rma': {
+      const clientName = String(args.client_name ?? '').trim();
+      if (!clientName) throw new Error('client_name é obrigatório');
+      const motivosValidos = new Set(['defeito', 'desistencia', 'garantia', 'outro']);
+      const motivo = motivosValidos.has(String(args.motivo)) ? String(args.motivo) : 'defeito';
+
+      const payload: any = {
+        client_name: clientName,
+        client_cnpj: args.client_cnpj ? String(args.client_cnpj).trim() : null,
+        client_phone: args.client_phone ? String(args.client_phone).trim() : null,
+        motivo,
+        tecnico_nome: args.tecnico_nome ? String(args.tecnico_nome).trim() : null,
+        tecnico_phone: args.tecnico_phone ? String(args.tecnico_phone).trim() : null,
+        numero_os: args.numero_os ? String(args.numero_os).trim() : null,
+        volume: args.volume != null ? Number(args.volume) : 1,
+        data_recebido: args.data_recebido ? String(args.data_recebido).slice(0, 10) : new Date().toISOString().slice(0, 10),
+        diagnostico: args.diagnostico ? String(args.diagnostico).trim() : null,
+      };
+      const { data: created, error } = await supabase.from('rmas').insert(payload).select('id, numero').single();
+      if (error || !created) throw new Error(error?.message ?? 'Falha ao criar RMA');
+      const rmaId = (created as any).id;
+
+      // Itens (opcional)
+      const items = Array.isArray(args.items) ? args.items : [];
+      let itemsInserted = 0;
+      if (items.length > 0) {
+        const itemsPayload = items.map((it: any, idx: number) => ({
+          rma_id: rmaId,
+          posicao: idx + 1,
+          item_name: it.item_name ? String(it.item_name).trim() : null,
+          componentes_trocados: it.componentes_trocados ? String(it.componentes_trocados).trim() : null,
+          observacao_status: it.observacao_status ? String(it.observacao_status).trim() : null,
+          data_fabricacao: it.data_fabricacao ? String(it.data_fabricacao).slice(0, 10) : null,
+          tem_garantia: Boolean(it.tem_garantia),
+          valor_total: it.valor_total != null ? Number(it.valor_total) : null,
+          quantity: 1,
+        }));
+        const { error: itErr } = await supabase.from('rma_items').insert(itemsPayload);
+        if (!itErr) itemsInserted = itemsPayload.length;
+      }
+      return {
+        created: true,
+        rma_id: rmaId,
+        numero: (created as any).numero,
+        items_inserted: itemsInserted,
+        message: `RMA #${(created as any).numero} criado para ${clientName}.`,
+      };
+    }
+
+    case 'add_rma_item': {
+      let rmaId: string | null = args.rma_id ? String(args.rma_id) : null;
+      if (!rmaId && args.numero != null) {
+        const { data } = await supabase.from('rmas').select('id').eq('numero', Number(args.numero)).maybeSingle();
+        rmaId = (data as any)?.id ?? null;
+      }
+      if (!rmaId) return { added: false, message: 'RMA não encontrado.' };
+
+      const { count } = await supabase.from('rma_items').select('id', { count: 'exact', head: true }).eq('rma_id', rmaId);
+      const nextPos = (count ?? 0) + 1;
+      const payload: any = {
+        rma_id: rmaId,
+        posicao: nextPos,
+        item_name: args.item_name ? String(args.item_name).trim() : null,
+        componentes_trocados: args.componentes_trocados ? String(args.componentes_trocados).trim() : null,
+        observacao_status: args.observacao_status ? String(args.observacao_status).trim() : null,
+        data_fabricacao: args.data_fabricacao ? String(args.data_fabricacao).slice(0, 10) : null,
+        tem_garantia: Boolean(args.tem_garantia),
+        valor_total: args.valor_total != null ? Number(args.valor_total) : null,
+        quantity: 1,
+      };
+      const { data, error } = await supabase.from('rma_items').insert(payload).select('id').single();
+      if (error) throw new Error(error.message);
+      return { added: true, item_id: (data as any)?.id, position: nextPos };
+    }
+
+    case 'update_rma_status': {
+      const validStatus = new Set(['recebido', 'analise', 'conserto', 'pronto', 'devolvido', 'cancelado']);
+      const newStatus = String(args.status ?? '').trim();
+      if (!validStatus.has(newStatus)) throw new Error(`Status inválido. Use: ${[...validStatus].join(', ')}`);
+      let rmaId: string | null = args.rma_id ? String(args.rma_id) : null;
+      if (!rmaId && args.numero != null) {
+        const { data } = await supabase.from('rmas').select('id, data_devolvido').eq('numero', Number(args.numero)).maybeSingle();
+        rmaId = (data as any)?.id ?? null;
+      }
+      if (!rmaId) return { updated: false, message: 'RMA não encontrado.' };
+
+      const update: any = { status: newStatus, updated_at: new Date().toISOString() };
+      if (newStatus === 'devolvido') {
+        // Auto-preenche data_devolvido se ainda não tiver
+        const { data: cur } = await supabase.from('rmas').select('data_devolvido').eq('id', rmaId).single();
+        if (!(cur as any)?.data_devolvido) {
+          update.data_devolvido = new Date().toISOString().slice(0, 10);
+        }
+      }
+      const { error } = await supabase.from('rmas').update(update).eq('id', rmaId);
+      if (error) throw new Error(error.message);
+      return { updated: true, rma_id: rmaId, new_status: newStatus };
+    }
+
+    case 'add_rma_observation': {
+      let rmaId: string | null = args.rma_id ? String(args.rma_id) : null;
+      if (!rmaId && args.numero != null) {
+        const { data } = await supabase.from('rmas').select('id').eq('numero', Number(args.numero)).maybeSingle();
+        rmaId = (data as any)?.id ?? null;
+      }
+      if (!rmaId) return { added: false, message: 'RMA não encontrado.' };
+      const content = String(args.content ?? '').trim();
+      if (!content) throw new Error('content é obrigatório');
+      const { data, error } = await supabase
+        .from('rma_observations')
+        .insert({ rma_id: rmaId, content, author: ctx.currentUser ?? null })
+        .select('id')
+        .single();
+      if (error) throw new Error(error.message);
+      return { added: true, observation_id: (data as any)?.id };
     }
 
     default:

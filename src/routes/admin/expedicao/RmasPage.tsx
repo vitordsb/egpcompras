@@ -10,6 +10,7 @@ import { useInternalAuth } from '@/lib/auth-context';
 import { useBodyScrollLock } from '@/hooks/useBodyScrollLock';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
 import RmasKanbanView from './RmasKanbanView';
+import RmaSheetModal from './RmaSheetModal';
 import {
   STATUS_LABEL, STATUS_PILL, MOTIVO_LABEL, SOLUCAO_LABEL, formatDateBR,
   type RmaRow, type RmaStatus, type RmaMotivo, type RmaSolucao,
@@ -94,9 +95,6 @@ export default function RmasPage() {
   const [saving, setSaving] = useState(false);
 
   const [detailId, setDetailId] = useState<string | null>(null);
-  const [detailItems, setDetailItems] = useState<any[]>([]);
-  const [detailObs, setDetailObs] = useState<any[]>([]);
-  const [newObs, setNewObs] = useState('');
   const [confirmDelete, setConfirmDelete] = useState<RmaRow | null>(null);
 
   useBodyScrollLock(!!form || !!detailId || !!confirmDelete);
@@ -286,19 +284,6 @@ export default function RmasPage() {
     await loadList();
   }
 
-  async function addObservation() {
-    if (!detailId || !newObs.trim()) return;
-    const { error } = await supabase.from('rma_observations').insert({
-      rma_id: detailId, content: newObs.trim(), author: userLabel ?? null,
-    });
-    if (error) { alert(friendlyDbError(error)); return; }
-    setNewObs('');
-    // recarrega obs do detail
-    const { data } = await supabase.from('rma_observations').select('*').eq('rma_id', detailId).order('created_at', { ascending: false });
-    setDetailObs(data ?? []);
-    await loadList();
-  }
-
   async function doDelete() {
     if (!confirmDelete) return;
     const { error } = await supabase.from('rmas').delete().eq('id', confirmDelete.id);
@@ -306,24 +291,6 @@ export default function RmasPage() {
     setConfirmDelete(null);
     await loadList();
   }
-
-  // ----- detalhes -----
-  useEffect(() => {
-    if (!detailId) {
-      setDetailItems([]); setDetailObs([]); return;
-    }
-    let cancelled = false;
-    (async () => {
-      const [it, obs] = await Promise.all([
-        supabase.from('rma_items').select('*, product:products(id, name)').eq('rma_id', detailId),
-        supabase.from('rma_observations').select('*').eq('rma_id', detailId).order('created_at', { ascending: false }),
-      ]);
-      if (cancelled) return;
-      setDetailItems(it.data ?? []);
-      setDetailObs(obs.data ?? []);
-    })();
-    return () => { cancelled = true; };
-  }, [detailId]);
 
   const detailRma = list.find((r) => r.id === detailId) ?? null;
 
@@ -636,92 +603,13 @@ export default function RmasPage() {
         </div>
       )}
 
-      {/* Modal: detalhes (timeline) */}
+      {/* Modal: planilha técnica (estilo Excel) */}
       {detailId && detailRma && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4" onClick={() => setDetailId(null)}>
-          <div className="flex h-[min(820px,92vh)] w-full max-w-3xl flex-col overflow-hidden rounded-lg bg-white shadow-lg" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-start justify-between gap-3 border-b border-slate-200 px-5 py-4">
-              <div>
-                <h2 className="text-base font-semibold text-slate-900">
-                  RMA #{detailRma.numero} — {detailRma.client_trade_name ?? detailRma.client_name}
-                </h2>
-                <div className="mt-1 flex flex-wrap items-center gap-2 text-xs">
-                  <span className={cn('inline-flex items-center rounded-full px-2 py-0.5 font-medium', STATUS_PILL[detailRma.status])}>
-                    {STATUS_LABEL[detailRma.status]}
-                  </span>
-                  <span className="text-slate-500">{MOTIVO_LABEL[detailRma.motivo]}</span>
-                  <span className="text-slate-300">·</span>
-                  <span className="text-slate-500">Solução: {SOLUCAO_LABEL[detailRma.solucao]}</span>
-                </div>
-              </div>
-              <button onClick={() => setDetailId(null)} className="text-slate-400 hover:text-slate-700">×</button>
-            </div>
-            <div className="flex-1 space-y-4 overflow-y-auto px-5 py-4 text-sm">
-              <div className="grid gap-2 sm:grid-cols-2 text-xs text-slate-600">
-                <div>Recebido: <strong className="text-slate-800">{formatDateBR(detailRma.data_recebido)}</strong></div>
-                <div>Devolvido: <strong className="text-slate-800">{formatDateBR(detailRma.data_devolvido)}</strong></div>
-                {detailRma.numero_venda_origem && <div>Venda original: <strong className="text-emerald-700">#{detailRma.numero_venda_origem}</strong></div>}
-                {detailRma.client_cnpj && <div>CNPJ: <strong>{detailRma.client_cnpj}</strong></div>}
-                {detailRma.client_phone && <div>WhatsApp: <strong>{detailRma.client_phone}</strong></div>}
-                {detailRma.client_email && <div>E-mail: <strong>{detailRma.client_email}</strong></div>}
-              </div>
-
-              {detailRma.diagnostico && (
-                <div>
-                  <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Diagnóstico</h3>
-                  <p className="whitespace-pre-wrap rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-slate-700">{detailRma.diagnostico}</p>
-                </div>
-              )}
-
-              {detailItems.length > 0 && (
-                <div>
-                  <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Itens devolvidos</h3>
-                  <ul className="space-y-1 text-sm">
-                    {detailItems.map((it) => (
-                      <li key={it.id} className="flex items-baseline gap-2 rounded border border-slate-100 bg-white px-3 py-2">
-                        <span className="font-medium">{it.quantity}×</span>
-                        <span className="flex-1">
-                          {it.product?.name ?? it.item_name ?? '—'}
-                          {it.serial_number && <span className="ml-2 text-xs text-slate-500">SN: {it.serial_number}</span>}
-                          {it.notes && <span className="ml-2 text-xs text-slate-500">({it.notes})</span>}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-
-              <div>
-                <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Observações ({detailObs.length})</h3>
-                <div className="mb-2 flex gap-2">
-                  <Input value={newObs} onChange={(e) => setNewObs(e.target.value)} placeholder="Anotar algo neste RMA…" />
-                  <Button type="button" onClick={addObservation} disabled={!newObs.trim()}>Anotar</Button>
-                </div>
-                {detailObs.length === 0 ? (
-                  <p className="text-xs text-slate-400">Nenhuma observação ainda.</p>
-                ) : (
-                  <ul className="space-y-1.5">
-                    {detailObs.map((o) => (
-                      <li key={o.id} className="rounded-md border border-slate-100 bg-white px-3 py-2 text-sm">
-                        <p className="whitespace-pre-wrap text-slate-700">{o.content}</p>
-                        <p className="mt-1 text-[10px] text-slate-400">
-                          {o.author ? `${o.author} · ` : ''}{new Date(o.created_at).toLocaleString('pt-BR')}
-                        </p>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            </div>
-            <div className="flex items-center justify-between gap-3 border-t border-slate-200 px-5 py-3">
-              <button type="button" onClick={() => setConfirmDelete(detailRma)} className="text-sm text-red-600 hover:underline">Excluir RMA</button>
-              <div className="flex gap-2">
-                <Button type="button" variant="secondary" onClick={() => setDetailId(null)}>Fechar</Button>
-                <Button type="button" onClick={() => { setDetailId(null); openEdit(detailRma); }}>Editar</Button>
-              </div>
-            </div>
-          </div>
-        </div>
+        <RmaSheetModal
+          rma={detailRma}
+          onClose={() => setDetailId(null)}
+          onChanged={loadList}
+        />
       )}
 
       {confirmDelete && (

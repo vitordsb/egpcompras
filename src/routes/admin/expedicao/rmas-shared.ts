@@ -6,12 +6,20 @@ export type RmaSolucao = 'pendente' | 'troca' | 'reparo' | 'refund' | 'descartad
 
 export interface RmaItem {
   id: string;
+  rma_id?: string;
   product_id: string | null;
   item_name: string | null;
   item_code: string | null;
   serial_number: string | null;
   quantity: number;
   notes: string | null;
+  // Campos do formato planilha técnica:
+  posicao: number | null;
+  componentes_trocados: string | null;
+  observacao_status: string | null;
+  data_fabricacao: string | null;
+  tem_garantia: boolean;
+  valor_total: number | null;
 }
 
 export interface RmaRow {
@@ -31,6 +39,15 @@ export interface RmaRow {
   shipment_origem_id: string | null;
   numero_venda_origem: string | null;
   notes: string | null;
+  // Cabeçalho técnico (formato planilha):
+  setor: string | null;
+  tecnico_nome: string | null;
+  tecnico_phone: string | null;
+  volume: number | null;
+  numero_os: string | null;
+  desconto: number | null;
+  prazo_entrega: string | null;
+  condicao_pagamento: string | null;
   created_at: string;
   updated_at: string;
   observations_count?: number;

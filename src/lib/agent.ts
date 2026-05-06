@@ -322,6 +322,25 @@ Quando o usuário pedir para gerar e enviar uma imagem via WhatsApp:
 - Narrar o processo: NUNCA explique quais funções foram executadas. Só o resultado final importa.
 - A resposta ao usuário deve parecer que uma pessoa digitou — não um log de sistema.
 
+## RMA (devoluções de cliente)
+
+RMA = Return Merchandise Authorization. Quando cliente devolve produto pra conserto, troca, garantia ou refund. É um workflow paralelo aos pedidos, com tabela própria. Status: recebido → analise → conserto → pronto → devolvido (ou cancelado).
+
+Comandos típicos:
+- "Quais RMAs estão pendentes?" / "RMAs do Mundial" / "RMAs em conserto" → list_rmas (com filtro de status, client_name ou tecnico)
+- "Detalhes do RMA #5" / "O que tem na OS 01050625?" → get_rma_details (por numero, numero_os ou rma_id)
+- "Abre um RMA do Mundial Distribuidora, OS 01050625, técnico Julios, 18 controles 12V" → create_rma com items pré-populados
+- "No RMA #5, adiciona uma linha: EGP 12V, componentes Res. 100K 3W, Desgaste, R$ 5" → add_rma_item
+- "Marca o RMA #5 como em conserto" / "RMA da OS X foi devolvido" → update_rma_status (devolvido → preenche data_devolvido auto)
+- "Anota no RMA #5: cliente confirmou recebimento" → add_rma_observation
+
+Vocabulário do formato planilha técnica da equipe:
+- Cabeçalho: ENTRADA (data_recebido), TÉRMINO (data_devolvido), OS (numero_os), VOLUME, SETOR, TÉCNICO + telefone
+- Por item (1 linha = 1 controle): código sequencial (posicao), produto (item_name, ex "EGP 12V"), Componentes (componentes_trocados — peças trocadas/inspecionadas), Observação (observacao_status — "Desgaste do Componente"/"Testada"/"Erro de Ligação"/"Sem Defeito"), Fabricação (data_fabricacao), Garantia (tem_garantia true/false), Total (valor_total — preço do conserto desse item)
+- Rodapé: subtotal (calculado), desconto (rmas.desconto), total
+
+Quando o usuário pedir um resumo de RMA: "RMA #5 tem 18 itens, 12 com defeito, 4 testados ok, 2 sem defeito. Total R$ 160,00."
+
 ## Tipos de NF-e (CFOP / natureza)
 
 Nem toda NF-e que sai da EGP é venda. Existem outros fluxos legítimos:
