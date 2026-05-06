@@ -1,7 +1,10 @@
-// Lê uma foto/PDF da planilha técnica de RMA da EGP e extrai os campos
-// estruturados via Gemini 2.5 Flash multimodal.
+// Lê uma foto/PDF/Excel da planilha técnica de RMA da EGP e extrai os
+// campos estruturados via Gemini 2.5 Flash. Foto/PDF vão como inlineData
+// multimodal; XLSX/CSV são extraídos client-side e enviados como texto
+// estruturado.
 
 import { GoogleGenAI } from '@google/genai';
+import * as XLSX from 'xlsx';
 
 const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
 const MODEL = 'gemini-2.5-flash';
@@ -89,6 +92,90 @@ REGRAS:
 - Se houver linhas vazias na planilha, IGNORE — não inclua no array.
 - Retorne APENAS JSON válido, sem markdown, sem texto explicativo.
 `;
+
+/**
+ * Dispatcher: detecta o tipo do arquivo (imagem/PDF/XLSX/CSV) e usa o
+ * caminho apropriado de extração. Sempre retorna ExtractedRma.
+ */
+export async function extractRmaFromFile(file: File): Promise<ExtractedRma> {
+  const name = file.name.toLowerCase();
+  const type = (file.type || '').toLowerCase();
+
+  // XLSX / XLS / CSV — extrai texto estruturado client-side e manda pro Gemini
+  if (
+    name.endsWith('.xlsx') || name.endsWith('.xls') || name.endsWith('.csv') ||
+    type.includes('spreadsheet') || type.includes('excel') || type === 'text/csv'
+  ) {
+    return extractRmaFromSheet(file);
+  }
+
+  // Tudo o mais (image/png, image/jpeg, application/pdf, ...) vai como inlineData
+  return extractRmaFromImage(file);
+}
+
+/**
+ * Lê um arquivo XLSX/XLS/CSV via SheetJS, converte em texto estruturado
+ * (cabeçalho + tabela) e manda pro Gemini Flash com o mesmo schema.
+ * Não usa multimodal — só texto, mais rápido e mais barato.
+ */
+export async function extractRmaFromSheet(file: File | Blob): Promise<ExtractedRma> {
+  if (!apiKey) throw new Error('VITE_GEMINI_API_KEY não definida');
+
+  const buf = await file.arrayBuffer();
+  let workbook: XLSX.WorkBook;
+  try {
+    workbook = XLSX.read(buf, { type: 'array' });
+  } catch (err) {
+    throw new Error('Não consegui ler o arquivo. Verifique se é XLSX/XLS/CSV válido.');
+  }
+  const sheetName = workbook.SheetNames[0];
+  if (!sheetName) throw new Error('Planilha vazia.');
+  const sheet = workbook.Sheets[sheetName];
+
+  // Extrai como matriz de strings, preservando posições (linha vazia = '')
+  const rows = XLSX.utils.sheet_to_json<any[]>(sheet, { header: 1, defval: '', raw: false });
+
+  // Converte pra texto tabular legível pro Gemini (TSV-ish, fácil de seguir)
+  const lines: string[] = [];
+  for (let r = 0; r < rows.length; r++) {
+    const row = rows[r] ?? [];
+    // Pula linhas totalmente vazias
+    if (row.every((c) => c == null || String(c).trim() === '')) continue;
+    const cells = row.map((c) => String(c ?? '').replace(/\s+/g, ' ').trim());
+    lines.push(`L${r + 1}\t${cells.join(' | ')}`);
+  }
+  const sheetText = lines.join('\n');
+
+  const ai = new GoogleGenAI({ apiKey });
+  const res = await ai.models.generateContent({
+    model: MODEL,
+    contents: [
+      {
+        role: 'user',
+        parts: [
+          {
+            text:
+              'Você é um extrator de dados estruturados. O texto abaixo é uma planilha XLSX da EGP Tecnologia (indústria de eletrônicos), no formato técnico de RMA. Cada linha começa com "L<num>" indicando a linha original e células separadas por "|". Extraia o cabeçalho (entrada, distribuidor, técnico, OS) e cada item da tabela.\n\n' +
+              SCHEMA_HINT +
+              '\n\n=== PLANILHA ===\n' +
+              sheetText.slice(0, 20000),
+          },
+        ],
+      },
+    ],
+    config: { temperature: 0, maxOutputTokens: 6000 },
+  });
+
+  const text = (res.text ?? '').trim();
+  if (!text) throw new Error('Gemini retornou resposta vazia.');
+  const cleaned = text.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim();
+  try {
+    return JSON.parse(cleaned) as ExtractedRma;
+  } catch (err) {
+    console.error('[rma-importer xlsx] JSON parse falhou:', cleaned.slice(0, 500));
+    throw new Error('Não consegui ler a estrutura da planilha. Conteúdo retornado pelo modelo veio mal-formado.');
+  }
+}
 
 /**
  * Manda uma imagem ou PDF da planilha pra Gemini Flash e extrai campos

@@ -17,7 +17,7 @@ import {
   STATUS_LABEL, MOTIVO_LABEL, SOLUCAO_LABEL,
   type RmaRow, type RmaStatus, type RmaMotivo, type RmaSolucao,
 } from './rmas-shared';
-import { extractRmaFromImage, type ExtractedRma } from './rma-importer';
+import { extractRmaFromFile, type ExtractedRma } from './rma-importer';
 
 interface RmaSheetModalProps {
   rma: RmaRow;
@@ -243,7 +243,7 @@ export default function RmaSheetModal({ rma, onClose, onChanged }: RmaSheetModal
   async function handleImportFile(file: File) {
     setImporting(true);
     try {
-      const extracted = await extractRmaFromImage(file);
+      const extracted = await extractRmaFromFile(file);
       applyExtracted(extracted);
       toast.success('Planilha importada', `Cabeçalho e ${extracted.items?.length ?? 0} itens preenchidos. Revise antes de fechar.`);
     } catch (err) {
@@ -361,7 +361,7 @@ export default function RmaSheetModal({ rma, onClose, onChanged }: RmaSheetModal
           <input
             ref={fileInputRef}
             type="file"
-            accept="image/*,.pdf"
+            accept="image/*,.pdf,.xlsx,.xls,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv"
             className="sr-only"
             onChange={(e: ChangeEvent<HTMLInputElement>) => {
               const f = e.target.files?.[0];
@@ -388,11 +388,11 @@ export default function RmaSheetModal({ rma, onClose, onChanged }: RmaSheetModal
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-3.5 w-3.5">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 12 12 16.5m0 0L7.5 12m4.5 4.5V3" />
                 </svg>
-                Importar foto/PDF da planilha
+                Importar planilha (XLSX, foto ou PDF)
               </>
             )}
           </button>
-          <span className="text-xs text-slate-400">ou solte um arquivo aqui</span>
+          <span className="text-xs text-slate-400">ou solte um arquivo aqui (.xlsx, .xls, .csv, .pdf, .png, .jpg)</span>
         </div>
 
         {/* Drop overlay */}
