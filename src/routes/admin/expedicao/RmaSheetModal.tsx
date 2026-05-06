@@ -18,6 +18,7 @@ import {
   type RmaRow, type RmaStatus, type RmaMotivo, type RmaSolucao,
 } from './rmas-shared';
 import { extractRmaFromFile, type ExtractedRma } from './rma-importer';
+import { generateRmaPdf } from './rma-pdf';
 
 interface RmaSheetModalProps {
   rma: RmaRow;
@@ -301,6 +302,49 @@ export default function RmaSheetModal({ rma, onClose, onChanged }: RmaSheetModal
     if (f) void handleImportFile(f);
   }
 
+  // ── Geração de PDF pra cliente ──
+  function handleDownloadPdf() {
+    // Garante save antes de exportar (caso tenha edição pendente no debounce)
+    if (savingState === 'saving') {
+      toast.error('Aguarde', 'Termine o auto-save antes de exportar.');
+      return;
+    }
+    try {
+      generateRmaPdf(
+        {
+          ...rma,
+          // sobrescreve com edits ainda não persistidos no parent
+          client_name: header.client_name || rma.client_name,
+          client_trade_name: header.client_trade_name || rma.client_trade_name,
+          client_cnpj: header.client_cnpj || rma.client_cnpj,
+          client_phone: header.client_phone || rma.client_phone,
+          client_email: header.client_email || rma.client_email,
+          motivo: header.motivo,
+          numero_os: header.numero_os || rma.numero_os,
+          tecnico_nome: header.tecnico_nome || rma.tecnico_nome,
+          setor: header.setor || rma.setor,
+          volume: header.volume,
+          data_recebido: header.data_recebido || rma.data_recebido,
+          data_devolvido: header.data_devolvido || rma.data_devolvido,
+          desconto: header.desconto,
+          diagnostico: header.diagnostico || rma.diagnostico,
+        },
+        visibleItems.map((i) => ({
+          posicao: i.posicao,
+          item_name: i.item_name,
+          componentes_trocados: i.componentes_trocados,
+          observacao_status: i.observacao_status,
+          data_fabricacao: i.data_fabricacao,
+          tem_garantia: i.tem_garantia,
+          valor_total: i.valor_total,
+        }))
+      );
+      toast.success('PDF gerado', 'Download iniciado.');
+    } catch (err) {
+      toast.error('Falha ao gerar PDF', err instanceof Error ? err.message : String(err));
+    }
+  }
+
   // ── Observações ──
   async function addObservation() {
     if (!newObs.trim()) return;
@@ -402,6 +446,21 @@ export default function RmaSheetModal({ rma, onClose, onChanged }: RmaSheetModal
             )}
           </button>
           <span className="text-xs text-slate-400">ou solte um arquivo aqui (.xlsx, .xls, .csv, .pdf, .png, .jpg)</span>
+
+          <div className="ml-auto">
+            <button
+              type="button"
+              onClick={handleDownloadPdf}
+              disabled={visibleItems.length === 0}
+              title={visibleItems.length === 0 ? 'Adicione itens antes de gerar o PDF' : 'Baixar PDF pra mandar pro cliente'}
+              className="inline-flex items-center gap-1.5 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-700 hover:bg-emerald-100 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-3.5 w-3.5">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 12 12 16.5m0 0L7.5 12m4.5 4.5V3" />
+              </svg>
+              Baixar PDF
+            </button>
+          </div>
         </div>
 
         {/* Drop overlay */}
