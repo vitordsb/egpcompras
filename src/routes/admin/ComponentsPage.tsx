@@ -8,6 +8,7 @@ import Pagination from '@/components/ui/Pagination';
 import { useToast } from '@/components/ui/Toast';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
 import { useBodyScrollLock } from '@/hooks/useBodyScrollLock';
+import { cn } from '@/lib/utils';
 
 interface FormState {
   id: string | null;
@@ -109,10 +110,12 @@ export default function ComponentsPage() {
 
     try {
       if (form.id && form.forkForProduct && productFilter) {
-        // Cria novo componente e troca a referência no bom_item desse produto
+        // Cria novo componente como VARIANTE (parent_component_id) e troca
+        // a referência no bom_item desse produto. A assimilação preserva
+        // a origem pra agrupar visualmente em cascata.
         const { data: created, error: insErr } = await supabase
           .from('components')
-          .insert(payload)
+          .insert({ ...payload, parent_component_id: form.id })
           .select('id')
           .single();
         if (insErr || !created) throw new Error(insErr?.message ?? 'Falha ao criar fork');
@@ -122,7 +125,7 @@ export default function ComponentsPage() {
           .eq('product_id', productFilter)
           .eq('component_id', form.id);
         if (updErr) throw new Error(updErr.message);
-        toast.success('Componente "forkado"', `Criado "${form.name}" só para este produto. O original continua em ${form.usageCount - 1} outro(s).`);
+        toast.success('Variante criada', `"${form.name}" assimilada ao componente original. Aparece em cascata na listagem.`);
       } else if (form.id) {
         const { error: updErr } = await supabase.from('components').update(payload).eq('id', form.id);
         if (updErr) throw new Error(updErr.message);
@@ -160,7 +163,8 @@ export default function ComponentsPage() {
     return new Set(bomLinks.filter((l) => l.product_id === productFilter).map((l) => l.component_id));
   }, [productFilter, bomLinks]);
 
-  const filtered = useMemo(() => {
+  // Componentes que passaram nos filtros (busca + produto)
+  const filteredComponents = useMemo(() => {
     let list = components;
     if (componentIdsInFilter) list = list.filter((c) => componentIdsInFilter.has(c.id));
     if (search.trim()) {
@@ -170,7 +174,52 @@ export default function ComponentsPage() {
     return list;
   }, [components, componentIdsInFilter, search]);
 
-  const visible = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  // Lookup de filhos por parent_id (sobre TODOS os componentes, mesmo os fora do filtro,
+  // pra resolver pai de uma variante encontrada na busca)
+  const childrenByParent = useMemo(() => {
+    const map = new Map<string, Component[]>();
+    for (const c of components) {
+      if (c.parent_component_id) {
+        const arr = map.get(c.parent_component_id) ?? [];
+        arr.push(c);
+        map.set(c.parent_component_id, arr);
+      }
+    }
+    return map;
+  }, [components]);
+
+  const componentById = useMemo(() => new Map(components.map((c) => [c.id, c])), [components]);
+
+  // Lista em cascata: pais primeiro, com variantes indentadas logo abaixo.
+  // Variantes "órfãs" (cujo pai foi filtrado fora) aparecem ao final.
+  const cascade = useMemo(() => {
+    const out: Array<{ component: Component; depth: 0 | 1 }> = [];
+    const visited = new Set<string>();
+    const filteredIds = new Set(filteredComponents.map((c) => c.id));
+
+    for (const c of filteredComponents) {
+      if (c.parent_component_id) continue; // variantes vêm depois do pai
+      if (visited.has(c.id)) continue;
+      out.push({ component: c, depth: 0 });
+      visited.add(c.id);
+      for (const child of childrenByParent.get(c.id) ?? []) {
+        if (visited.has(child.id)) continue;
+        if (!filteredIds.has(child.id)) continue;
+        out.push({ component: child, depth: 1 });
+        visited.add(child.id);
+      }
+    }
+    // Variantes que passaram no filtro mas o pai não
+    for (const c of filteredComponents) {
+      if (visited.has(c.id)) continue;
+      out.push({ component: c, depth: c.parent_component_id ? 1 : 0 });
+      visited.add(c.id);
+    }
+    return out;
+  }, [filteredComponents, childrenByParent]);
+
+  const visible = cascade.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  const filteredCount = cascade.length;
 
   useEffect(() => { setPage(1); }, [search, productFilter]);
 
@@ -223,7 +272,7 @@ export default function ComponentsPage() {
 
       {productFilter && (
         <div className="mb-3 rounded-md border border-brand-200 bg-brand-50 px-4 py-2 text-sm text-brand-800">
-          Mostrando componentes usados em <strong>{filteredProductName}</strong> ({filtered.length} {filtered.length === 1 ? 'item' : 'itens'}). Ao editar, você poderá criar uma versão exclusiva para este produto.
+          Mostrando componentes usados em <strong>{filteredProductName}</strong> ({filteredCount} {filteredCount === 1 ? 'item' : 'itens'}). Ao editar, você poderá criar uma versão exclusiva para este produto.
         </div>
       )}
 
@@ -235,7 +284,7 @@ export default function ComponentsPage() {
 
       {loading ? (
         <p className="text-sm text-slate-500">Carregando…</p>
-      ) : filtered.length === 0 ? (
+      ) : filteredCount === 0 ? (
         <Card>
           <CardBody>
             <p className="text-sm text-slate-600">
@@ -262,11 +311,9 @@ export default function ComponentsPage() {
                 </tr>
               </thead>
               <tbody>
-                {visible.map((c) => {
+                {visible.map(({ component: c, depth }) => {
                   const links = bomLinks.filter((l) => l.component_id === c.id);
                   const usage = links.length;
-                  // Quando filtrado por produto: mostra o target daquele bom_item.
-                  // Sem filtro: mostra o target mais recente entre os bom_items do componente.
                   let cost: number | null = null;
                   if (productFilter) {
                     cost = links.find((l) => l.product_id === productFilter)?.target_price_brl ?? null;
@@ -274,9 +321,40 @@ export default function ComponentsPage() {
                     const sorted = [...links].sort((a, b) => (b.created_at ?? '').localeCompare(a.created_at ?? ''));
                     cost = sorted.find((l) => l.target_price_brl != null)?.target_price_brl ?? null;
                   }
+                  const variantCount = childrenByParent.get(c.id)?.length ?? 0;
+                  const parentName = c.parent_component_id ? componentById.get(c.parent_component_id)?.name : null;
                   return (
-                    <tr key={c.id} className="border-b border-slate-100 last:border-0">
-                      <td className="px-5 py-3 font-medium text-slate-900">{c.name}</td>
+                    <tr
+                      key={c.id}
+                      className={cn(
+                        'border-b border-slate-100 last:border-0',
+                        depth === 1 && 'bg-slate-50/40'
+                      )}
+                    >
+                      <td className="px-5 py-3 font-medium text-slate-900">
+                        <div className="flex items-center gap-2">
+                          {depth === 1 && (
+                            <span className="text-slate-300 select-none" aria-hidden>↳</span>
+                          )}
+                          <span className={cn(depth === 1 && 'pl-1 text-slate-700')}>{c.name}</span>
+                          {variantCount > 0 && depth === 0 && (
+                            <span
+                              className="rounded-full bg-purple-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-purple-700"
+                              title={`${variantCount} variante(s) deste componente`}
+                            >
+                              {variantCount} variante{variantCount === 1 ? '' : 's'}
+                            </span>
+                          )}
+                          {depth === 1 && parentName && (
+                            <span
+                              className="rounded-full bg-purple-50 px-2 py-0.5 text-[10px] font-medium text-purple-700 border border-purple-200"
+                              title={`Variante de "${parentName}"`}
+                            >
+                              variante de {parentName}
+                            </span>
+                          )}
+                        </div>
+                      </td>
                       <td className="px-5 py-3 text-center text-slate-600">
                         {usage === 0 ? (
                           <span className="text-xs text-slate-400">não usado</span>
@@ -312,7 +390,7 @@ export default function ComponentsPage() {
                 })}
               </tbody>
             </table>
-            <Pagination total={filtered.length} page={page} pageSize={PAGE_SIZE} onChange={setPage} className="px-5" />
+            <Pagination total={filteredCount} page={page} pageSize={PAGE_SIZE} onChange={setPage} className="px-5" />
           </Card>
         </>
       )}
@@ -342,6 +420,26 @@ export default function ComponentsPage() {
                 <h2 className="text-base font-semibold text-slate-900">
                   {form.id ? 'Editar componente' : 'Novo componente'}
                 </h2>
+                {form.id && (() => {
+                  const c = components.find((x) => x.id === form.id);
+                  if (c?.parent_component_id) {
+                    const p = componentById.get(c.parent_component_id);
+                    return (
+                      <p className="mt-1 text-xs text-purple-700">
+                        Variante de <strong>{p?.name ?? '(componente removido)'}</strong>
+                      </p>
+                    );
+                  }
+                  const variants = childrenByParent.get(form.id ?? '') ?? [];
+                  if (variants.length > 0) {
+                    return (
+                      <p className="mt-1 text-xs text-purple-700">
+                        {variants.length} variante{variants.length === 1 ? '' : 's'} assimilada{variants.length === 1 ? '' : 's'}: {variants.map((v) => v.name).join(', ')}
+                      </p>
+                    );
+                  }
+                  return null;
+                })()}
                 {form.id && form.usageCount > 0 && (
                   <p className="mt-1 text-xs text-slate-500">
                     Usado em {form.usageCount} {form.usageCount === 1 ? 'produto' : 'produtos'}

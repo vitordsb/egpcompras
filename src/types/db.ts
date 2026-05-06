@@ -12,6 +12,8 @@ export interface Component {
   description: string | null;
   ncm: string | null;
   unit: string;
+  /** Quando este componente é uma "variante" (fork) de outro, aponta pro pai */
+  parent_component_id: string | null;
   created_at: string;
 }
 
