@@ -1211,7 +1211,71 @@ export default function BuyerAgentPage() {
           </div>
         </div>
 
-        <div className="border-t border-slate-200 bg-white px-4 py-3 md:px-8 md:py-4">
+        <div className="relative border-t border-slate-200 bg-white px-4 py-3 md:px-8 md:py-4">
+          {/* Mobile: botão circular flutuante sobre a linha divisória do painel */}
+          <div className="pointer-events-none absolute -top-7 right-4 z-10 md:hidden">
+            <div className="pointer-events-auto">
+              {recording ? (
+                <div className="flex items-center gap-2 rounded-full border border-red-300 bg-red-50 py-1 pl-1.5 pr-3 shadow-lg">
+                  <button
+                    type="button"
+                    onClick={stopVoice}
+                    disabled={transcribing}
+                    title="Parar gravação e enviar"
+                    aria-label="Parar gravação e enviar"
+                    className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-red-600 text-white shadow-sm transition-colors hover:bg-red-700 disabled:opacity-50"
+                  >
+                    <span className="block h-3 w-3 rounded-sm bg-white" />
+                  </button>
+                  <span className="font-mono text-sm font-semibold tabular-nums text-red-700">
+                    {Math.floor(recordingMs / 1000).toString().padStart(2, '0')}:{Math.floor((recordingMs % 1000) / 10).toString().padStart(2, '0')}
+                  </span>
+                  <span className="flex items-center gap-0.5">
+                    <span className="block h-2 w-1 animate-pulse rounded-full bg-red-500" style={{ animationDelay: '0ms' }} />
+                    <span className="block h-3 w-1 animate-pulse rounded-full bg-red-500" style={{ animationDelay: '150ms' }} />
+                    <span className="block h-2 w-1 animate-pulse rounded-full bg-red-500" style={{ animationDelay: '300ms' }} />
+                  </span>
+                  <button
+                    type="button"
+                    onClick={cancelVoice}
+                    title="Cancelar gravação"
+                    aria-label="Cancelar gravação"
+                    className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-red-400 hover:bg-red-100 hover:text-red-700"
+                  >
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" className="h-3.5 w-3.5">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M4 4l8 8M12 4l-8 8" />
+                    </svg>
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={startVoice}
+                  disabled={running || transcribing}
+                  title={transcribing ? 'Transcrevendo…' : 'Gravar mensagem por voz'}
+                  aria-label="Gravar mensagem por voz"
+                  className={cn(
+                    'flex h-14 w-14 items-center justify-center rounded-full shadow-lg transition-all hover:scale-105 active:scale-95',
+                    transcribing
+                      ? 'bg-amber-500 text-white'
+                      : 'bg-brand-600 text-white hover:bg-brand-700',
+                    (running || transcribing) && 'cursor-not-allowed opacity-60 hover:scale-100'
+                  )}
+                >
+                  {transcribing ? (
+                    <svg viewBox="0 0 24 24" className="h-6 w-6 animate-spin">
+                      <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" fill="none" opacity="0.3" />
+                      <path d="M12 2a10 10 0 0 1 10 10" stroke="currentColor" strokeWidth="3" fill="none" strokeLinecap="round" />
+                    </svg>
+                  ) : (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-6 w-6">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 18.75a6 6 0 0 0 6-6v-1.5m-6 7.5a6 6 0 0 1-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 0 1-3-3V4.5a3 3 0 1 1 6 0v8.25a3 3 0 0 1-3 3Z" />
+                    </svg>
+                  )}
+                </button>
+              )}
+            </div>
+          </div>
           <div className="mx-auto max-w-3xl space-y-2">
             {/* Erro de voz */}
             {voiceError && (
@@ -1299,68 +1363,6 @@ export default function BuyerAgentPage() {
                 ))}
               </div>
             )}
-            {/* Mobile: botão flutuante circular acima do input, alinhado à direita */}
-            <div className="flex items-center justify-end md:hidden">
-              {recording ? (
-                <div className="flex items-center gap-2 rounded-full border border-red-300 bg-red-50 py-1 pl-1.5 pr-3 shadow-sm">
-                  <button
-                    type="button"
-                    onClick={stopVoice}
-                    disabled={transcribing}
-                    title="Parar gravação e enviar"
-                    aria-label="Parar gravação e enviar"
-                    className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-red-600 text-white shadow-sm transition-colors hover:bg-red-700 disabled:opacity-50"
-                  >
-                    <span className="block h-3 w-3 rounded-sm bg-white" />
-                  </button>
-                  <span className="font-mono text-sm font-semibold tabular-nums text-red-700">
-                    {Math.floor(recordingMs / 1000).toString().padStart(2, '0')}:{Math.floor((recordingMs % 1000) / 10).toString().padStart(2, '0')}
-                  </span>
-                  <span className="flex items-center gap-0.5">
-                    <span className="block h-2 w-1 animate-pulse rounded-full bg-red-500" style={{ animationDelay: '0ms' }} />
-                    <span className="block h-3 w-1 animate-pulse rounded-full bg-red-500" style={{ animationDelay: '150ms' }} />
-                    <span className="block h-2 w-1 animate-pulse rounded-full bg-red-500" style={{ animationDelay: '300ms' }} />
-                  </span>
-                  <button
-                    type="button"
-                    onClick={cancelVoice}
-                    title="Cancelar gravação"
-                    aria-label="Cancelar gravação"
-                    className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-red-400 hover:bg-red-100 hover:text-red-700"
-                  >
-                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" className="h-3.5 w-3.5">
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M4 4l8 8M12 4l-8 8" />
-                    </svg>
-                  </button>
-                </div>
-              ) : (
-                <button
-                  type="button"
-                  onClick={startVoice}
-                  disabled={running || transcribing}
-                  title={transcribing ? 'Transcrevendo…' : 'Gravar mensagem por voz'}
-                  aria-label="Gravar mensagem por voz"
-                  className={cn(
-                    'flex h-12 w-12 shrink-0 items-center justify-center rounded-full shadow-md transition-all hover:scale-105 active:scale-95',
-                    transcribing
-                      ? 'bg-amber-500 text-white'
-                      : 'bg-brand-600 text-white hover:bg-brand-700',
-                    (running || transcribing) && 'cursor-not-allowed opacity-60 hover:scale-100'
-                  )}
-                >
-                  {transcribing ? (
-                    <svg viewBox="0 0 24 24" className="h-6 w-6 animate-spin">
-                      <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" fill="none" opacity="0.3" />
-                      <path d="M12 2a10 10 0 0 1 10 10" stroke="currentColor" strokeWidth="3" fill="none" strokeLinecap="round" />
-                    </svg>
-                  ) : (
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-5 w-5">
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 18.75a6 6 0 0 0 6-6v-1.5m-6 7.5a6 6 0 0 1-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 0 1-3-3V4.5a3 3 0 1 1 6 0v8.25a3 3 0 0 1-3 3Z" />
-                    </svg>
-                  )}
-                </button>
-              )}
-            </div>
             <form
               onSubmit={(e) => {
                 e.preventDefault();
