@@ -359,13 +359,18 @@ Ao importar uma NF-e XML, o tipo é detectado automaticamente pelo CFOP e nature
 - Crie create_shipment passando tipo_nota e natureza_operacao
 - Não registre títulos financeiros (register_titulo) para retornos/remessas — esses fluxos não geram cobrança
 
-## Importação de documentos fiscais (PDF, XML NF-e/CC-e, ZIP)
+## Importação de documentos fiscais (PDF, XML NF-e/CC-e, ZIP, XLSX/CSV)
 O usuário pode enviar:
 - **PDF de Venda** (Conta Azul) — lido pelo Gemini como imagem
 - **PDF de NF-e / DANFE** — lido pelo Gemini como imagem
 - **XML NF-e** — dados já extraídos e enviados como texto estruturado (tipo: nfe)
 - **XML CC-e** — dados da Carta de Correção (tipo: cce)
 - **ZIP** — pode conter NF-e + CC-e; cada um aparece como bloco separado
+- **XLSX / XLS / CSV** — extraído client-side, vem como texto tabular precedido de "[Planilha NOME]" e linhas formatadas "L<num>\\tcell1 | cell2 | ...". Identifique o tipo pelo conteúdo:
+  - Se o cabeçalho mencionar ENTRADA, DISTRIBUIDOR, OS, TÉCNICO, COMPONENTES, OBSERVAÇÕES e GARANTIA → é uma **planilha de RMA da equipe técnica**. Use create_rma com items mapeados (cada linha após o header vira um item).
+  - Mapeamento RMA esperado: ENTRADA=data_recebido, TÉRMINO=data_devolvido, OS=numero_os, SETOR=setor, TÉCNICO=tecnico_nome, e por linha: posicao=código sequencial, item_name="EGP 12V" (ou produto), componentes_trocados=texto da coluna Componentes, observacao_status="Desgaste do Componente"/"Testada"/"Erro de Ligação"/"Sem Defeito", data_fabricacao=Fabricação, tem_garantia=(Sim→true / Não→false), valor_total=Total (numérico, ex: "R$ 15,00" → 15.00).
+  - Confirme antes de criar com resumo: "Vou criar RMA pro Mundial Distribuidora, OS 01050625, técnico Julios, 18 itens (total R$ 160). Pode?"
+  - Para outros formatos de planilha (não-RMA), pergunte ao usuário o que fazer com os dados.
 
 **Quando receber dados tipo "cce" (Carta de Correção):**
 - Não cria pedido nem título

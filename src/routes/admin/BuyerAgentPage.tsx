@@ -364,10 +364,11 @@ export default function BuyerAgentPage() {
 
   async function attachFile(file: File) {
     const name = file.name.toLowerCase();
-    if (file.type === 'application/pdf' || name.endsWith('.pdf')) {
+    const type = (file.type || '').toLowerCase();
+    if (type === 'application/pdf' || name.endsWith('.pdf')) {
       const data = await readFileAsBase64(file);
       setPendingFiles((prev) => [...prev, { name: file.name, mimeType: 'application/pdf', data }]);
-    } else if (name.endsWith('.xml') || file.type === 'text/xml' || file.type === 'application/xml') {
+    } else if (name.endsWith('.xml') || type === 'text/xml' || type === 'application/xml') {
       const content = await file.text();
       const parsed = processXmlFile(file.name, content);
       if (!parsed) {
@@ -375,7 +376,7 @@ export default function BuyerAgentPage() {
         return;
       }
       setPendingParseds((prev) => [...prev, parsed]);
-    } else if (name.endsWith('.zip') || file.type === 'application/zip' || file.type === 'application/x-zip-compressed') {
+    } else if (name.endsWith('.zip') || type === 'application/zip' || type === 'application/x-zip-compressed') {
       try {
         const parsed = await processZipFile(file);
         if (!parsed) {
@@ -387,8 +388,39 @@ export default function BuyerAgentPage() {
         setError({ title: 'Falha ao ler ZIP', description: 'Não foi possível abrir o arquivo ZIP.' });
         return;
       }
+    } else if (
+      name.endsWith('.xlsx') || name.endsWith('.xls') || name.endsWith('.csv') ||
+      type.includes('spreadsheet') || type.includes('excel') || type === 'text/csv'
+    ) {
+      try {
+        const XLSX = await import('xlsx');
+        const buf = await file.arrayBuffer();
+        const wb = XLSX.read(buf, { type: 'array' });
+        const sheetText: string[] = [];
+        for (const sheetName of wb.SheetNames) {
+          const sheet = wb.Sheets[sheetName];
+          const rows = XLSX.utils.sheet_to_json<any[]>(sheet, { header: 1, defval: '', raw: false });
+          sheetText.push(`=== Aba: ${sheetName} ===`);
+          for (let r = 0; r < rows.length; r++) {
+            const row = rows[r] ?? [];
+            if (row.every((c) => c == null || String(c).trim() === '')) continue;
+            const cells = row.map((c) => String(c ?? '').replace(/\s+/g, ' ').trim());
+            sheetText.push(`L${r + 1}\t${cells.join(' | ')}`);
+          }
+        }
+        const text = sheetText.join('\n').slice(0, 30000);
+        setPendingParseds((prev) => [...prev, {
+          name: file.name,
+          label: `Planilha ${file.name}`,
+          text: `[Planilha ${file.name}]\n${text}`,
+          docs: [],
+        }]);
+      } catch (err) {
+        setError({ title: 'Falha ao ler planilha', description: err instanceof Error ? err.message : 'Arquivo XLSX/CSV inválido.' });
+        return;
+      }
     } else {
-      setError({ title: 'Formato não suportado', description: 'Aceitos: PDF, XML (NF-e/CC-e) e ZIP.' });
+      setError({ title: 'Formato não suportado', description: 'Aceitos: PDF, XML (NF-e/CC-e), ZIP, XLSX, XLS e CSV.' });
       return;
     }
     inputRef.current?.focus();
@@ -1434,7 +1466,7 @@ export default function BuyerAgentPage() {
               <input
                 ref={fileInputRef}
                 type="file"
-                accept=".pdf,.xml,.zip,application/pdf,text/xml,application/xml,application/zip"
+                accept=".pdf,.xml,.zip,.xlsx,.xls,.csv,application/pdf,text/xml,application/xml,application/zip,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv"
                 multiple
                 className="sr-only"
                 onChange={(e) => {
@@ -1446,7 +1478,7 @@ export default function BuyerAgentPage() {
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
                 disabled={running}
-                title="Anexar arquivo (PDF, XML NF-e/CC-e, ZIP)"
+                title="Anexar arquivo (PDF, XML NF-e/CC-e, ZIP, XLSX, CSV)"
                 aria-label="Anexar arquivo"
                 className={cn(
                   'flex h-[52px] w-[52px] shrink-0 items-center justify-center rounded-md border transition-colors',
