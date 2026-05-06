@@ -3,55 +3,44 @@ import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/Button';
 import { Textarea } from '@/components/ui/Input';
 import type { RmaRow, RmaStatus } from './rmas-shared';
-import { STATUS_LABEL, MOTIVO_LABEL, formatDateBR } from './rmas-shared';
+import { MOTIVO_LABEL, formatDateBR } from './rmas-shared';
+
+// Bucket simples: tudo que não saiu = "defeito" (em andamento na fábrica),
+// devolvido = "saiu". Operação pequena, sem burocracia de subetapas.
+type BucketKey = 'defeito' | 'saiu';
 
 interface ColumnDef {
-  key: RmaStatus;
+  key: BucketKey;
   label: string;
   headerClass: string;
   countClass: string;
   emptyHint: string;
+  /** Status que esse bucket disparra ao receber um drop */
+  targetStatus: RmaStatus;
 }
 
 const COLUMNS: ColumnDef[] = [
   {
-    key: 'recebido',
-    label: 'Recebido',
-    headerClass: 'bg-blue-50 border-blue-200 text-blue-800',
-    countClass: 'bg-blue-100 text-blue-700',
-    emptyHint: 'Nenhum RMA recém-chegado.',
-  },
-  {
-    key: 'analise',
-    label: 'Em análise',
+    key: 'defeito',
+    label: 'Defeito (em andamento)',
     headerClass: 'bg-amber-50 border-amber-200 text-amber-800',
     countClass: 'bg-amber-100 text-amber-700',
-    emptyHint: 'Sem RMAs em análise.',
+    emptyHint: 'Sem RMAs em andamento.',
+    targetStatus: 'recebido',
   },
   {
-    key: 'conserto',
-    label: 'Em conserto',
-    headerClass: 'bg-purple-50 border-purple-200 text-purple-800',
-    countClass: 'bg-purple-100 text-purple-700',
-    emptyHint: 'Sem RMAs em conserto.',
-  },
-  {
-    key: 'pronto',
-    label: 'Pronto p/ devolver',
+    key: 'saiu',
+    label: 'Saiu',
     headerClass: 'bg-emerald-50 border-emerald-200 text-emerald-800',
     countClass: 'bg-emerald-100 text-emerald-700',
-    emptyHint: 'Sem RMAs prontos.',
-  },
-  {
-    key: 'devolvido',
-    label: 'Devolvido',
-    headerClass: 'bg-slate-50 border-slate-200 text-slate-700',
-    countClass: 'bg-slate-100 text-slate-700',
     emptyHint: 'Nenhum RMA devolvido ainda.',
+    targetStatus: 'devolvido',
   },
 ];
 
-const STATUS_FLOW: RmaStatus[] = ['recebido', 'analise', 'conserto', 'pronto', 'devolvido'];
+function bucketOf(status: RmaStatus): BucketKey {
+  return status === 'devolvido' ? 'saiu' : 'defeito';
+}
 
 interface RmasKanbanViewProps {
   rmas: RmaRow[];
@@ -67,7 +56,7 @@ export default function RmasKanbanView({
   onAddObservation,
 }: RmasKanbanViewProps) {
   const [draggingId, setDraggingId] = useState<string | null>(null);
-  const [hoverColumn, setHoverColumn] = useState<RmaStatus | null>(null);
+  const [hoverColumn, setHoverColumn] = useState<BucketKey | null>(null);
   const [obsFor, setObsFor] = useState<RmaRow | null>(null);
   const [obsText, setObsText] = useState('');
   const [obsSaving, setObsSaving] = useState(false);
@@ -86,11 +75,10 @@ export default function RmasKanbanView({
   }
 
   const grouped = useMemo(() => {
-    const acc: Record<RmaStatus, RmaRow[]> = {
-      recebido: [], analise: [], conserto: [], pronto: [], devolvido: [], cancelado: [],
-    };
+    const acc: Record<BucketKey, RmaRow[]> = { defeito: [], saiu: [] };
     for (const r of rmas) {
-      if (acc[r.status]) acc[r.status].push(r);
+      if (r.status === 'cancelado') continue; // cancelados ficam fora do kanban
+      acc[bucketOf(r.status)].push(r);
     }
     return acc;
   }, [rmas]);
@@ -104,32 +92,30 @@ export default function RmasKanbanView({
     setDraggingId(null);
     setHoverColumn(null);
   }
-  function onDragOver(e: DragEvent<HTMLDivElement>, col: RmaStatus) {
+  function onDragOver(e: DragEvent<HTMLDivElement>, col: BucketKey) {
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
     if (hoverColumn !== col) setHoverColumn(col);
   }
-  function onDragLeave(col: RmaStatus) {
+  function onDragLeave(col: BucketKey) {
     if (hoverColumn === col) setHoverColumn(null);
   }
-  function onDrop(e: DragEvent<HTMLDivElement>, target: RmaStatus) {
+  function onDrop(e: DragEvent<HTMLDivElement>, targetBucket: BucketKey) {
     e.preventDefault();
     setHoverColumn(null);
     const id = e.dataTransfer.getData('text/plain');
     const r = rmas.find((x) => x.id === id);
     setDraggingId(null);
-    if (!r || r.status === target) return;
+    if (!r) return;
+    const currentBucket = bucketOf(r.status);
+    if (currentBucket === targetBucket) return;
+    const target = COLUMNS.find((c) => c.key === targetBucket)!.targetStatus;
     onMoveToColumn(r, target);
-  }
-
-  function nextStatus(current: RmaStatus): RmaStatus | null {
-    const idx = STATUS_FLOW.indexOf(current);
-    return idx >= 0 && idx < STATUS_FLOW.length - 1 ? STATUS_FLOW[idx + 1] : null;
   }
 
   return (
     <>
-      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+      <div className="grid gap-3 md:grid-cols-2">
         {COLUMNS.map((col) => (
           <div
             key={col.key}
@@ -154,7 +140,8 @@ export default function RmasKanbanView({
                 </div>
               ) : (
                 grouped[col.key].map((r) => {
-                  const next = nextStatus(r.status);
+                  // Em "defeito" → botão "Marcar saiu". Em "saiu" → não tem ação.
+                  const canMarkSaiu = col.key === 'defeito';
                   return (
                     <div
                       key={r.id}
@@ -209,23 +196,23 @@ export default function RmasKanbanView({
                       </div>
 
                       <div className="mt-2 flex items-center gap-1.5 text-[11px] text-slate-500">
-                        {next && (
+                        {canMarkSaiu && (
                           <button
                             type="button"
                             onClick={(e) => {
                               e.stopPropagation();
-                              onMoveToColumn(r, next);
+                              onMoveToColumn(r, 'devolvido');
                             }}
-                            className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 hover:bg-brand-50 hover:text-brand-700"
-                            title={`Avançar para ${STATUS_LABEL[next]}`}
+                            className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 hover:bg-emerald-50 hover:text-emerald-700"
+                            title="Marcar como devolvido (saiu)"
                           >
                             <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" className="h-3 w-3">
                               <path strokeLinecap="round" strokeLinejoin="round" d="M3 8h10m-3-3 3 3-3 3" />
                             </svg>
-                            {STATUS_LABEL[next]}
+                            Marcar saiu
                           </button>
                         )}
-                        <span className="text-slate-300">·</span>
+                        {canMarkSaiu && <span className="text-slate-300">·</span>}
                         <button
                           type="button"
                           onClick={(e) => {

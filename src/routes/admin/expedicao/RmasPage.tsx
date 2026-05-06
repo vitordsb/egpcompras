@@ -78,7 +78,7 @@ export default function RmasPage() {
   const [loading, setLoading] = useState(true);
   const [listError, setListError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
-  const [statusFilter, setStatusFilter] = useState<RmaStatus | 'all'>('all');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'defeito' | 'saiu'>('all');
   const [page, setPage] = useState(1);
   const [viewMode, setViewModeState] = useState<ViewMode>(() => {
     try {
@@ -127,7 +127,8 @@ export default function RmasPage() {
   // ----- filtros -----
   const filtered = useMemo(() => {
     return list.filter((r) => {
-      if (statusFilter !== 'all' && r.status !== statusFilter) return false;
+      if (statusFilter === 'defeito' && r.status === 'devolvido') return false;
+      if (statusFilter === 'saiu' && r.status !== 'devolvido') return false;
       if (search.trim()) {
         const q = search.toLowerCase();
         const hay = `${r.client_name} ${r.client_trade_name ?? ''} ${r.numero} ${r.numero_venda_origem ?? ''}`.toLowerCase();
@@ -145,9 +146,12 @@ export default function RmasPage() {
   );
 
   const stats = useMemo(() => {
-    const byStatus = { recebido: 0, analise: 0, conserto: 0, pronto: 0, devolvido: 0, cancelado: 0 };
-    for (const r of list) byStatus[r.status]++;
-    return byStatus;
+    const acc = { defeito: 0, saiu: 0 };
+    for (const r of list) {
+      if (r.status === 'devolvido') acc.saiu++;
+      else if (r.status !== 'cancelado') acc.defeito++;
+    }
+    return acc;
   }, [list]);
 
   // ----- form -----
@@ -319,13 +323,9 @@ export default function RmasPage() {
           value={statusFilter}
           onChange={setStatusFilter}
           options={[
-            { key: 'all',       label: 'Todos',              count: list.length,     pillClass: 'bg-slate-100 text-slate-700' },
-            { key: 'recebido',  label: 'Recebido',           count: stats.recebido,  pillClass: 'bg-blue-100 text-blue-700' },
-            { key: 'analise',   label: 'Em análise',         count: stats.analise,   pillClass: 'bg-amber-100 text-amber-700' },
-            { key: 'conserto',  label: 'Em conserto',        count: stats.conserto,  pillClass: 'bg-purple-100 text-purple-700' },
-            { key: 'pronto',    label: 'Pronto p/ devolver', count: stats.pronto,    pillClass: 'bg-emerald-100 text-emerald-700' },
-            { key: 'devolvido', label: 'Devolvido',          count: stats.devolvido, pillClass: 'bg-slate-100 text-slate-700' },
-            { key: 'cancelado', label: 'Cancelado',          count: stats.cancelado, pillClass: 'bg-red-100 text-red-700' },
+            { key: 'all',     label: 'Todos',   count: list.length,    pillClass: 'bg-slate-100 text-slate-700' },
+            { key: 'defeito', label: 'Defeito', count: stats.defeito,  pillClass: 'bg-amber-100 text-amber-700' },
+            { key: 'saiu',    label: 'Saiu',    count: stats.saiu,     pillClass: 'bg-emerald-100 text-emerald-700' },
           ]}
         />
         <div className="flex flex-1 items-center gap-2">
@@ -628,7 +628,7 @@ export default function RmasPage() {
 
 // ----- FilterDropdown ----------------------------------------------------
 
-type FilterKey = RmaStatus | 'all';
+type FilterKey = 'all' | 'defeito' | 'saiu';
 interface FilterOption {
   key: FilterKey; label: string; count: number; pillClass: string;
 }
