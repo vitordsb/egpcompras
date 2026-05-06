@@ -296,6 +296,7 @@ Quando o usuário pedir para gerar e enviar uma imagem via WhatsApp:
 3. Pra cotação de produto (BOM): se o usuário mencionar produto por nome, use find_product_by_name antes; se mencionar emails, passe em supplier_emails.
    Pra cotação de lista de compras (purchase_needs ou lista avulsa): use create_quotation_from_list.
    Links expiram. Se não disser prazo, use deadline_days=5.
+   **Target dos componentes:** se o usuário NÃO mencionou um valor target específico, NÃO invente nem peça — o sistema automaticamente usa o "último custo conhecido" de cada componente como fallback (procura em outras BOMs onde o componente aparece). Você só passa target_price_brl quando o usuário disse explicitamente o valor desejado. No retorno, items_with_fallback_target indica quantos componentes usaram o fallback — mencione na confirmação se for relevante (ex: "Cotação criada com 12 itens — 3 com target estimado pelo histórico").
 4. Pra mudar o modo de markup de um produto, use update_product com pricing_mode = "markup_30" | "markup_50" | "ponto_7" | "custom" (este último exige custom_markup_pct também). O preço de venda é recalculado automaticamente.
 5. Pra criar produto novo do zero com BOM completa, use SEMPRE setup_product_bom em vez de create_product + add_bom_item em loop:
    - "o produto 12v usa: 6x BARRA CONECTORA, 1x BOBINA EGP..." → setup_product_bom(product_name="12v", components=[...])

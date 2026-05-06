@@ -2328,6 +2328,32 @@ async function fuzzyFallback<T = any>(rpcName: string, query: string): Promise<T
 }
 
 /**
+ * Pra cada component_id da lista, busca o target_price_brl mais recente
+ * conhecido (em qualquer BOM onde esse componente apareça). Usado como
+ * fallback ao montar cotação quando o usuário não especifica target —
+ * preserva o "último custo aceito" do componente.
+ */
+export async function getLastKnownTargetByComponentIds(
+  componentIds: string[]
+): Promise<Map<string, number>> {
+  const map = new Map<string, number>();
+  if (componentIds.length === 0) return map;
+  const { data } = await supabase
+    .from('bom_items')
+    .select('component_id, target_price_brl, created_at')
+    .in('component_id', componentIds)
+    .not('target_price_brl', 'is', null)
+    .order('created_at', { ascending: false });
+  for (const r of (data ?? []) as any[]) {
+    const id = r.component_id as string;
+    if (!map.has(id) && r.target_price_brl != null) {
+      map.set(id, Number(r.target_price_brl));
+    }
+  }
+  return map;
+}
+
+/**
  * Resolve um nome (ex: "Nathanna", "Felipe Enbracon") em um número de
  * WhatsApp, buscando em 3 tabelas na ordem: whatsapp_contacts → sellers →
  * client_contacts. Tenta ilike primeiro; se falha, fuzzy fallback.
@@ -3178,33 +3204,50 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
       const quotationId = (q as any).id as string;
       const publicToken = (q as any).public_token as string;
 
-      // Resolve componentes e insere itens
+      // Resolve componentes e insere itens — em 2 passes pra aplicar
+      // fallback de target_price_brl (último custo conhecido) quando o
+      // usuário não passou explicitamente
       const preferredSupplierIds = new Set<string>();
       const itemsPayload: any[] = [];
       const unresolvedItems: string[] = [];
+      const resolved: { it: typeof items[number]; compId: string | null }[] = [];
 
       for (let i = 0; i < items.length; i++) {
         const it = items[i];
         const { data: comps } = await supabase.from('components')
           .select('id').ilike('name', `%${it.name}%`).limit(1);
-        const comp = (comps as any[])?.[0];
+        const compId = (comps as any[])?.[0]?.id ?? null;
+        resolved.push({ it, compId });
 
-        itemsPayload.push({
-          quotation_id:        quotationId,
-          component_id:        comp?.id ?? null,
-          component_name_free: comp ? null : it.name,
-          quantity:            it.quantity,
-          target_price_brl:    it.target_price_brl ?? null,
-          position:            i,
-        });
-
-        // Coleta fornecedor preferido do componente
-        if (comp && autoInvitePreferred) {
+        if (compId && autoInvitePreferred) {
           const { data: cs } = await supabase.from('component_suppliers')
-            .select('supplier_id').eq('component_id', comp.id).eq('is_preferred', true).maybeSingle();
+            .select('supplier_id').eq('component_id', compId).eq('is_preferred', true).maybeSingle();
           if (cs) preferredSupplierIds.add((cs as any).supplier_id);
           else unresolvedItems.push(it.name);
         }
+      }
+
+      // Busca último target conhecido pra cada componente sem target explícito
+      const compIdsNeedingFallback = resolved
+        .filter((r) => r.compId && r.it.target_price_brl == null)
+        .map((r) => r.compId!) as string[];
+      const lastKnownTargets = await getLastKnownTargetByComponentIds(compIdsNeedingFallback);
+
+      let fallbackUsedCount = 0;
+      for (let i = 0; i < resolved.length; i++) {
+        const { it, compId } = resolved[i];
+        const explicitTarget = it.target_price_brl != null ? Number(it.target_price_brl) : null;
+        const fallbackTarget = compId ? (lastKnownTargets.get(compId) ?? null) : null;
+        const finalTarget = explicitTarget ?? fallbackTarget;
+        if (explicitTarget == null && fallbackTarget != null) fallbackUsedCount++;
+        itemsPayload.push({
+          quotation_id:        quotationId,
+          component_id:        compId,
+          component_name_free: compId ? null : it.name,
+          quantity:            it.quantity,
+          target_price_brl:    finalTarget,
+          position:            i,
+        });
       }
 
       await supabase.from('quotation_items').insert(itemsPayload);
@@ -3239,6 +3282,7 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
         quotation_id: quotationId,
         title,
         items_count: items.length,
+        items_with_fallback_target: fallbackUsedCount,
         public_url: buildPublicQuoteUrl(publicToken),
         expires_at: deadline,
         invites,
@@ -3477,13 +3521,23 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
       const quotationId = q.id as string;
       const publicToken = (q as any).public_token as string;
 
+      // Fallback de target: para componentes sem target_price_brl explícito
+      // na BOM, busca o último custo conhecido (mais recente em qualquer BOM)
+      const compIdsNeedingFallback = filtered
+        .filter((b) => b.target_price_brl == null)
+        .map((b) => b.component_id);
+      const lastKnownTargets = await getLastKnownTargetByComponentIds(compIdsNeedingFallback);
+
       const itemsPayload = filtered.map((b, idx) => ({
         quotation_id: quotationId,
         component_id: b.component_id,
         quantity: b.quantity * units,
-        target_price_brl: b.target_price_brl,
+        target_price_brl: b.target_price_brl ?? lastKnownTargets.get(b.component_id) ?? null,
         position: idx,
       }));
+      const fallbackUsedCount = filtered.filter((b) =>
+        b.target_price_brl == null && lastKnownTargets.has(b.component_id)
+      ).length;
       const { error: itErr } = await supabase.from('quotation_items').insert(itemsPayload);
       if (itErr) throw new Error(`Itens: ${itErr.message}`);
 
@@ -3526,6 +3580,7 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
         units_to_manufacture: units,
         excluded_components: excludedComponents,
         items_count: filtered.length,
+        items_with_fallback_target: fallbackUsedCount,
         public_url: buildPublicQuoteUrl(publicToken),
         expires_at: deadline,
         nominal_invites: invites,

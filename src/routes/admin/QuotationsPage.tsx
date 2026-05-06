@@ -221,7 +221,32 @@ export default function QuotationsPage() {
       .from('bom_items')
       .select('*, component:components(*)')
       .eq('product_id', productId);
-    setProductBom((data ?? []) as unknown as Array<BomItem & { component: Component | null }>);
+    let bom = (data ?? []) as unknown as Array<BomItem & { component: Component | null }>;
+
+    // Fallback: pra componentes sem target nesta BOM, busca o último custo
+    // conhecido em qualquer outra BOM do mesmo componente. Pré-popula o
+    // campo (usuário pode ajustar antes de enviar a cotação).
+    const idsWithoutTarget = bom
+      .filter((b) => b.target_price_brl == null && b.component_id)
+      .map((b) => b.component_id);
+    if (idsWithoutTarget.length > 0) {
+      const { data: lastTargets } = await supabase
+        .from('bom_items')
+        .select('component_id, target_price_brl, created_at')
+        .in('component_id', idsWithoutTarget)
+        .not('target_price_brl', 'is', null)
+        .order('created_at', { ascending: false });
+      const map = new Map<string, number>();
+      for (const r of (lastTargets ?? []) as any[]) {
+        if (!map.has(r.component_id)) map.set(r.component_id, Number(r.target_price_brl));
+      }
+      bom = bom.map((b) =>
+        b.target_price_brl == null && map.has(b.component_id)
+          ? { ...b, target_price_brl: map.get(b.component_id) ?? null }
+          : b
+      );
+    }
+    setProductBom(bom);
   }
 
   function removeBomItemFromPreview(bomItemId: string) {
