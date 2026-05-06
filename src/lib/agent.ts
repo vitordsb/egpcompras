@@ -1001,12 +1001,62 @@ export interface RunOptions {
   /** Múltiplos PDFs enviados de uma vez */
   userInlineDataList?: Array<{ mimeType: string; data: string; fileName?: string }>;
   onTurn?: (turn: ChatTurn) => void;
+  /**
+   * Disparado quando um pedaço de texto chega via streaming. A UI deve
+   * concatenar `chunk` ao texto do último model turn.
+   * Quando o stream termina, é chamado com `done: true`.
+   */
+  onTextChunk?: (chunk: string, done: boolean) => void;
   /** Sinal pra cancelar a execução (entre steps). */
   signal?: AbortSignal;
   /** Disparado quando entra em retry de erro recuperável. */
   onRetry?: (status: RetryStatus) => void;
   /** Disparado quando o retry foi resolvido (chamada bem-sucedida). */
   onRetryClear?: () => void;
+}
+
+/**
+ * Consome o stream do provider, emitindo cada chunk de texto via onTextChunk.
+ * No fim, retorna ProviderResponse acumulada (text + toolCalls + usage).
+ * Se o stream errar antes do primeiro chunk, deixa subir pro caller (que
+ * faz fallback pro generate normal). Se errar no meio, mantém o que já veio.
+ */
+async function runStream(
+  provider: AgentProvider,
+  args: ProviderRunArgs,
+  onTextChunk: (chunk: string, done: boolean) => void,
+  signal?: AbortSignal
+): Promise<ProviderResponse> {
+  if (!provider.generateStream) throw new Error('Provider sem generateStream');
+  let accumulatedText = '';
+  let toolCalls: { name: string; args: Record<string, unknown> }[] | undefined;
+  let usage = { promptTokens: 0, responseTokens: 0, totalTokens: 0 };
+  let firstChunkArrived = false;
+
+  for await (const chunk of provider.generateStream(args)) {
+    if (signal?.aborted) throw new Error('Cancelado pelo usuário');
+    if (chunk.text) {
+      accumulatedText += chunk.text;
+      onTextChunk(chunk.text, false);
+      firstChunkArrived = true;
+    }
+    if (chunk.toolCalls) toolCalls = chunk.toolCalls;
+    if (chunk.usage) usage = chunk.usage;
+    if (chunk.done) {
+      // Sinaliza pro consumer que o stream finalizou (UI tira o cursor)
+      onTextChunk('', true);
+    }
+  }
+  if (!firstChunkArrived && (!toolCalls || toolCalls.length === 0)) {
+    // Stream vazio sem tool calls — sinaliza done pra UI limpar qualquer estado
+    onTextChunk('', true);
+  }
+
+  return {
+    text: (toolCalls?.length ?? 0) === 0 ? accumulatedText : undefined,
+    toolCalls,
+    usage,
+  };
 }
 
 export async function runAgent({
@@ -1019,6 +1069,7 @@ export async function runAgent({
   userInlineData,
   userInlineDataList,
   onTurn,
+  onTextChunk,
   signal,
   onRetry,
   onRetryClear,
@@ -1085,15 +1136,44 @@ export async function runAgent({
     if (signal?.aborted) {
       throw new Error('Cancelado pelo usuário');
     }
-    const response = await generateWithRetry(
-      provider,
-      {
-        systemInstruction: fullSystemInstruction,
-        tools: filteredTools as any,
-        history: workingHistory,
-      },
-      { signal, onRetry, onRetryClear }
-    );
+
+    // Tenta streaming se o provider suporta E temos um listener interessado.
+    // Caso contrário (ou se o stream falhar antes do 1º chunk), cai pro fluxo normal com retry.
+    const useStreaming = !!provider.generateStream && !!onTextChunk;
+    let response: ProviderResponse;
+
+    if (useStreaming) {
+      try {
+        response = await runStream(provider, {
+          systemInstruction: fullSystemInstruction,
+          tools: filteredTools as any,
+          history: workingHistory,
+        }, onTextChunk!, signal);
+      } catch (err) {
+        if (signal?.aborted) throw err;
+        console.warn('[agent] streaming falhou, caindo pro modo normal:', err);
+        response = await generateWithRetry(
+          provider,
+          {
+            systemInstruction: fullSystemInstruction,
+            tools: filteredTools as any,
+            history: workingHistory,
+          },
+          { signal, onRetry, onRetryClear }
+        );
+      }
+    } else {
+      response = await generateWithRetry(
+        provider,
+        {
+          systemInstruction: fullSystemInstruction,
+          tools: filteredTools as any,
+          history: workingHistory,
+        },
+        { signal, onRetry, onRetryClear }
+      );
+    }
+
     apiRequestsCount++;
     promptTokens += response.usage.promptTokens;
     responseTokens += response.usage.responseTokens;

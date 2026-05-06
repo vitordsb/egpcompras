@@ -1,5 +1,5 @@
 import { GoogleGenAI, type Content } from '@google/genai';
-import type { AgentProvider, ProviderResponse } from './types';
+import type { AgentProvider, ProviderResponse, ProviderStreamChunk, ProviderRunArgs } from './types';
 
 const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
 const MODEL = 'gemini-2.5-flash';
@@ -44,44 +44,7 @@ export const geminiProvider: AgentProvider = {
 
   async generate({ systemInstruction, tools, history }): Promise<ProviderResponse> {
     const ai = getClient();
-    const contents: Content[] = [];
-    for (const t of history) {
-      if (t.role === 'user' && (t.text || t.inlineData || t.inlineDataList)) {
-        const parts: any[] = [];
-        // Múltiplos PDFs (novo fluxo em lote)
-        if (t.inlineDataList) {
-          for (const d of t.inlineDataList) {
-            if (d.data) parts.push({ inlineData: { mimeType: d.mimeType, data: d.data } });
-          }
-        } else if (t.inlineData?.data) {
-          // Legado: PDF único
-          parts.push({ inlineData: { mimeType: t.inlineData.mimeType, data: t.inlineData.data } });
-        }
-        if (t.text) parts.push({ text: t.text });
-        contents.push({ role: 'user', parts });
-      } else if (t.role === 'model' && t.text) {
-        contents.push({ role: 'model', parts: [{ text: t.text }] });
-      } else if (t.toolCall) {
-        contents.push({
-          role: 'model',
-          parts: [{ functionCall: { name: t.toolCall.name, args: t.toolCall.args } }],
-        });
-      } else if (t.toolResponse) {
-        contents.push({
-          role: 'user',
-          parts: [
-            {
-              functionResponse: {
-                name: t.toolResponse.name,
-                response: t.toolResponse.error
-                  ? { error: t.toolResponse.error }
-                  : (t.toolResponse.data as Record<string, unknown>) ?? {},
-              },
-            },
-          ],
-        });
-      }
-    }
+    const contents = buildContents(history);
 
     const response = await ai.models.generateContent({
       model: MODEL,
@@ -107,4 +70,88 @@ export const geminiProvider: AgentProvider = {
       },
     };
   },
+
+  async *generateStream({ systemInstruction, tools, history }: ProviderRunArgs): AsyncIterable<ProviderStreamChunk> {
+    const ai = getClient();
+    const contents = buildContents(history);
+
+    const stream = await ai.models.generateContentStream({
+      model: MODEL,
+      contents,
+      config: {
+        systemInstruction,
+        tools: [{ functionDeclarations: tools as any }],
+        temperature: 0.2,
+      },
+    });
+
+    let lastUsage: any = undefined;
+    let accumulatedCalls: { name: string; args: Record<string, unknown> }[] = [];
+
+    for await (const chunk of stream) {
+      const chunkText = chunk.text ?? '';
+      const chunkCalls = chunk.functionCalls ?? [];
+      if (chunk.usageMetadata) lastUsage = chunk.usageMetadata;
+      if (chunkCalls.length > 0) {
+        accumulatedCalls = chunkCalls.map((c) => ({
+          name: c.name ?? '',
+          args: (c.args ?? {}) as Record<string, unknown>,
+        }));
+      }
+      if (chunkText) {
+        yield { text: chunkText };
+      }
+    }
+
+    yield {
+      done: true,
+      toolCalls: accumulatedCalls.length > 0 ? accumulatedCalls : undefined,
+      usage: {
+        promptTokens: lastUsage?.promptTokenCount ?? 0,
+        responseTokens: lastUsage?.candidatesTokenCount ?? 0,
+        totalTokens: lastUsage?.totalTokenCount ?? 0,
+      },
+    };
+  },
 };
+
+// Constrói o array Contents do Gemini a partir do histórico universal de turns
+function buildContents(history: ProviderRunArgs['history']): Content[] {
+  const contents: Content[] = [];
+  for (const t of history) {
+    if (t.role === 'user' && (t.text || t.inlineData || t.inlineDataList)) {
+      const parts: any[] = [];
+      if (t.inlineDataList) {
+        for (const d of t.inlineDataList) {
+          if (d.data) parts.push({ inlineData: { mimeType: d.mimeType, data: d.data } });
+        }
+      } else if (t.inlineData?.data) {
+        parts.push({ inlineData: { mimeType: t.inlineData.mimeType, data: t.inlineData.data } });
+      }
+      if (t.text) parts.push({ text: t.text });
+      contents.push({ role: 'user', parts });
+    } else if (t.role === 'model' && t.text) {
+      contents.push({ role: 'model', parts: [{ text: t.text }] });
+    } else if (t.toolCall) {
+      contents.push({
+        role: 'model',
+        parts: [{ functionCall: { name: t.toolCall.name, args: t.toolCall.args } }],
+      });
+    } else if (t.toolResponse) {
+      contents.push({
+        role: 'user',
+        parts: [
+          {
+            functionResponse: {
+              name: t.toolResponse.name,
+              response: t.toolResponse.error
+                ? { error: t.toolResponse.error }
+                : (t.toolResponse.data as Record<string, unknown>) ?? {},
+            },
+          },
+        ],
+      });
+    }
+  }
+  return contents;
+}

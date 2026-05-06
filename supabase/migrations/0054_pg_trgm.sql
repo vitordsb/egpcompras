@@ -78,9 +78,9 @@ language sql stable as $$
 $$;
 
 create or replace function search_marketing_templates_fuzzy(q text, threshold float default 0.25)
-returns table (id uuid, name text, status text, sim float)
+returns table (id uuid, name text, template_id text, sim float)
 language sql stable as $$
-  select id, name, status, similarity(name, q) as sim
+  select id, name, template_id, similarity(name, q) as sim
   from marketing_templates
   where similarity(name, q) > threshold
   order by sim desc

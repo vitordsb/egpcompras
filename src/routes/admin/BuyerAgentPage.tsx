@@ -108,6 +108,9 @@ export default function BuyerAgentPage() {
   const [transcribing, setTranscribing] = useState(false);
   const [voiceError, setVoiceError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  // Marca que o turn atual chegou via streaming — usado pelo onTurn pra REPLACE
+  // o turn temporário (em vez de PUSH duplicado) quando o stream termina.
+  const streamingActiveRef = useRef(false);
 
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -553,10 +556,54 @@ export default function BuyerAgentPage() {
         signal: controller.signal,
         onRetry: (s) => setRetryStatus(s),
         onRetryClear: () => setRetryStatus(null),
+        onTextChunk: (chunk, done) => {
+          if (chunk) {
+            const isFirstChunk = !streamingActiveRef.current;
+            if (isFirstChunk) {
+              streamingActiveRef.current = true;
+              const ts = new Date().toISOString();
+              const turn: ChatTurn = {
+                role: 'model',
+                text: chunk,
+                streaming: true,
+                timestamp: ts,
+                provider: { id: provider.id, name: provider.name, model: provider.modelLabel },
+              };
+              setHistory((prev) => [...prev, turn]);
+            } else {
+              setHistory((prev) => {
+                const last = prev[prev.length - 1];
+                if (!last || last.role !== 'model') return prev;
+                return [...prev.slice(0, -1), { ...last, text: (last.text ?? '') + chunk }];
+              });
+            }
+          }
+          if (done) {
+            // Marca o turn temporário como não-streaming (cursor desaparece)
+            setHistory((prev) => {
+              const last = prev[prev.length - 1];
+              if (!last || last.role !== 'model' || !last.streaming) return prev;
+              return [...prev.slice(0, -1), { ...last, streaming: false }];
+            });
+          }
+        },
         onTurn: (t) => {
           const ts = new Date().toISOString();
           const turn = { ...t, timestamp: ts };
-          setHistory((prev) => [...prev, turn]);
+          // Se este turn é a finalização de um stream em andamento, REPLACE
+          // (o conteúdo já foi adicionado incrementalmente via onTextChunk)
+          if (streamingActiveRef.current && t.role === 'model' && t.text) {
+            streamingActiveRef.current = false;
+            setHistory((prev) => {
+              const last = prev[prev.length - 1];
+              if (last && last.role === 'model') {
+                return [...prev.slice(0, -1), turn];
+              }
+              return [...prev, turn];
+            });
+          } else {
+            setHistory((prev) => [...prev, turn]);
+          }
           // Se a ferramenta é de RH, marca o chat como exclusivo
           if (t.toolCall && RH_TOOL_NAMES.has(t.toolCall.name) && chatId) {
             supabase.from('ai_chats').update({ is_exclusive: true }).eq('id', chatId).then(() => {});
@@ -664,6 +711,16 @@ export default function BuyerAgentPage() {
       setRunning(false);
       setRunStartedAt(null);
       setRetryStatus(null);
+      // Garante que se o stream foi interrompido, o ref seja resetado
+      // e o cursor piscante seja limpo (caso ainda esteja ativo)
+      if (streamingActiveRef.current) {
+        streamingActiveRef.current = false;
+        setHistory((prev) => {
+          const last = prev[prev.length - 1];
+          if (!last || last.role !== 'model' || !last.streaming) return prev;
+          return [...prev.slice(0, -1), { ...last, streaming: false }];
+        });
+      }
       // foco do input é devolvido pelo useEffect que escuta `running`
     }
   }
@@ -1020,15 +1077,18 @@ export default function BuyerAgentPage() {
                     <div key={idx} className="flex flex-col items-start">
                       <div className="max-w-[85%] rounded-lg bg-white border border-slate-200 px-4 py-3 text-sm text-slate-800 shadow-sm">
                         <MarkdownText text={cleanText} />
+                        {t.streaming && (
+                          <span className="ml-0.5 inline-block h-4 w-[2px] -mb-1 animate-pulse bg-brand-500 align-text-bottom" />
+                        )}
                       </div>
                       <div className="mt-1 flex items-center gap-2 px-1">
-                        {t.provider && (
+                        {t.provider && !t.streaming && (
                           <span className={cn('text-[11px]', providerColor)}>
                             via <strong>{t.provider.name}</strong>
                             <span className="text-slate-400"> · {t.provider.model}</span>
                           </span>
                         )}
-                        {t.timestamp && (
+                        {t.timestamp && !t.streaming && (
                           <span className="text-[10px] text-slate-400">{formatMsgTime(t.timestamp)}</span>
                         )}
                       </div>
@@ -1128,7 +1188,7 @@ export default function BuyerAgentPage() {
                 return null;
               })}
 
-              {running && (
+              {running && !(history[history.length - 1]?.role === 'model' && history[history.length - 1]?.streaming) && (
                 <div className="flex justify-start">
                   <div className="flex max-w-[85%] flex-col gap-1 rounded-lg bg-white border border-slate-200 px-4 py-3 shadow-sm">
                     <div className="flex items-center gap-3">

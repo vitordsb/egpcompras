@@ -20,4 +20,6 @@ export interface ChatTurn {
   inlineDataList?: Array<{ mimeType: string; data: string; fileName?: string }>;
   /** ISO timestamp de quando o turn foi gerado (apenas turns novos — histórico carregado não terá) */
   timestamp?: string;
+  /** True enquanto o texto ainda está chegando via streaming (UI usa pra mostrar cursor) */
+  streaming?: boolean;
 }

@@ -32,6 +32,18 @@ export interface ProviderRunArgs {
   history: ChatTurn[]; // histórico completo (inclui o último user message + tool calls/responses já executadas)
 }
 
+/** Chunk emitido durante streaming. text é parcial e vai sendo concatenado */
+export interface ProviderStreamChunk {
+  /** Pedaço de texto novo desde o último chunk (não acumulado) */
+  text?: string;
+  /** Tool calls — só vem no chunk final, geralmente */
+  toolCalls?: ToolCall[];
+  /** Uso de tokens — só vem no chunk final */
+  usage?: ProviderUsage;
+  /** True no último chunk do stream */
+  done?: boolean;
+}
+
 export interface AgentProvider {
   id: 'gemini' | 'groq';
   name: string;
@@ -42,4 +54,6 @@ export interface AgentProvider {
   ping(): Promise<{ ok: boolean; message?: string }>;
   /** Faz uma chamada à API e retorna texto OU tool calls + uso de tokens */
   generate(args: ProviderRunArgs): Promise<ProviderResponse>;
+  /** Versão streaming — quando suportada, yields chunks à medida que chegam */
+  generateStream?(args: ProviderRunArgs): AsyncIterable<ProviderStreamChunk>;
 }
