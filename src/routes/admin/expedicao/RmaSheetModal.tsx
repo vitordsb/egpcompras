@@ -82,6 +82,7 @@ export default function RmaSheetModal({ rma, onClose, onChanged }: RmaSheetModal
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [importing, setImporting] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
+  const [activeTab, setActiveTab] = useState<'itens' | 'cabecalho'>('itens');
 
   // Carrega itens e observações
   useEffect(() => {
@@ -318,6 +319,7 @@ export default function RmaSheetModal({ rma, onClose, onChanged }: RmaSheetModal
 
   // ── Cálculos ──
   const visibleItems = items.filter((i) => !i._toDelete);
+  const visibleItemsHintCount = visibleItems.length;
   const subtotal = useMemo(
     () => visibleItems.reduce((s, i) => s + (Number(i.valor_total) || 0), 0),
     [visibleItems]
@@ -338,7 +340,14 @@ export default function RmaSheetModal({ rma, onClose, onChanged }: RmaSheetModal
         <div className="flex items-center justify-between gap-3 border-b border-slate-200 bg-slate-50 px-5 py-3">
           <div className="flex items-baseline gap-3">
             <h2 className="text-lg font-semibold text-slate-900">RMA #{rma.numero}</h2>
+            {header.numero_os && (
+              <span className="rounded bg-slate-200 px-1.5 py-0.5 text-[10px] font-mono font-semibold text-slate-700">
+                OS {header.numero_os}
+              </span>
+            )}
             <span className="text-sm text-slate-500">{header.client_trade_name || header.client_name}</span>
+            <span className="text-xs text-slate-400">·</span>
+            <span className="text-xs text-slate-500">{STATUS_LABEL[header.status]}</span>
           </div>
           <div className="flex items-center gap-2">
             <span className={cn(
@@ -402,47 +411,89 @@ export default function RmaSheetModal({ rma, onClose, onChanged }: RmaSheetModal
           </div>
         )}
 
+        {/* Tabs */}
+        <div className="flex items-center gap-0 border-b border-slate-200 bg-white px-5">
+          {([
+            { key: 'itens',     label: 'Itens',     hint: visibleItemsHintCount > 0 ? `${visibleItemsHintCount}` : null },
+            { key: 'cabecalho', label: 'Cabeçalho', hint: null },
+          ] as const).map((tab) => (
+            <button
+              key={tab.key}
+              type="button"
+              onClick={() => setActiveTab(tab.key)}
+              className={cn(
+                '-mb-px flex items-center gap-2 border-b-2 px-4 py-2 text-sm font-medium transition-colors',
+                activeTab === tab.key
+                  ? 'border-brand-500 text-brand-700'
+                  : 'border-transparent text-slate-500 hover:text-slate-800'
+              )}
+            >
+              {tab.label}
+              {tab.hint && (
+                <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-600">
+                  {tab.hint}
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
+
         {/* Conteúdo */}
         <div className="flex-1 overflow-auto px-5 py-4 space-y-4">
-          {/* HEADER — distribuidor / fornecedor / OS */}
-          <div className="grid gap-3 lg:grid-cols-2">
-            {/* Distribuidor */}
-            <fieldset className="rounded-md border border-slate-200 p-3">
-              <legend className="px-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Distribuidor</legend>
-              <div className="grid gap-2 sm:grid-cols-2">
-                <Cell label="Razão social" value={header.client_name} onChange={(v) => patchHeader('client_name', v)} className="sm:col-span-2" />
-                <Cell label="Nome fantasia" value={header.client_trade_name} onChange={(v) => patchHeader('client_trade_name', v)} />
-                <Cell label="CNPJ" value={header.client_cnpj} onChange={(v) => patchHeader('client_cnpj', v)} />
-                <Cell label="Comprador" value={header.numero_venda_origem} onChange={(v) => patchHeader('numero_venda_origem', v)} placeholder="(venda original)" />
-                <Cell label="Telefone" value={header.client_phone} onChange={(v) => patchHeader('client_phone', v)} />
-                <Cell label="E-mail" value={header.client_email} onChange={(v) => patchHeader('client_email', v)} className="sm:col-span-2" />
+
+          {activeTab === 'cabecalho' && (
+            <>
+              <div className="grid gap-3 lg:grid-cols-2">
+                {/* Distribuidor */}
+                <fieldset className="rounded-md border border-slate-200 p-3">
+                  <legend className="px-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Distribuidor</legend>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <Cell label="Razão social" value={header.client_name} onChange={(v) => patchHeader('client_name', v)} className="sm:col-span-2" />
+                    <Cell label="Nome fantasia" value={header.client_trade_name} onChange={(v) => patchHeader('client_trade_name', v)} />
+                    <Cell label="CNPJ" value={header.client_cnpj} onChange={(v) => patchHeader('client_cnpj', v)} />
+                    <Cell label="Comprador" value={header.numero_venda_origem} onChange={(v) => patchHeader('numero_venda_origem', v)} placeholder="(venda original)" />
+                    <Cell label="Telefone" value={header.client_phone} onChange={(v) => patchHeader('client_phone', v)} />
+                    <Cell label="E-mail" value={header.client_email} onChange={(v) => patchHeader('client_email', v)} className="sm:col-span-2" />
+                  </div>
+                </fieldset>
+
+                {/* OS / técnico */}
+                <fieldset className="rounded-md border border-slate-200 p-3">
+                  <legend className="px-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Ordem de Serviço</legend>
+                  <div className="grid gap-2 sm:grid-cols-3">
+                    <Cell label="OS" value={header.numero_os} onChange={(v) => patchHeader('numero_os', v)} />
+                    <Cell label="Setor" value={header.setor} onChange={(v) => patchHeader('setor', v)} />
+                    <Cell label="Volume" type="number" value={String(header.volume)} onChange={(v) => patchHeader('volume', Number(v) || 1)} />
+                    <Cell label="Técnico" value={header.tecnico_nome} onChange={(v) => patchHeader('tecnico_nome', v)} />
+                    <Cell label="Tel. técnico" value={header.tecnico_phone} onChange={(v) => patchHeader('tecnico_phone', v)} className="sm:col-span-2" />
+                    <Cell label="Entrada" type="date" value={header.data_recebido} onChange={(v) => patchHeader('data_recebido', v)} />
+                    <Cell label="Término" type="date" value={header.data_devolvido} onChange={(v) => patchHeader('data_devolvido', v)} />
+                    <Cell label="Prazo entrega" type="date" value={header.prazo_entrega} onChange={(v) => patchHeader('prazo_entrega', v)} />
+                    <Cell label="Cond. pagamento" value={header.condicao_pagamento} onChange={(v) => patchHeader('condicao_pagamento', v)} className="sm:col-span-3" />
+                  </div>
+                </fieldset>
               </div>
-            </fieldset>
 
-            {/* OS / técnico */}
-            <fieldset className="rounded-md border border-slate-200 p-3">
-              <legend className="px-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Ordem de Serviço</legend>
-              <div className="grid gap-2 sm:grid-cols-3">
-                <Cell label="OS" value={header.numero_os} onChange={(v) => patchHeader('numero_os', v)} />
-                <Cell label="Setor" value={header.setor} onChange={(v) => patchHeader('setor', v)} />
-                <Cell label="Volume" type="number" value={String(header.volume)} onChange={(v) => patchHeader('volume', Number(v) || 1)} />
-                <Cell label="Técnico" value={header.tecnico_nome} onChange={(v) => patchHeader('tecnico_nome', v)} />
-                <Cell label="Tel. técnico" value={header.tecnico_phone} onChange={(v) => patchHeader('tecnico_phone', v)} className="sm:col-span-2" />
-                <Cell label="Entrada" type="date" value={header.data_recebido} onChange={(v) => patchHeader('data_recebido', v)} />
-                <Cell label="Término" type="date" value={header.data_devolvido} onChange={(v) => patchHeader('data_devolvido', v)} />
-                <Cell label="Prazo entrega" type="date" value={header.prazo_entrega} onChange={(v) => patchHeader('prazo_entrega', v)} />
-                <Cell label="Cond. pagamento" value={header.condicao_pagamento} onChange={(v) => patchHeader('condicao_pagamento', v)} className="sm:col-span-3" />
+              {/* Status / motivo / solução — só aqui no cabeçalho */}
+              <div className="grid gap-2 rounded-md border border-slate-200 p-3 sm:grid-cols-3">
+                <SelectCell label="Status" value={header.status} onChange={(v) => patchHeader('status', v as RmaStatus)} options={(['recebido', 'analise', 'conserto', 'pronto', 'devolvido', 'cancelado'] as RmaStatus[]).map(s => ({ value: s, label: STATUS_LABEL[s] }))} />
+                <SelectCell label="Motivo" value={header.motivo} onChange={(v) => patchHeader('motivo', v as RmaMotivo)} options={(['defeito', 'desistencia', 'garantia', 'outro'] as RmaMotivo[]).map(m => ({ value: m, label: MOTIVO_LABEL[m] }))} />
+                <SelectCell label="Solução" value={header.solucao} onChange={(v) => patchHeader('solucao', v as RmaSolucao)} options={(['pendente', 'troca', 'reparo', 'refund', 'descartado', 'outro'] as RmaSolucao[]).map(s => ({ value: s, label: SOLUCAO_LABEL[s] }))} />
               </div>
-            </fieldset>
-          </div>
 
-          {/* Status / motivo / solução */}
-          <div className="grid gap-2 rounded-md border border-slate-200 p-3 sm:grid-cols-3">
-            <SelectCell label="Status" value={header.status} onChange={(v) => patchHeader('status', v as RmaStatus)} options={(['recebido', 'analise', 'conserto', 'pronto', 'devolvido', 'cancelado'] as RmaStatus[]).map(s => ({ value: s, label: STATUS_LABEL[s] }))} />
-            <SelectCell label="Motivo" value={header.motivo} onChange={(v) => patchHeader('motivo', v as RmaMotivo)} options={(['defeito', 'desistencia', 'garantia', 'outro'] as RmaMotivo[]).map(m => ({ value: m, label: MOTIVO_LABEL[m] }))} />
-            <SelectCell label="Solução" value={header.solucao} onChange={(v) => patchHeader('solucao', v as RmaSolucao)} options={(['pendente', 'troca', 'reparo', 'refund', 'descartado', 'outro'] as RmaSolucao[]).map(s => ({ value: s, label: SOLUCAO_LABEL[s] }))} />
-          </div>
+              <div>
+                <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">Notas internas</label>
+                <Textarea
+                  value={header.notes}
+                  onChange={(e) => patchHeader('notes', e.target.value)}
+                  rows={3}
+                />
+              </div>
+            </>
+          )}
 
+          {activeTab === 'itens' && (
+          <>
           {/* TABELA DE ITENS — estilo planilha */}
           <fieldset className="rounded-md border border-slate-200">
             <legend className="px-3 text-xs font-semibold uppercase tracking-wide text-slate-500">Itens (planilha)</legend>
@@ -591,25 +642,15 @@ export default function RmaSheetModal({ rma, onClose, onChanged }: RmaSheetModal
             </datalist>
           </fieldset>
 
-          {/* Diagnóstico + observações livres */}
-          <div className="grid gap-3 lg:grid-cols-2">
-            <div>
-              <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">Diagnóstico</label>
-              <Textarea
-                value={header.diagnostico}
-                onChange={(e) => patchHeader('diagnostico', e.target.value)}
-                rows={3}
-                placeholder="Resumo técnico do que foi encontrado…"
-              />
-            </div>
-            <div>
-              <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">Notas internas</label>
-              <Textarea
-                value={header.notes}
-                onChange={(e) => patchHeader('notes', e.target.value)}
-                rows={3}
-              />
-            </div>
+          {/* Diagnóstico — fica na tab Itens (próximo à planilha) */}
+          <div>
+            <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">Diagnóstico</label>
+            <Textarea
+              value={header.diagnostico}
+              onChange={(e) => patchHeader('diagnostico', e.target.value)}
+              rows={3}
+              placeholder="Resumo técnico do que foi encontrado…"
+            />
           </div>
 
           {/* Timeline */}
@@ -643,6 +684,8 @@ export default function RmaSheetModal({ rma, onClose, onChanged }: RmaSheetModal
               </ul>
             )}
           </fieldset>
+          </>
+          )}
         </div>
 
         {/* Bottom bar */}
