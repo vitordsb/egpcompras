@@ -1072,6 +1072,25 @@ export interface RunOptions {
  * Se o stream errar antes do primeiro chunk, deixa subir pro caller (que
  * faz fallback pro generate normal). Se errar no meio, mantém o que já veio.
  */
+/**
+ * Detecta se o texto entrou em loop — ex: o modelo repetindo a mesma
+ * frase várias vezes. Retorna true se encontrar uma sequência de pelo
+ * menos 30 chars repetida 3+ vezes consecutivas no fim do texto.
+ */
+function detectLoop(text: string): boolean {
+  // Olha apenas os últimos 1500 chars (loop é sempre nos chunks recentes)
+  const tail = text.slice(-1500);
+  // Tamanho da "frase repetida" candidata: 30 a 200 chars
+  for (let len = 30; len <= 200; len += 10) {
+    if (tail.length < len * 3) continue;
+    const last = tail.slice(-len);
+    const prev1 = tail.slice(-len * 2, -len);
+    const prev2 = tail.slice(-len * 3, -len * 2);
+    if (last === prev1 && prev1 === prev2) return true;
+  }
+  return false;
+}
+
 async function runStream(
   provider: AgentProvider,
   args: ProviderRunArgs,
@@ -1083,6 +1102,7 @@ async function runStream(
   let toolCalls: { name: string; args: Record<string, unknown> }[] | undefined;
   let usage = { promptTokens: 0, responseTokens: 0, totalTokens: 0 };
   let firstChunkArrived = false;
+  let aborted = false;
 
   for await (const chunk of provider.generateStream(args)) {
     if (signal?.aborted) throw new Error('Cancelado pelo usuário');
@@ -1090,16 +1110,26 @@ async function runStream(
       accumulatedText += chunk.text;
       onTextChunk(chunk.text, false);
       firstChunkArrived = true;
+
+      // Detector de loop: se a mesma frase repete 3+ vezes nos últimos
+      // chars, o modelo travou. Aborta o stream e finaliza com versão limpa.
+      if (accumulatedText.length > 600 && detectLoop(accumulatedText)) {
+        console.warn('[runStream] loop detectado no streaming, abortando');
+        onTextChunk('\n\n_(resposta interrompida — modelo entrou em loop)_', false);
+        aborted = true;
+        break;
+      }
     }
     if (chunk.toolCalls) toolCalls = chunk.toolCalls;
     if (chunk.usage) usage = chunk.usage;
     if (chunk.done) {
-      // Sinaliza pro consumer que o stream finalizou (UI tira o cursor)
       onTextChunk('', true);
     }
   }
+  if (aborted) {
+    onTextChunk('', true);
+  }
   if (!firstChunkArrived && (!toolCalls || toolCalls.length === 0)) {
-    // Stream vazio sem tool calls — sinaliza done pra UI limpar qualquer estado
     onTextChunk('', true);
   }
 

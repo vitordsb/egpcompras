@@ -53,6 +53,7 @@ export const geminiProvider: AgentProvider = {
         systemInstruction,
         tools: [{ functionDeclarations: tools as any }],
         temperature: 0.2,
+        maxOutputTokens: 4096,
       },
     });
 
@@ -82,6 +83,7 @@ export const geminiProvider: AgentProvider = {
         systemInstruction,
         tools: [{ functionDeclarations: tools as any }],
         temperature: 0.2,
+        maxOutputTokens: 4096,
       },
     });
 
