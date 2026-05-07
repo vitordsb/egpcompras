@@ -27,8 +27,6 @@ interface FormState {
   id: string | null;
   name: string;
   originalName: string;
-  /** Quando true e há produto filtrado: cria um novo componente (fork) e troca a referência só nesse produto. */
-  forkForProduct: boolean;
   /** Em quantos produtos este componente é usado (calculado ao abrir o modal). */
   usageCount: number;
   /** Linhas editáveis do bom — cada linha = 1 produto que usa este componente */
@@ -45,7 +43,6 @@ const emptyForm: FormState = {
   id: null,
   name: '',
   originalName: '',
-  forkForProduct: false,
   usageCount: 0,
   usageRows: [],
   usageRowsOriginal: [],
@@ -86,10 +83,6 @@ export default function ComponentsPage() {
   const [form, setForm] = useState<FormState | null>(null);
   const [saving, setSaving] = useState(false);
   const [confirm, setConfirm] = useState<{ message: string; onConfirm: () => void } | null>(null);
-  // Assimilação manual: componente que vai virar variante de outro
-  const [assimilateTarget, setAssimilateTarget] = useState<Component | null>(null);
-  const [assimilateSearch, setAssimilateSearch] = useState('');
-  const [assimilateSaving, setAssimilateSaving] = useState(false);
   // Edição inline da coluna "Último custo"
   const [editingCostId, setEditingCostId] = useState<string | null>(null);
   const [editingCostValue, setEditingCostValue] = useState<string>('');
@@ -99,7 +92,7 @@ export default function ComponentsPage() {
   const [editingQtyValue, setEditingQtyValue] = useState<string>('');
   const [savingQtyId, setSavingQtyId] = useState<string | null>(null);
 
-  useBodyScrollLock(!!form || !!confirm || !!assimilateTarget);
+  useBodyScrollLock(!!form || !!confirm);
 
   async function load() {
     setLoading(true);
@@ -146,7 +139,6 @@ export default function ComponentsPage() {
       id: c.id,
       name: c.name,
       originalName: c.name,
-      forkForProduct: totalUsageCount > 1 && !!productFilter,
       usageCount: totalUsageCount,
       usageRows,
       usageRowsOriginal: usageRows.map((r) => ({ ...r })),
@@ -257,24 +249,7 @@ export default function ComponentsPage() {
     const payload = { name: form.name.trim() };
 
     try {
-      if (form.id && form.forkForProduct && productFilter) {
-        // Cria novo componente como VARIANTE (parent_component_id) e troca
-        // a referência no bom_item desse produto. A assimilação preserva
-        // a origem pra agrupar visualmente em cascata.
-        const { data: created, error: insErr } = await supabase
-          .from('components')
-          .insert({ ...payload, parent_component_id: form.id })
-          .select('id')
-          .single();
-        if (insErr || !created) throw new Error(insErr?.message ?? 'Falha ao criar fork');
-        const { error: updErr } = await supabase
-          .from('bom_items')
-          .update({ component_id: created.id })
-          .eq('product_id', productFilter)
-          .eq('component_id', form.id);
-        if (updErr) throw new Error(updErr.message);
-        toast.success('Variante criada', `"${form.name}" assimilada ao componente original. Aparece em cascata na listagem.`);
-      } else if (form.id) {
+      if (form.id) {
         const { error: updErr } = await supabase.from('components').update(payload).eq('id', form.id);
         if (updErr) throw new Error(updErr.message);
         await syncUsageRows(form.id, form.usageRows, form.usageRowsOriginal);
@@ -427,60 +402,6 @@ export default function ComponentsPage() {
     cancelEditQty();
   }
 
-  function openAssimilate(c: Component) {
-    setAssimilateTarget(c);
-    setAssimilateSearch('');
-  }
-
-  function closeAssimilate() {
-    setAssimilateTarget(null);
-    setAssimilateSearch('');
-  }
-
-  // Calcula descendentes recursivamente — usado pra evitar ciclos na assimilação
-  function getDescendantIds(rootId: string, accumulator: Set<string> = new Set()): Set<string> {
-    const children = components.filter((c) => c.parent_component_id === rootId);
-    for (const child of children) {
-      if (!accumulator.has(child.id)) {
-        accumulator.add(child.id);
-        getDescendantIds(child.id, accumulator);
-      }
-    }
-    return accumulator;
-  }
-
-  async function applyAssimilate(parentId: string | null) {
-    if (!assimilateTarget) return;
-    if (parentId === assimilateTarget.id) {
-      toast.error('Inválido', 'Componente não pode ser variante de si mesmo.');
-      return;
-    }
-    if (parentId) {
-      const descendants = getDescendantIds(assimilateTarget.id);
-      if (descendants.has(parentId)) {
-        toast.error('Ciclo detectado', 'O componente escolhido como pai já é uma variante deste — assimilar criaria um loop.');
-        return;
-      }
-    }
-    setAssimilateSaving(true);
-    const { error: updErr } = await supabase
-      .from('components')
-      .update({ parent_component_id: parentId })
-      .eq('id', assimilateTarget.id);
-    setAssimilateSaving(false);
-    if (updErr) {
-      toast.error('Erro', friendlyDbError(updErr));
-      return;
-    }
-    if (parentId) {
-      const parent = components.find((c) => c.id === parentId);
-      toast.success('Assimilado', `"${assimilateTarget.name}" agora é variante de "${parent?.name ?? '?'}".`);
-    } else {
-      toast.success('Desvinculado', `"${assimilateTarget.name}" voltou a ser componente independente.`);
-    }
-    closeAssimilate();
-    await load();
-  }
 
   async function remove(c: Component) {
     const usageLinks = bomLinks.filter((l) => l.component_id === c.id);
@@ -579,64 +500,14 @@ export default function ComponentsPage() {
     return list;
   }, [components, componentIdsInFilter, search]);
 
-  // Lookup de filhos por parent_id (sobre TODOS os componentes, mesmo os fora do filtro,
-  // pra resolver pai de uma variante encontrada na busca)
-  const childrenByParent = useMemo(() => {
-    const map = new Map<string, Component[]>();
-    for (const c of components) {
-      if (c.parent_component_id) {
-        const arr = map.get(c.parent_component_id) ?? [];
-        arr.push(c);
-        map.set(c.parent_component_id, arr);
-      }
-    }
-    return map;
-  }, [components]);
+  // Lista flat ordenada por nome — sem hierarquia
+  const orderedList = useMemo(
+    () => [...filteredComponents].sort((a, b) => a.name.localeCompare(b.name, 'pt-BR')),
+    [filteredComponents]
+  );
 
-  const componentById = useMemo(() => new Map(components.map((c) => [c.id, c])), [components]);
-
-  // Lista em cascata: pais primeiro, com variantes indentadas logo abaixo.
-  // Quando uma variante aparece no filtro mas o pai NÃO, o pai é inserido
-  // antes dela como linha "fantasma" (acinzentada, fora do filtro) — assim
-  // a hierarquia visual fica sempre clara.
-  const cascade = useMemo(() => {
-    const out: Array<{ component: Component; depth: 0 | 1; ghost?: boolean }> = [];
-    const visited = new Set<string>();
-    const filteredIds = new Set(filteredComponents.map((c) => c.id));
-
-    for (const c of filteredComponents) {
-      if (c.parent_component_id) continue;
-      if (visited.has(c.id)) continue;
-      out.push({ component: c, depth: 0 });
-      visited.add(c.id);
-      for (const child of childrenByParent.get(c.id) ?? []) {
-        if (visited.has(child.id)) continue;
-        if (!filteredIds.has(child.id)) continue;
-        out.push({ component: child, depth: 1 });
-        visited.add(child.id);
-      }
-    }
-    // Variantes órfãs (passaram no filtro mas pai não): insere o pai como
-    // ghost antes da variante pra preservar a hierarquia visual
-    for (const c of filteredComponents) {
-      if (visited.has(c.id)) continue;
-      if (c.parent_component_id) {
-        const parent = componentById.get(c.parent_component_id);
-        if (parent && !visited.has(parent.id)) {
-          out.push({ component: parent, depth: 0, ghost: true });
-          visited.add(parent.id);
-        }
-        out.push({ component: c, depth: 1 });
-      } else {
-        out.push({ component: c, depth: 0 });
-      }
-      visited.add(c.id);
-    }
-    return out;
-  }, [filteredComponents, childrenByParent, componentById]);
-
-  const visible = cascade.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
-  const filteredCount = cascade.length;
+  const visible = orderedList.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  const filteredCount = orderedList.length;
 
   useEffect(() => { setPage(1); }, [search, productFilter]);
 
@@ -689,7 +560,7 @@ export default function ComponentsPage() {
 
       {productFilter && (
         <div className="mb-3 rounded-md border border-brand-200 bg-brand-50 px-4 py-2 text-sm text-brand-800">
-          Mostrando componentes usados em <strong>{filteredProductName}</strong> ({filteredCount} {filteredCount === 1 ? 'item' : 'itens'}). Ao editar, você poderá criar uma versão exclusiva para este produto.
+          Mostrando componentes usados em <strong>{filteredProductName}</strong> ({filteredCount} {filteredCount === 1 ? 'item' : 'itens'}). Ações (editar, remover) afetam apenas este produto.
         </div>
       )}
 
@@ -730,7 +601,7 @@ export default function ComponentsPage() {
                 </tr>
               </thead>
               <tbody>
-                {visible.map(({ component: c, depth, ghost }) => {
+                {visible.map((c) => {
                   const links = bomLinks.filter((l) => l.component_id === c.id);
                   const usage = links.length;
                   let cost: number | null = null;
@@ -740,58 +611,11 @@ export default function ComponentsPage() {
                     const sorted = [...links].sort((a, b) => (b.created_at ?? '').localeCompare(a.created_at ?? ''));
                     cost = sorted.find((l) => l.target_price_brl != null)?.target_price_brl ?? null;
                   }
-                  const variantCount = childrenByParent.get(c.id)?.length ?? 0;
-                  const parentName = c.parent_component_id ? componentById.get(c.parent_component_id)?.name : null;
-
-                  // Linha "fantasma": pai de uma variante que apareceu no filtro,
-                  // mas o pai em si não está no produto filtrado. Renderiza
-                  // acinzentado e desativa as ações pra não confundir.
-                  if (ghost) {
-                    return (
-                      <tr key={`ghost-${c.id}`} className="border-b border-slate-100 bg-slate-100/50">
-                        <td className="px-5 py-2 text-slate-500" colSpan={4}>
-                          <div className="flex items-center gap-2 text-sm italic">
-                            <span>{c.name}</span>
-                            <span className="rounded-full bg-slate-200 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-slate-600">
-                              fora deste produto · contexto da variante
-                            </span>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  }
 
                   return (
-                    <tr
-                      key={c.id}
-                      className={cn(
-                        'border-b border-slate-100 last:border-0',
-                        depth === 1 && 'bg-slate-50/40'
-                      )}
-                    >
+                    <tr key={c.id} className="border-b border-slate-100 last:border-0">
                       <td className="px-5 py-3 font-medium text-slate-900">
-                        <div className="flex items-center gap-2">
-                          {depth === 1 && (
-                            <span className="text-slate-300 select-none" aria-hidden>↳</span>
-                          )}
-                          <span className={cn(depth === 1 && 'pl-1 text-slate-700')}>{c.name}</span>
-                          {variantCount > 0 && depth === 0 && (
-                            <span
-                              className="rounded-full bg-purple-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-purple-700"
-                              title={`${variantCount} variante(s) deste componente`}
-                            >
-                              {variantCount} variante{variantCount === 1 ? '' : 's'}
-                            </span>
-                          )}
-                          {depth === 1 && parentName && (
-                            <span
-                              className="rounded-full bg-purple-50 px-2 py-0.5 text-[10px] font-medium text-purple-700 border border-purple-200"
-                              title={`Variante de "${parentName}"`}
-                            >
-                              variante de {parentName}
-                            </span>
-                          )}
-                        </div>
+                        {c.name}
                       </td>
                       <td className="px-5 py-3 text-center text-slate-600">
                         {productFilter ? (() => {
@@ -894,14 +718,6 @@ export default function ComponentsPage() {
                         </button>
                         <button
                           type="button"
-                          onClick={() => openAssimilate(c)}
-                          className="text-purple-600 hover:underline mr-3"
-                          title="Marcar este componente como variante de outro"
-                        >
-                          assimilar
-                        </button>
-                        <button
-                          type="button"
                           onClick={() => remove(c)}
                           className="text-red-600 hover:underline"
                         >
@@ -929,110 +745,6 @@ export default function ComponentsPage() {
         />
       )}
 
-      {assimilateTarget && (() => {
-        const target = assimilateTarget;
-        const targetDescendants = getDescendantIds(target.id);
-        const currentParent = target.parent_component_id ? componentById.get(target.parent_component_id) : null;
-        const q = assimilateSearch.trim().toLowerCase();
-        const candidates = components
-          .filter((c) => c.id !== target.id && !targetDescendants.has(c.id))
-          .filter((c) => !q || c.name.toLowerCase().includes(q))
-          .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'))
-          .slice(0, 50);
-        return (
-          <div
-            className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/40 p-4"
-            onClick={closeAssimilate}
-          >
-            <div
-              className="flex max-h-[80vh] w-full max-w-lg flex-col overflow-hidden rounded-lg bg-white shadow-lg"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="border-b border-slate-200 px-5 py-4">
-                <h2 className="text-base font-semibold text-slate-900">
-                  Assimilar componente
-                </h2>
-                <p className="mt-1 text-sm text-slate-600">
-                  <strong>{target.name}</strong> vai ser registrado como variante do componente que você escolher abaixo.
-                </p>
-                {currentParent && (
-                  <p className="mt-2 rounded bg-purple-50 px-2 py-1 text-xs text-purple-700">
-                    Atualmente assimilado a: <strong>{currentParent.name}</strong>. Escolher outro pai vai substituir.
-                  </p>
-                )}
-              </div>
-
-              <div className="border-b border-slate-200 px-5 py-3">
-                <Input
-                  value={assimilateSearch}
-                  onChange={(e) => setAssimilateSearch(e.target.value)}
-                  placeholder="Buscar componente pai…"
-                  autoFocus
-                />
-              </div>
-
-              <div className="flex-1 overflow-y-auto">
-                {candidates.length === 0 ? (
-                  <p className="px-5 py-6 text-center text-sm text-slate-500">
-                    Nenhum componente encontrado para "{assimilateSearch}".
-                  </p>
-                ) : (
-                  <ul className="divide-y divide-slate-100">
-                    {candidates.map((c) => {
-                      const isCurrent = c.id === target.parent_component_id;
-                      return (
-                        <li key={c.id}>
-                          <button
-                            type="button"
-                            onClick={() => applyAssimilate(c.id)}
-                            disabled={assimilateSaving || isCurrent}
-                            className={cn(
-                              'flex w-full items-center justify-between gap-3 px-5 py-3 text-left text-sm transition-colors',
-                              isCurrent
-                                ? 'bg-purple-50 text-purple-700'
-                                : 'text-slate-700 hover:bg-brand-50 hover:text-brand-700',
-                              assimilateSaving && 'cursor-not-allowed opacity-50'
-                            )}
-                          >
-                            <div className="min-w-0 flex-1">
-                              <div className="truncate font-medium">{c.name}</div>
-                              {c.parent_component_id && (
-                                <div className="text-[11px] text-slate-400">
-                                  variante de {componentById.get(c.parent_component_id)?.name ?? '?'}
-                                </div>
-                              )}
-                            </div>
-                            {isCurrent && <span className="text-xs">(atual)</span>}
-                          </button>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                )}
-              </div>
-
-              <div className="flex items-center justify-between gap-3 border-t border-slate-200 px-5 py-3">
-                {currentParent ? (
-                  <button
-                    type="button"
-                    onClick={() => applyAssimilate(null)}
-                    disabled={assimilateSaving}
-                    className="text-sm text-red-600 hover:underline disabled:opacity-50"
-                  >
-                    Remover assimilação
-                  </button>
-                ) : (
-                  <span />
-                )}
-                <Button type="button" variant="secondary" onClick={closeAssimilate} disabled={assimilateSaving}>
-                  Cancelar
-                </Button>
-              </div>
-            </div>
-          </div>
-        );
-      })()}
-
       {form && (
         <div
           className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/40 p-4"
@@ -1047,26 +759,6 @@ export default function ComponentsPage() {
                 <h2 className="text-base font-semibold text-slate-900">
                   {form.id ? 'Editar componente' : 'Novo componente'}
                 </h2>
-                {form.id && (() => {
-                  const c = components.find((x) => x.id === form.id);
-                  if (c?.parent_component_id) {
-                    const p = componentById.get(c.parent_component_id);
-                    return (
-                      <p className="mt-1 text-xs text-purple-700">
-                        Variante de <strong>{p?.name ?? '(componente removido)'}</strong>
-                      </p>
-                    );
-                  }
-                  const variants = childrenByParent.get(form.id ?? '') ?? [];
-                  if (variants.length > 0) {
-                    return (
-                      <p className="mt-1 text-xs text-purple-700">
-                        {variants.length} variante{variants.length === 1 ? '' : 's'} assimilada{variants.length === 1 ? '' : 's'}: {variants.map((v) => v.name).join(', ')}
-                      </p>
-                    );
-                  }
-                  return null;
-                })()}
                 {form.id && form.usageCount > 0 && (
                   <p className="mt-1 text-xs text-slate-500">
                     Usado em {form.usageCount} {form.usageCount === 1 ? 'produto' : 'produtos'}
@@ -1135,24 +827,7 @@ export default function ComponentsPage() {
                     </p>
                   </div>
                 )}
-                {form.id && form.usageCount > 1 && productFilter && form.name !== form.originalName && (
-                  <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-3">
-                    <label className="flex items-start gap-2 text-sm">
-                      <input
-                        type="checkbox"
-                        checked={form.forkForProduct}
-                        onChange={(e) => setForm({ ...form, forkForProduct: e.target.checked })}
-                        className="mt-0.5 h-4 w-4 rounded border-slate-300 text-brand-600 focus:ring-brand-500"
-                      />
-                      <span>
-                        <strong className="text-amber-900">Aplicar só para "{filteredProductName}"</strong>
-                        <span className="mt-1 block text-xs text-amber-700">
-                          Este componente é usado em {form.usageCount} produtos. Marcando esta opção, será criado um novo componente "{form.name.trim()}" exclusivo para este produto, e o original continua igual nos outros {form.usageCount - 1}.
-                        </span>
-                      </span>
-                    </label>
-                  </div>
-                )}
+
 
                 {/* Uso em produtos — edição inline de qty + custo target por produto */}
                 {form.id && (
@@ -1272,7 +947,7 @@ export default function ComponentsPage() {
                   Cancelar
                 </Button>
                 <Button type="submit" disabled={saving}>
-                  {saving ? 'Salvando…' : form.id ? (form.forkForProduct ? 'Criar versão exclusiva' : 'Salvar') : 'Criar'}
+                  {saving ? 'Salvando…' : form.id ? 'Salvar' : 'Criar'}
                 </Button>
               </div>
             </form>
