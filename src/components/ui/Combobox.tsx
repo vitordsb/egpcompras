@@ -1,7 +1,10 @@
 // Combobox searchable simples — substitui o <select> nativo quando a lista
 // de opções é grande e o user precisa filtrar digitando.
+// O dropdown é renderizado via portal (position fixed) pra escapar de
+// containers com overflow:hidden/auto (ex: tabelas com scroll horizontal).
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { cn } from '@/lib/utils';
 
 export interface ComboboxOption {
@@ -25,18 +28,41 @@ export default function Combobox({
 }: Props) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
+  const [pos, setPos] = useState<{ left: number; top: number; width: number } | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const dropdownRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   const selected = useMemo(() => options.find((o) => o.value === value), [options, value]);
 
+  // Posiciona o dropdown via portal — usa coordenadas do botão. Recalcula
+  // ao abrir e em scroll/resize pra acompanhar o layout.
+  useLayoutEffect(() => {
+    if (!open) return;
+    function update() {
+      const el = containerRef.current;
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      setPos({ left: rect.left, top: rect.bottom + 4, width: rect.width });
+    }
+    update();
+    window.addEventListener('scroll', update, true);
+    window.addEventListener('resize', update);
+    return () => {
+      window.removeEventListener('scroll', update, true);
+      window.removeEventListener('resize', update);
+    };
+  }, [open]);
+
+  // Click fora fecha — verifica tanto o container quanto o dropdown (portal)
   useEffect(() => {
     if (!open) return;
     const handler = (e: MouseEvent) => {
-      if (!containerRef.current?.contains(e.target as Node)) {
-        setOpen(false);
-        setQuery('');
-      }
+      const t = e.target as Node;
+      if (containerRef.current?.contains(t)) return;
+      if (dropdownRef.current?.contains(t)) return;
+      setOpen(false);
+      setQuery('');
     };
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
@@ -79,8 +105,12 @@ export default function Combobox({
         </svg>
       </button>
 
-      {open && (
-        <div className="absolute left-0 right-0 top-full z-30 mt-1 max-h-72 overflow-hidden rounded-md border border-slate-200 bg-white shadow-lg">
+      {open && pos && createPortal(
+        <div
+          ref={dropdownRef}
+          style={{ position: 'fixed', left: pos.left, top: pos.top, width: pos.width, zIndex: 9999 }}
+          className="max-h-72 overflow-hidden rounded-md border border-slate-200 bg-white shadow-xl"
+        >
           <div className="border-b border-slate-100 p-1.5">
             <input
               ref={inputRef}
@@ -130,7 +160,8 @@ export default function Combobox({
               ))
             )}
           </ul>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );
