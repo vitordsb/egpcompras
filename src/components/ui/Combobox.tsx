@@ -97,7 +97,7 @@ export default function Combobox({
           disabled && 'cursor-not-allowed opacity-50'
         )}
       >
-        <span className={cn('truncate', !selected && 'text-slate-400')}>
+        <span className={cn('min-w-0 flex-1 truncate', !selected && 'text-slate-400')}>
           {selected?.label ?? placeholder}
         </span>
         <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" className={cn('h-3 w-3 shrink-0 text-slate-400 transition-transform', open && 'rotate-180')}>

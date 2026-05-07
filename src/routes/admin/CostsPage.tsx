@@ -484,11 +484,11 @@ export default function CostsPage() {
                           <table className="w-full text-sm">
                             <thead className="bg-amber-50 text-left text-xs uppercase tracking-wide text-amber-800">
                               <tr>
-                                <th className="py-2 px-3">Item de acervo</th>
-                                <th className="py-2 px-3 w-24">Qtd / produto</th>
-                                <th className="py-2 px-3 w-32">Valor unit. (R$)</th>
-                                <th className="py-2 px-3 w-32 text-right">Total</th>
-                                <th className="py-2 px-3 w-10"></th>
+                                <th className="py-2 px-3 max-w-[260px]">Item de acervo</th>
+                                <th className="py-2 px-3 w-20">Qtd / produto</th>
+                                <th className="py-2 px-3 w-28">Valor unit. (R$)</th>
+                                <th className="py-2 px-3 w-24 text-right">Total</th>
+                                <th className="py-2 px-3 w-8"></th>
                               </tr>
                             </thead>
                             <tbody>
@@ -506,7 +506,7 @@ export default function CostsPage() {
                                 );
                                 return (
                                   <tr key={idx} className="border-t border-amber-100">
-                                    <td className="py-2 px-3">
+                                    <td className="py-2 px-3 max-w-[260px]">
                                       <Combobox
                                         value={row.component_id}
                                         onChange={(v) => updateRow(idx, { component_id: v })}
