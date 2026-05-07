@@ -120,12 +120,15 @@ export default function ComponentsPage() {
   }
 
   async function openEdit(c: Component) {
-    const usageCount = bomLinks.filter((l) => l.component_id === c.id).length;
-    // Carrega bom_items detalhados (com id, qty, target, tipo) pra edição inline
-    const { data: bomRows } = await supabase
+    const totalUsageCount = bomLinks.filter((l) => l.component_id === c.id).length;
+    // Carrega bom_items detalhados. Se há filtro de produto ativo, traz só
+    // os daquele produto — escopo da edição respeita o filtro.
+    let query = supabase
       .from('bom_items')
       .select('id, product_id, quantity, target_price_brl, tipo, product:products(id, name)')
       .eq('component_id', c.id);
+    if (productFilter) query = query.eq('product_id', productFilter);
+    const { data: bomRows } = await query;
     const usageRows: BomEditRow[] = ((bomRows ?? []) as any[]).map((r) => ({
       bom_item_id: r.id,
       product_id: r.product_id,
@@ -139,8 +142,8 @@ export default function ComponentsPage() {
       id: c.id,
       name: c.name,
       originalName: c.name,
-      forkForProduct: usageCount > 1 && !!productFilter,
-      usageCount,
+      forkForProduct: totalUsageCount > 1 && !!productFilter,
+      usageCount: totalUsageCount,
       usageRows,
       usageRowsOriginal: usageRows.map((r) => ({ ...r })),
     });
@@ -192,14 +195,19 @@ export default function ComponentsPage() {
   /**
    * Compara usageRows atual vs original e aplica insert/update/delete
    * em bom_items pra refletir as mudanças. Linhas existentes detectadas
-   * por bom_item_id.
+   * por bom_item_id. Quando há filtro de produto ativo, só toca em rows
+   * daquele produto — nunca deleta vínculos de outros produtos.
    */
   async function syncUsageRows(componentId: string, current: BomEditRow[], original: BomEditRow[]) {
     const originalById = new Map(original.filter((r) => r.bom_item_id).map((r) => [r.bom_item_id!, r]));
     const currentIds = new Set(current.filter((r) => r.bom_item_id).map((r) => r.bom_item_id!));
 
-    // 1. Deletes: estava no original, sumiu do current
-    const toDelete = original.filter((r) => r.bom_item_id && !currentIds.has(r.bom_item_id));
+    // 1. Deletes: estava no original, sumiu do current. Se filtro ativo,
+    //    só considera rows do produto filtrado (escopo restrito).
+    const toDelete = original.filter((r) =>
+      r.bom_item_id && !currentIds.has(r.bom_item_id) &&
+      (productFilter ? r.product_id === productFilter : true)
+    );
     for (const r of toDelete) {
       await supabase.from('bom_items').delete().eq('id', r.bom_item_id!);
     }
@@ -424,15 +432,41 @@ export default function ComponentsPage() {
   }
 
   async function remove(c: Component) {
-    // Antes de pedir confirmação, conta em quantos produtos o componente
-    // está em uso (bom_items) — assim a mensagem fica clara sobre o impacto.
     const usageLinks = bomLinks.filter((l) => l.component_id === c.id);
-    const usageCount = usageLinks.length;
 
-    if (usageCount === 0) {
-      // Sem uso — remoção direta e simples
+    // ── Com filtro de produto ativo: remove APENAS desse produto ──
+    if (productFilter) {
+      const link = usageLinks.find((l) => l.product_id === productFilter);
+      const productName = products.find((p) => p.id === productFilter)?.name ?? 'produto';
+      if (!link) {
+        toast.error('Não vinculado', `"${c.name}" não está em ${productName}.`);
+        return;
+      }
+      const otherCount = usageLinks.length - 1;
       setConfirm({
-        message: `Remover componente "${c.name}"?`,
+        message:
+          `Remover "${c.name}" apenas de ${productName}?` +
+          (otherCount > 0
+            ? ` O componente continuará nos outros ${otherCount} ${otherCount === 1 ? 'produto' : 'produtos'}.`
+            : ' Esta é a única vinculação — o componente em si não será apagado, ficará apenas no catálogo sem uso.'),
+        onConfirm: async () => {
+          setConfirm(null);
+          const { error: bomErr } = await supabase.from('bom_items').delete().eq('id', link.id);
+          if (bomErr) {
+            toast.error('Falha ao remover', friendlyDbError(bomErr));
+            return;
+          }
+          toast.success('Removido', `"${c.name}" removido de ${productName}.`);
+          await load();
+        },
+      });
+      return;
+    }
+
+    // ── Sem filtro: remove o componente inteiro do catálogo (cascade nas BOMs) ──
+    if (usageLinks.length === 0) {
+      setConfirm({
+        message: `Remover componente "${c.name}" do catálogo?`,
         onConfirm: async () => {
           setConfirm(null);
           const { error } = await supabase.from('components').delete().eq('id', c.id);
@@ -447,7 +481,6 @@ export default function ComponentsPage() {
       return;
     }
 
-    // Em uso — mostra os produtos afetados e oferece cascade
     const affectedProductIds = new Set(usageLinks.map((l) => l.product_id));
     const affectedProductNames = products
       .filter((p) => affectedProductIds.has(p.id))
@@ -458,26 +491,21 @@ export default function ComponentsPage() {
 
     setConfirm({
       message:
-        `"${c.name}" está sendo usado em ${usageCount} ${usageCount === 1 ? 'produto' : 'produtos'} (${productsLabel}). ` +
-        `Remover vai apagar das BOMs desses produtos e o custo de fabricação será recalculado. Confirma?`,
+        `"${c.name}" está sendo usado em ${usageLinks.length} ${usageLinks.length === 1 ? 'produto' : 'produtos'} (${productsLabel}). ` +
+        `Remover do catálogo vai apagar das BOMs desses produtos e os custos serão recalculados. Confirma?`,
       onConfirm: async () => {
         setConfirm(null);
-        // Apaga as referências da BOM primeiro
-        const { error: bomErr } = await supabase
-          .from('bom_items')
-          .delete()
-          .eq('component_id', c.id);
+        const { error: bomErr } = await supabase.from('bom_items').delete().eq('component_id', c.id);
         if (bomErr) {
           toast.error('Falha ao limpar BOMs', friendlyDbError(bomErr));
           return;
         }
-        // Agora apaga o componente
         const { error: compErr } = await supabase.from('components').delete().eq('id', c.id);
         if (compErr) {
           toast.error('Não foi possível remover', friendlyDbError(compErr));
           return;
         }
-        toast.success('Removido', `"${c.name}" excluído de ${usageCount} ${usageCount === 1 ? 'BOM' : 'BOMs'}.`);
+        toast.success('Removido', `"${c.name}" excluído de ${usageLinks.length} ${usageLinks.length === 1 ? 'BOM' : 'BOMs'}.`);
         await load();
       },
     });
@@ -641,7 +669,9 @@ export default function ComponentsPage() {
               <thead className="border-b border-slate-200 bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
                 <tr>
                   <th className="px-5 py-3">Nome</th>
-                  <th className="px-5 py-3 text-center">Usado em</th>
+                  <th className="px-5 py-3 text-center">
+                    {productFilter ? 'Qtd / produto' : 'Usado em'}
+                  </th>
                   <th className="px-5 py-3 text-right">
                     {productFilter ? 'Custo neste produto' : 'Último custo'}
                   </th>
@@ -713,7 +743,24 @@ export default function ComponentsPage() {
                         </div>
                       </td>
                       <td className="px-5 py-3 text-center text-slate-600">
-                        {usage === 0 ? (
+                        {productFilter ? (() => {
+                          // Com filtro de produto: mostra a quantidade do bom_item daquele produto
+                          const link = links.find((l) => l.product_id === productFilter);
+                          if (!link) return <span className="text-xs text-slate-400">—</span>;
+                          const qty = Number(link.quantity ?? 0);
+                          const tipoLabel = link.tipo === 'acervo' ? 'acervo' : 'fabric.';
+                          const tipoColor = link.tipo === 'acervo'
+                            ? 'bg-amber-50 text-amber-700 border-amber-200'
+                            : 'bg-blue-50 text-blue-700 border-blue-200';
+                          return (
+                            <div className="flex items-center justify-center gap-1.5">
+                              <span className="font-semibold text-slate-800">{qty}×</span>
+                              <span className={cn('rounded-full border px-1.5 py-0.5 text-[10px] font-medium', tipoColor)}>
+                                {tipoLabel}
+                              </span>
+                            </div>
+                          );
+                        })() : usage === 0 ? (
                           <span className="text-xs text-slate-400">não usado</span>
                         ) : (
                           <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700">
@@ -1031,11 +1078,20 @@ export default function ComponentsPage() {
                 {form.id && (
                   <div className="border-t border-slate-200 pt-4">
                     <div className="mb-2 flex items-center justify-between">
-                      <Label>Uso em produtos</Label>
+                      <Label>
+                        {productFilter ? `Uso em ${filteredProductName}` : 'Uso em produtos'}
+                      </Label>
                       <span className="text-xs text-slate-400">
-                        {form.usageRows.length} {form.usageRows.length === 1 ? 'vínculo' : 'vínculos'}
+                        {productFilter
+                          ? `escopo: 1 produto (filtro ativo)`
+                          : `${form.usageRows.length} ${form.usageRows.length === 1 ? 'vínculo' : 'vínculos'}`}
                       </span>
                     </div>
+                    {productFilter && form.usageCount > 1 && (
+                      <p className="mb-2 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-700">
+                        Este componente também é usado em outros {form.usageCount - 1} produtos. Edições aqui afetam apenas <strong>{filteredProductName}</strong>. Pra editar em escala, limpe o filtro de produto.
+                      </p>
+                    )}
 
                     {form.usageRows.length === 0 ? (
                       <p className="rounded-md border border-dashed border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-500">
