@@ -94,6 +94,10 @@ export default function ComponentsPage() {
   const [editingCostId, setEditingCostId] = useState<string | null>(null);
   const [editingCostValue, setEditingCostValue] = useState<string>('');
   const [savingCostId, setSavingCostId] = useState<string | null>(null);
+  // Edição inline da coluna "Qtd / produto" (só com filtro ativo)
+  const [editingQtyId, setEditingQtyId] = useState<string | null>(null);
+  const [editingQtyValue, setEditingQtyValue] = useState<string>('');
+  const [savingQtyId, setSavingQtyId] = useState<string | null>(null);
 
   useBodyScrollLock(!!form || !!confirm || !!assimilateTarget);
 
@@ -374,6 +378,53 @@ export default function ComponentsPage() {
     if (!editingCostId) return;
     await saveCostInline(editingCostId, editingCostValue);
     cancelEditCost();
+  }
+
+  /**
+   * Salva inline a quantidade do bom_item daquele produto (só funciona com filtro ativo).
+   */
+  async function saveQtyInline(componentId: string, rawValue: string) {
+    if (!productFilter) return;
+    const trimmed = rawValue.trim();
+    const newQty = trimmed === '' ? null : Number(trimmed.replace(',', '.'));
+    if (newQty == null || !Number.isFinite(newQty) || newQty <= 0) {
+      toast.error('Quantidade inválida', 'Use número maior que zero.');
+      return;
+    }
+    const link = bomLinks.find((l) => l.component_id === componentId && l.product_id === productFilter);
+    if (!link) {
+      toast.error('Sem vínculo', 'Componente não está nesta BOM.');
+      return;
+    }
+    if (Number(link.quantity) === newQty) return;
+    setSavingQtyId(componentId);
+    const { error: updErr } = await supabase
+      .from('bom_items')
+      .update({ quantity: newQty })
+      .eq('id', link.id);
+    setSavingQtyId(null);
+    if (updErr) {
+      toast.error('Erro', friendlyDbError(updErr));
+      return;
+    }
+    setBomLinks((prev) =>
+      prev.map((l) => (l.id === link.id ? { ...l, quantity: newQty } : l))
+    );
+    toast.success('Qtd atualizada', `Nova quantidade: ${newQty}`);
+  }
+
+  function startEditQty(componentId: string, current: number) {
+    setEditingQtyId(componentId);
+    setEditingQtyValue(String(current));
+  }
+  function cancelEditQty() {
+    setEditingQtyId(null);
+    setEditingQtyValue('');
+  }
+  async function commitEditQty() {
+    if (!editingQtyId) return;
+    await saveQtyInline(editingQtyId, editingQtyValue);
+    cancelEditQty();
   }
 
   function openAssimilate(c: Component) {
@@ -744,7 +795,6 @@ export default function ComponentsPage() {
                       </td>
                       <td className="px-5 py-3 text-center text-slate-600">
                         {productFilter ? (() => {
-                          // Com filtro de produto: mostra a quantidade do bom_item daquele produto
                           const link = links.find((l) => l.product_id === productFilter);
                           if (!link) return <span className="text-xs text-slate-400">—</span>;
                           const qty = Number(link.quantity ?? 0);
@@ -754,7 +804,37 @@ export default function ComponentsPage() {
                             : 'bg-blue-50 text-blue-700 border-blue-200';
                           return (
                             <div className="flex items-center justify-center gap-1.5">
-                              <span className="font-semibold text-slate-800">{qty}×</span>
+                              {editingQtyId === c.id ? (
+                                <input
+                                  type="number"
+                                  step="any"
+                                  min="0"
+                                  value={editingQtyValue}
+                                  onChange={(e) => setEditingQtyValue(e.target.value)}
+                                  onBlur={commitEditQty}
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter') {
+                                      e.preventDefault();
+                                      (e.target as HTMLInputElement).blur();
+                                    } else if (e.key === 'Escape') {
+                                      e.preventDefault();
+                                      cancelEditQty();
+                                    }
+                                  }}
+                                  disabled={savingQtyId === c.id}
+                                  autoFocus
+                                  className="w-16 rounded border border-brand-300 bg-white px-2 py-1 text-center text-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
+                                />
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => startEditQty(c.id, qty)}
+                                  title="Clique para editar a quantidade"
+                                  className="rounded px-2 py-0.5 transition-colors hover:bg-brand-50 hover:text-brand-700"
+                                >
+                                  <span className="font-semibold text-slate-800">{qty}×</span>
+                                </button>
+                              )}
                               <span className={cn('rounded-full border px-1.5 py-0.5 text-[10px] font-medium', tipoColor)}>
                                 {tipoLabel}
                               </span>

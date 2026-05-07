@@ -6,6 +6,7 @@ import { Card, CardBody } from '@/components/ui/Card';
 import { Input, Label, Textarea } from '@/components/ui/Input';
 import { formatBRL } from '@/lib/utils';
 import { useToast } from '@/components/ui/Toast';
+import Combobox from '@/components/ui/Combobox';
 
 const BOM_PAGE_SIZE = 5;
 
@@ -506,20 +507,16 @@ export default function CostsPage() {
                                 return (
                                   <tr key={idx} className="border-t border-amber-100">
                                     <td className="py-2 px-3">
-                                      <select
+                                      <Combobox
                                         value={row.component_id}
-                                        onChange={(e) =>
-                                          updateRow(idx, { component_id: e.target.value })
-                                        }
-                                        className="h-9 w-full rounded-md border border-slate-300 bg-white px-2 text-sm"
-                                      >
-                                        <option value="">Selecione…</option>
-                                        {availableComponents.map((c) => (
-                                          <option key={c.id} value={c.id}>
-                                            {c.name}
-                                          </option>
-                                        ))}
-                                      </select>
+                                        onChange={(v) => updateRow(idx, { component_id: v })}
+                                        options={availableComponents.map((c) => ({
+                                          value: c.id,
+                                          label: c.name,
+                                          hint: c.sku ?? undefined,
+                                        }))}
+                                        placeholder="Buscar item…"
+                                      />
                                     </td>
                                     <td className="py-2 px-3">
                                       <Input
