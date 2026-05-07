@@ -18,6 +18,7 @@ interface BomEditRow {
   product_name: string;
   quantity: number;
   target_price_brl: number | null;
+  tipo: BomTipo;
   /** Marcado pra delete no submit */
   _toDelete?: boolean;
 }
@@ -34,6 +35,10 @@ interface FormState {
   usageRows: BomEditRow[];
   /** Snapshot original pra detectar mudanças no submit */
   usageRowsOriginal: BomEditRow[];
+  // Campos do "vincular já no momento da criação" (só ativos quando há filtro de produto)
+  initialQuantity: number;
+  initialTargetPrice: number | null;
+  initialTipo: BomTipo;
 }
 
 const emptyForm: FormState = {
@@ -44,6 +49,9 @@ const emptyForm: FormState = {
   usageCount: 0,
   usageRows: [],
   usageRowsOriginal: [],
+  initialQuantity: 1,
+  initialTargetPrice: null,
+  initialTipo: 'fabricacao',
 };
 
 interface ProductOption {
@@ -51,11 +59,15 @@ interface ProductOption {
   name: string;
 }
 
+type BomTipo = 'fabricacao' | 'acervo';
+
 interface BomLink {
   id: string;
   product_id: string;
   component_id: string;
   target_price_brl: number | null;
+  tipo: BomTipo;
+  quantity: number;
   created_at: string;
 }
 
@@ -90,7 +102,7 @@ export default function ComponentsPage() {
     const [{ data: comps, error: ce }, { data: prods }, { data: links }] = await Promise.all([
       supabase.from('components').select('*').order('name'),
       supabase.from('products').select('id, name').order('name'),
-      supabase.from('bom_items').select('id, product_id, component_id, target_price_brl, created_at'),
+      supabase.from('bom_items').select('id, product_id, component_id, target_price_brl, tipo, quantity, created_at'),
     ]);
     if (ce) setError(ce.message);
     else setComponents((comps ?? []) as Component[]);
@@ -109,10 +121,10 @@ export default function ComponentsPage() {
 
   async function openEdit(c: Component) {
     const usageCount = bomLinks.filter((l) => l.component_id === c.id).length;
-    // Carrega bom_items detalhados (com id, qty, target) pra edição inline
+    // Carrega bom_items detalhados (com id, qty, target, tipo) pra edição inline
     const { data: bomRows } = await supabase
       .from('bom_items')
-      .select('id, product_id, quantity, target_price_brl, product:products(id, name)')
+      .select('id, product_id, quantity, target_price_brl, tipo, product:products(id, name)')
       .eq('component_id', c.id);
     const usageRows: BomEditRow[] = ((bomRows ?? []) as any[]).map((r) => ({
       bom_item_id: r.id,
@@ -120,8 +132,10 @@ export default function ComponentsPage() {
       product_name: r.product?.name ?? '?',
       quantity: Number(r.quantity ?? 0),
       target_price_brl: r.target_price_brl != null ? Number(r.target_price_brl) : null,
+      tipo: (r.tipo ?? 'fabricacao') as BomTipo,
     }));
     setForm({
+      ...emptyForm,
       id: c.id,
       name: c.name,
       originalName: c.name,
@@ -170,7 +184,7 @@ export default function ComponentsPage() {
       ...form,
       usageRows: [
         ...form.usageRows,
-        { bom_item_id: null, product_id: productId, product_name: product.name, quantity: 1, target_price_brl: null },
+        { bom_item_id: null, product_id: productId, product_name: product.name, quantity: 1, target_price_brl: null, tipo: 'fabricacao' },
       ],
     });
   }
@@ -197,22 +211,23 @@ export default function ComponentsPage() {
       const target = r.target_price_brl != null && Number.isFinite(Number(r.target_price_brl))
         ? Number(r.target_price_brl)
         : null;
+      const tipo = r.tipo ?? 'fabricacao';
       if (r.bom_item_id) {
-        // Update se mudou
         const orig = originalById.get(r.bom_item_id);
         if (!orig) continue;
-        const changed = orig.quantity !== qty || (orig.target_price_brl ?? null) !== target;
+        const changed = orig.quantity !== qty
+          || (orig.target_price_brl ?? null) !== target
+          || (orig.tipo ?? 'fabricacao') !== tipo;
         if (changed) {
           await supabase
             .from('bom_items')
-            .update({ quantity: qty, target_price_brl: target })
+            .update({ quantity: qty, target_price_brl: target, tipo })
             .eq('id', r.bom_item_id);
         }
       } else {
-        // Insert nova vinculação
         await supabase
           .from('bom_items')
-          .insert({ component_id: componentId, product_id: r.product_id, quantity: qty, target_price_brl: target });
+          .insert({ component_id: componentId, product_id: r.product_id, quantity: qty, target_price_brl: target, tipo });
       }
     }
   }
@@ -252,8 +267,36 @@ export default function ComponentsPage() {
         if (updErr) throw new Error(updErr.message);
         await syncUsageRows(form.id, form.usageRows, form.usageRowsOriginal);
       } else {
-        const { error: insErr } = await supabase.from('components').insert(payload);
-        if (insErr) throw new Error(insErr.message);
+        // Componente novo. Se há filtro de produto ativo, vincula direto na BOM
+        // do produto com qty + custo + tipo informados no form. Senão, cria
+        // solto no catálogo (fluxo antigo).
+        const { data: created, error: insErr } = await supabase
+          .from('components')
+          .insert(payload)
+          .select('id, name')
+          .single();
+        if (insErr || !created) throw new Error(insErr?.message ?? 'Falha ao criar componente');
+
+        if (productFilter && form.initialQuantity > 0) {
+          const { error: bomErr } = await supabase.from('bom_items').insert({
+            component_id: (created as any).id,
+            product_id: productFilter,
+            quantity: form.initialQuantity,
+            target_price_brl: form.initialTargetPrice != null && Number.isFinite(Number(form.initialTargetPrice))
+              ? Number(form.initialTargetPrice)
+              : null,
+            tipo: form.initialTipo,
+          });
+          if (bomErr) {
+            // Componente foi criado mas vínculo falhou — avisa pra não confundir
+            toast.error('Componente criado, mas não vinculado', friendlyDbError(bomErr));
+          } else {
+            const productName = products.find((p) => p.id === productFilter)?.name ?? 'produto';
+            toast.success('Componente criado', `"${(created as any).name}" adicionado ao ${productName} (${form.initialTipo}).`);
+          }
+        } else {
+          toast.success('Componente criado', `"${(created as any).name}" adicionado ao catálogo.`);
+        }
       }
       closeForm();
       await load();
@@ -474,14 +517,16 @@ export default function ComponentsPage() {
   const componentById = useMemo(() => new Map(components.map((c) => [c.id, c])), [components]);
 
   // Lista em cascata: pais primeiro, com variantes indentadas logo abaixo.
-  // Variantes "órfãs" (cujo pai foi filtrado fora) aparecem ao final.
+  // Quando uma variante aparece no filtro mas o pai NÃO, o pai é inserido
+  // antes dela como linha "fantasma" (acinzentada, fora do filtro) — assim
+  // a hierarquia visual fica sempre clara.
   const cascade = useMemo(() => {
-    const out: Array<{ component: Component; depth: 0 | 1 }> = [];
+    const out: Array<{ component: Component; depth: 0 | 1; ghost?: boolean }> = [];
     const visited = new Set<string>();
     const filteredIds = new Set(filteredComponents.map((c) => c.id));
 
     for (const c of filteredComponents) {
-      if (c.parent_component_id) continue; // variantes vêm depois do pai
+      if (c.parent_component_id) continue;
       if (visited.has(c.id)) continue;
       out.push({ component: c, depth: 0 });
       visited.add(c.id);
@@ -492,14 +537,24 @@ export default function ComponentsPage() {
         visited.add(child.id);
       }
     }
-    // Variantes que passaram no filtro mas o pai não
+    // Variantes órfãs (passaram no filtro mas pai não): insere o pai como
+    // ghost antes da variante pra preservar a hierarquia visual
     for (const c of filteredComponents) {
       if (visited.has(c.id)) continue;
-      out.push({ component: c, depth: c.parent_component_id ? 1 : 0 });
+      if (c.parent_component_id) {
+        const parent = componentById.get(c.parent_component_id);
+        if (parent && !visited.has(parent.id)) {
+          out.push({ component: parent, depth: 0, ghost: true });
+          visited.add(parent.id);
+        }
+        out.push({ component: c, depth: 1 });
+      } else {
+        out.push({ component: c, depth: 0 });
+      }
       visited.add(c.id);
     }
     return out;
-  }, [filteredComponents, childrenByParent]);
+  }, [filteredComponents, childrenByParent, componentById]);
 
   const visible = cascade.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
   const filteredCount = cascade.length;
@@ -594,7 +649,7 @@ export default function ComponentsPage() {
                 </tr>
               </thead>
               <tbody>
-                {visible.map(({ component: c, depth }) => {
+                {visible.map(({ component: c, depth, ghost }) => {
                   const links = bomLinks.filter((l) => l.component_id === c.id);
                   const usage = links.length;
                   let cost: number | null = null;
@@ -606,6 +661,25 @@ export default function ComponentsPage() {
                   }
                   const variantCount = childrenByParent.get(c.id)?.length ?? 0;
                   const parentName = c.parent_component_id ? componentById.get(c.parent_component_id)?.name : null;
+
+                  // Linha "fantasma": pai de uma variante que apareceu no filtro,
+                  // mas o pai em si não está no produto filtrado. Renderiza
+                  // acinzentado e desativa as ações pra não confundir.
+                  if (ghost) {
+                    return (
+                      <tr key={`ghost-${c.id}`} className="border-b border-slate-100 bg-slate-100/50">
+                        <td className="px-5 py-2 text-slate-500" colSpan={4}>
+                          <div className="flex items-center gap-2 text-sm italic">
+                            <span>{c.name}</span>
+                            <span className="rounded-full bg-slate-200 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-slate-600">
+                              fora deste produto · contexto da variante
+                            </span>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  }
+
                   return (
                     <tr
                       key={c.id}
@@ -888,6 +962,52 @@ export default function ComponentsPage() {
                     autoFocus
                   />
                 </div>
+
+                {/* Criação direta vinculada a um produto — só ativa quando há filtro de produto */}
+                {!form.id && productFilter && (
+                  <div className="rounded-md border border-brand-200 bg-brand-50/50 px-3 py-3 space-y-3">
+                    <p className="text-xs text-brand-800">
+                      Será adicionado direto ao <strong>{filteredProductName}</strong>:
+                    </p>
+                    <div className="grid gap-3 sm:grid-cols-3">
+                      <div>
+                        <Label>Tipo</Label>
+                        <select
+                          value={form.initialTipo}
+                          onChange={(e) => setForm({ ...form, initialTipo: e.target.value as BomTipo })}
+                          className="block w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
+                        >
+                          <option value="fabricacao">Fabricação</option>
+                          <option value="acervo">Acervo</option>
+                        </select>
+                      </div>
+                      <div>
+                        <Label>Quantidade</Label>
+                        <Input
+                          type="number"
+                          step="any"
+                          min="0"
+                          value={form.initialQuantity}
+                          onChange={(e) => setForm({ ...form, initialQuantity: Number(e.target.value) || 0 })}
+                        />
+                      </div>
+                      <div>
+                        <Label>Custo unit. (R$)</Label>
+                        <Input
+                          type="number"
+                          step="0.0001"
+                          min="0"
+                          placeholder="0,0000"
+                          value={form.initialTargetPrice ?? ''}
+                          onChange={(e) => setForm({ ...form, initialTargetPrice: e.target.value === '' ? null : Number(e.target.value) })}
+                        />
+                      </div>
+                    </div>
+                    <p className="text-[11px] text-slate-500">
+                      <strong>Fabricação</strong>: componente da placa eletrônica (resistor, capacitor, IC). <strong>Acervo</strong>: embalagem, etiqueta, caixa, manual.
+                    </p>
+                  </div>
+                )}
                 {form.id && form.usageCount > 1 && productFilter && form.name !== form.originalName && (
                   <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-3">
                     <label className="flex items-start gap-2 text-sm">
@@ -929,6 +1049,18 @@ export default function ComponentsPage() {
                               {r.product_name}
                               {!r.bom_item_id && <span className="ml-1 text-[10px] font-semibold uppercase text-emerald-600">novo</span>}
                             </span>
+                            <select
+                              value={r.tipo}
+                              onChange={(e) => updateUsageRow(idx, { tipo: e.target.value as BomTipo })}
+                              className={cn(
+                                'rounded border px-1.5 py-1 text-[11px] font-medium',
+                                r.tipo === 'fabricacao' ? 'border-blue-200 bg-blue-50 text-blue-700' : 'border-amber-200 bg-amber-50 text-amber-700'
+                              )}
+                              title="Tipo do item: fabricação (placa) ou acervo (embalagem/etiqueta)"
+                            >
+                              <option value="fabricacao">Fabric.</option>
+                              <option value="acervo">Acervo</option>
+                            </select>
                             <div className="flex items-center gap-1">
                               <input
                                 type="number"

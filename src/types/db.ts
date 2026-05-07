@@ -33,7 +33,12 @@ export interface Product {
 
 // Linha da view products_with_cost — Product + custo unitário agregado.
 export interface ProductWithCost extends Product {
+  /** Custo total unitário (fabricacao + acervo, ou direct_cost_brl pra revenda) */
   unit_cost_brl: number;
+  /** Apenas componentes da placa (tipo='fabricacao') */
+  fabricacao_cost_brl?: number;
+  /** Apenas embalagens/etiquetas/caixas (tipo='acervo') */
+  acervo_cost_brl?: number;
 }
 
 export interface BomItem {

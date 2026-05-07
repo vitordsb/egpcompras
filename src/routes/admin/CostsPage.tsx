@@ -231,11 +231,14 @@ export default function CostsPage() {
         <div>
           <h1 className="text-2xl font-semibold text-slate-900">Custos</h1>
           <p className="text-sm text-slate-500">
-            Cadastre o custo de fabricação de cada produto: BOM + valor unitário de cada
-            componente. O custo unitário do produto é a soma desses valores.
+            Visão consolidada do custo unitário de cada produto, separado em <strong className="text-blue-700">Fabricação</strong> (componentes da placa) e <strong className="text-amber-700">Acervo</strong> (embalagens, etiquetas, caixas).
           </p>
         </div>
         <Button onClick={openCreate}>+ Novo produto</Button>
+      </div>
+
+      <div className="mb-4 rounded-md border border-slate-200 bg-slate-50 px-4 py-2 text-xs text-slate-600">
+        💡 Para alterar quantidades, custos ou tipo (fabricação/acervo) dos itens, edite na página de <strong>Componentes</strong>. Aqui é apenas visualização agregada.
       </div>
 
       {listError && (
@@ -258,12 +261,18 @@ export default function CostsPage() {
             <thead className="border-b border-slate-200 bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
               <tr>
                 <th className="px-5 py-3">Produto</th>
-                <th className="px-5 py-3 text-right">Custo unitário</th>
+                <th className="px-5 py-3 text-right" title="Custo dos componentes da placa (tipo: fabricação)">Fabricação</th>
+                <th className="px-5 py-3 text-right" title="Embalagens, etiquetas, caixas etc (tipo: acervo)">Acervo</th>
+                <th className="px-5 py-3 text-right">Custo total</th>
                 <th className="px-5 py-3"></th>
               </tr>
             </thead>
             <tbody>
-              {products.map((p) => (
+              {products.map((p) => {
+                const fab = Number(p.fabricacao_cost_brl ?? 0);
+                const acv = Number(p.acervo_cost_brl ?? 0);
+                const total = Number(p.unit_cost_brl ?? 0);
+                return (
                 <tr key={p.id} className="border-b border-slate-100 last:border-0">
                   <td className="px-5 py-3">
                     <div className="font-medium text-slate-900">{p.name}</div>
@@ -271,8 +280,14 @@ export default function CostsPage() {
                       <div className="text-xs text-slate-500 line-clamp-1">{p.description}</div>
                     )}
                   </td>
-                  <td className="px-5 py-3 text-right font-medium">
-                    {Number(p.unit_cost_brl) > 0 ? formatBRL(Number(p.unit_cost_brl)) : '—'}
+                  <td className="px-5 py-3 text-right text-blue-700">
+                    {fab > 0 ? formatBRL(fab) : <span className="text-slate-300 text-xs">—</span>}
+                  </td>
+                  <td className="px-5 py-3 text-right text-amber-700">
+                    {acv > 0 ? formatBRL(acv) : <span className="text-slate-300 text-xs">—</span>}
+                  </td>
+                  <td className="px-5 py-3 text-right font-semibold text-slate-900">
+                    {total > 0 ? formatBRL(total) : '—'}
                   </td>
                   <td className="px-5 py-3 text-right">
                     <div className="inline-flex items-center gap-3">
@@ -293,7 +308,8 @@ export default function CostsPage() {
                     </div>
                   </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </Card>

@@ -358,6 +358,7 @@ export const toolDeclarations = [
               quantity: { type: 'NUMBER' as Type, description: 'Quantidade por unidade do produto.' },
               unit:     { type: 'STRING' as Type, description: 'Unidade (opcional, default un).' },
               target_price_brl: { type: 'NUMBER' as Type, description: 'Preço-alvo unitário em BRL (opcional). Se o usuário disse "Resistor 10k R$ 0,12", passe 0.12 aqui.' },
+              tipo:     { type: 'STRING' as Type, description: '"fabricacao" (componente da placa — default) ou "acervo" (embalagem, etiqueta, caixa, manual).' },
             },
             required: ['name', 'quantity'],
           },
@@ -4018,6 +4019,7 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
       const components = (args.components ?? []) as Array<{
         name: string; sku?: string; quantity: number; unit?: string;
         target_price_brl?: number; value_unit?: number; price?: number;
+        tipo?: 'fabricacao' | 'acervo';
       }>;
       if (!components.length) throw new Error('Informe pelo menos um componente.');
 
@@ -4097,17 +4099,18 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
         const targetPrice = rawPrice != null && Number.isFinite(Number(rawPrice))
           ? Number(rawPrice)
           : null;
+        const tipo = comp.tipo === 'acervo' ? 'acervo' : 'fabricacao';
 
         if (existingBom) {
-          const update: Record<string, unknown> = { quantity: comp.quantity };
+          const update: Record<string, unknown> = { quantity: comp.quantity, tipo };
           if (targetPrice != null) update.target_price_brl = targetPrice;
           await supabase.from('bom_items').update(update).eq('id', existingBom.id);
-          results.push({ component: comp.name, action: 'atualizado', quantity: comp.quantity, target_price_brl: targetPrice });
+          results.push({ component: comp.name, action: 'atualizado', quantity: comp.quantity, target_price_brl: targetPrice, tipo });
         } else {
-          const insert: Record<string, unknown> = { product_id: productId, component_id: componentId, quantity: comp.quantity };
+          const insert: Record<string, unknown> = { product_id: productId, component_id: componentId, quantity: comp.quantity, tipo };
           if (targetPrice != null) insert.target_price_brl = targetPrice;
           await supabase.from('bom_items').insert(insert);
-          results.push({ component: comp.name, action: 'adicionado', quantity: comp.quantity, target_price_brl: targetPrice });
+          results.push({ component: comp.name, action: 'adicionado', quantity: comp.quantity, target_price_brl: targetPrice, tipo });
         }
       }
 
