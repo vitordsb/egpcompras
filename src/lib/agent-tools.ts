@@ -13,6 +13,12 @@ import { fetchUsdBrl } from '@/lib/currency';
 import { buildPublicQuoteUrl } from '@/lib/utils';
 import { todayBR } from '@/lib/dates';
 import type { Type } from '@google/genai';
+import {
+  exportComponentsByProduct,
+  exportComponentsGeneral,
+  type ExportBomLink,
+} from '@/routes/admin/components-pdf';
+import type { Component } from '@/types/db';
 
 
 // ===== Schemas (declarations) =============================================
@@ -22,13 +28,13 @@ export const toolDeclarations = [
   {
     name: 'list_products',
     description:
-      'Lista todos os produtos cadastrados (id, nome, custo unitário, preço de venda).',
+      'Lista produtos cadastrados (id, nome, custo unitário total, custo de fabricação, custo de acervo, preço de venda, product_type). Cada produto tem 2 subtotais: fabricacao_cost_brl (componentes da placa) + acervo_cost_brl (embalagem/etiqueta/caixa/manual). Soma = unit_cost_brl total.',
     parameters: { type: 'OBJECT' as Type, properties: {} },
   },
   {
     name: 'find_product_by_name',
     description:
-      'Busca produto por nome aproximado. Retorna o melhor match com BOM completa (componentes, qtd, valor unit) + outros matches.',
+      'Busca produto por nome aproximado. Retorna o melhor match com BOM completa (componentes, qtd, valor unit, tipo=fabricacao|acervo) + outros matches. Use o campo `tipo` em cada item para distinguir componentes da placa (fabricacao) de embalagem/etiqueta (acervo).',
     parameters: {
       type: 'OBJECT' as Type,
       properties: {
@@ -40,7 +46,7 @@ export const toolDeclarations = [
   {
     name: 'get_product_details',
     description:
-      'Retorna dados completos de um produto pelo id: nome, descrição, custo unitário, preço de venda, modo de markup, BOM detalhada.',
+      'Retorna dados completos de um produto pelo id: nome, descrição, modo de markup, custo total (unit_cost_brl), custo separado de fabricação (fabricacao_cost_brl) e acervo (acervo_cost_brl), preço de venda, BOM detalhada com `tipo` em cada item. Use sempre que precisar comparar custo de fabricação vs acervo, ou quando o usuário perguntar "quanto custa a embalagem do X" / "qual o custo total da placa do X".',
     parameters: {
       type: 'OBJECT' as Type,
       properties: { product_id: { type: 'STRING' as Type } },
@@ -168,42 +174,86 @@ export const toolDeclarations = [
     },
   },
 
+  // ---------- AÇÕES — RELATÓRIOS ----------
+  {
+    name: 'export_components_pdf',
+    description:
+      'Gera e baixa o relatório PDF de componentes (dispara download no navegador do usuário). ' +
+      'Sem product_name: catálogo geral com todos os componentes. ' +
+      'Com product_name: composição de um produto específico, em 2 tabelas (placa eletrônica + placa+acervo). ' +
+      'O parâmetro exclude_items permite remover componentes pelo nome aproximado antes de gerar — útil pra "manda relatório do 12V sem o gabinete e sem os custos fixos". ' +
+      'A exclusão É PERSISTIDA (desmarca o checkbox "PDF" daquele item no banco), ou seja, da próxima vez também não vai aparecer até que o usuário re-marque.',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        product_name: {
+          type: 'STRING' as Type,
+          description: 'Nome do produto (fuzzy). Omitir gera o catálogo geral de componentes.',
+        },
+        exclude_items: {
+          type: 'ARRAY' as Type,
+          items: { type: 'STRING' as Type },
+          description: 'Lista de nomes/keywords de componentes a OMITIR do PDF. Ex: ["gabinete","custos fixos"]. Match aproximado por substring no nome do componente daquele produto. Só funciona com product_name informado.',
+        },
+        reset_visibility: {
+          type: 'BOOLEAN' as Type,
+          description: 'Default false. Se true, marca TODOS os itens do produto como visíveis antes de aplicar exclude_items. Use só se o usuário pedir explicitamente "manda completo, mas sem X" e você não tem certeza do estado atual.',
+        },
+      },
+    },
+  },
+
   // ---------- ESCRITAS — COMPONENTES ----------
   {
     name: 'create_component',
-    description: 'Cria UM componente no catálogo. Pra criar vários de uma vez, prefira bulk_create_components.',
+    description: 'Cria UM componente no catálogo. Pra criar vários de uma vez, prefira bulk_create_components. Detecte automaticamente mount_type pelo nome: "SMD" no texto → "SMD"; "PTH" no texto → "PTH". Pacotes 0402/0603/0805/1206 são quase sempre SMD.',
     parameters: {
       type: 'OBJECT' as Type,
-      properties: { name: { type: 'STRING' as Type } },
+      properties: {
+        name: { type: 'STRING' as Type },
+        mount_type: { type: 'STRING' as Type, description: '"SMD" (superfície) ou "PTH" (furo passante). Opcional. Detecte do nome do componente sempre que possível.' },
+      },
       required: ['name'],
     },
   },
   {
     name: 'bulk_create_components',
     description:
-      'Cria VÁRIOS componentes em uma única chamada (mais eficiente). Use sempre que o usuário pedir pra cadastrar mais de um.',
+      'Cria VÁRIOS componentes em uma única chamada (mais eficiente). Use sempre que o usuário pedir pra cadastrar mais de um. Para cada item, detecte mount_type pelo nome (SMD, PTH, 0402/0603/0805/1206 = SMD).',
     parameters: {
       type: 'OBJECT' as Type,
       properties: {
+        components: {
+          type: 'ARRAY' as Type,
+          description: 'Lista de componentes a criar. Cada um pode ter mount_type opcional.',
+          items: {
+            type: 'OBJECT' as Type,
+            properties: {
+              name: { type: 'STRING' as Type },
+              mount_type: { type: 'STRING' as Type, description: '"SMD" ou "PTH" (opcional).' },
+            },
+            required: ['name'],
+          },
+        },
         names: {
           type: 'ARRAY' as Type,
           items: { type: 'STRING' as Type },
-          description: 'Lista de nomes de componentes a criar.',
+          description: 'Forma legada — apenas nomes. Use `components` quando precisar passar mount_type.',
         },
       },
-      required: ['names'],
     },
   },
   {
     name: 'update_component',
-    description: 'Atualiza o nome de um componente.',
+    description: 'Atualiza nome e/ou mount_type (SMD/PTH) de um componente.',
     parameters: {
       type: 'OBJECT' as Type,
       properties: {
         component_id: { type: 'STRING' as Type },
         name: { type: 'STRING' as Type },
+        mount_type: { type: 'STRING' as Type, description: '"SMD", "PTH" ou null/string vazia para limpar.' },
       },
-      required: ['component_id', 'name'],
+      required: ['component_id'],
     },
   },
   {
@@ -270,7 +320,7 @@ export const toolDeclarations = [
   {
     name: 'add_bom_item',
     description:
-      'Adiciona um componente à BOM de um produto. Pode usar component_id OU component_name (faz fuzzy match).',
+      'Adiciona um componente à BOM de um produto. Pode usar component_id OU component_name (faz fuzzy match). Use tipo="acervo" para itens de embalagem/etiqueta/caixa/manual; default "fabricacao" (componente da placa).',
     parameters: {
       type: 'OBJECT' as Type,
       properties: {
@@ -288,6 +338,10 @@ export const toolDeclarations = [
           type: 'NUMBER' as Type,
           description: 'Valor unitário em BRL (target/custo). Opcional.',
         },
+        tipo: {
+          type: 'STRING' as Type,
+          description: '"fabricacao" (default — componente da placa, eletrônico) ou "acervo" (embalagem, etiqueta, caixa, manual, gabinete).',
+        },
       },
       required: ['product_id', 'quantity'],
     },
@@ -295,7 +349,7 @@ export const toolDeclarations = [
   {
     name: 'update_bom_item',
     description:
-      'Atualiza qty ou valor unit de uma linha da BOM. Use bom_item_id (preferido, vem de get_product_details/find_product_by_name) OU passe product_id + component_name pra fuzzy match. Se houver ambiguidade no nome, retorna a lista de candidatos.',
+      'Atualiza qty, valor unit ou tipo (fabricacao/acervo) de uma linha da BOM. Use bom_item_id (preferido, vem de get_product_details/find_product_by_name) OU passe product_id + component_name pra fuzzy match. Se houver ambiguidade no nome, retorna a lista de candidatos.',
     parameters: {
       type: 'OBJECT' as Type,
       properties: {
@@ -304,6 +358,10 @@ export const toolDeclarations = [
         component_name: { type: 'STRING' as Type, description: 'Match aproximado por substring no nome do componente.' },
         quantity: { type: 'NUMBER' as Type },
         value_unit: { type: 'NUMBER' as Type },
+        tipo: {
+          type: 'STRING' as Type,
+          description: '"fabricacao" (componente da placa) ou "acervo" (embalagem, etiqueta, caixa, manual, gabinete).',
+        },
       },
     },
   },
@@ -359,6 +417,7 @@ export const toolDeclarations = [
               unit:     { type: 'STRING' as Type, description: 'Unidade (opcional, default un).' },
               target_price_brl: { type: 'NUMBER' as Type, description: 'Preço-alvo unitário em BRL (opcional). Se o usuário disse "Resistor 10k R$ 0,12", passe 0.12 aqui.' },
               tipo:     { type: 'STRING' as Type, description: '"fabricacao" (componente da placa — default) ou "acervo" (embalagem, etiqueta, caixa, manual).' },
+              mount_type: { type: 'STRING' as Type, description: '"SMD" ou "PTH" (opcional). Detecte do nome: "Resistor 1K 0603 SMD" → "SMD". Pacotes 0402/0603/0805/1206 indicam SMD.' },
             },
             required: ['name', 'quantity'],
           },
@@ -2225,6 +2284,8 @@ interface BomItemFull {
   quantity: number;
   target_price_brl: number | null;
   component_name: string;
+  /** 'fabricacao' (componente da placa) | 'acervo' (embalagem, etiqueta, gabinete, manual) */
+  tipo: 'fabricacao' | 'acervo';
 }
 
 const DEFAULT_QUOTE_EXPIRATION_HOURS = 2;
@@ -2249,7 +2310,7 @@ async function getProductWithBom(productId: string) {
     supabase.from('products').select('*').eq('id', productId).single(),
     supabase
       .from('bom_items')
-      .select('id, component_id, quantity, target_price_brl, component:components(name)')
+      .select('id, component_id, quantity, target_price_brl, tipo, component:components(name)')
       .eq('product_id', productId),
   ]);
   if (prodRes.error || !prodRes.data) {
@@ -2261,8 +2322,33 @@ async function getProductWithBom(productId: string) {
     quantity: Number(b.quantity),
     target_price_brl: b.target_price_brl != null ? Number(b.target_price_brl) : null,
     component_name: b.component?.name ?? '',
+    tipo: (b.tipo === 'acervo' ? 'acervo' : 'fabricacao') as 'fabricacao' | 'acervo',
   }));
   return { product: prodRes.data, bom };
+}
+
+/**
+ * Normaliza o argumento mount_type vindo da IA. Aceita 'SMD' / 'PTH' / null.
+ * Como fallback (quando arg não foi passado), detecta pelo nome:
+ * - "SMD" no texto → SMD
+ * - "PTH" / "through hole" / "through-hole" no texto → PTH
+ * - Pacotes SMD comuns (0402, 0603, 0805, 1206, SOT-23, SOIC) → SMD
+ */
+function normalizeMountType(arg: unknown, name?: string): 'SMD' | 'PTH' | null {
+  if (typeof arg === 'string') {
+    const u = arg.trim().toUpperCase();
+    if (u === 'SMD' || u === 'SMT') return 'SMD';
+    if (u === 'PTH' || u === 'THT') return 'PTH';
+    if (u === '' || u === 'NULL' || u === 'NONE') return null;
+  }
+  if (name) {
+    const n = name.toUpperCase();
+    if (/\bSMD\b|\bSMT\b/.test(n)) return 'SMD';
+    if (/\bPTH\b|\bTHT\b|THROUGH[- ]HOLE/.test(n)) return 'PTH';
+    // Pacotes SMD clássicos (0402, 0603, 0805, 1206, 1210, 2010, 2512)
+    if (/\b0(2|4|6|8)0[235]\b|\b1(20|21|81)6\b|\b2[05]1[02]\b|SOT[- ]?\d|SOIC|TSSOP|QFN|QFP|BGA|MELF/i.test(name)) return 'SMD';
+  }
+  return null;
 }
 
 async function findComponentByName(name: string): Promise<{ id: string; name: string } | null> {
@@ -2542,7 +2628,7 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
     case 'list_products': {
       const { data, error } = await supabase
         .from('products_with_cost')
-        .select('id, name, unit_cost_brl, sale_price_brl, pricing_mode')
+        .select('id, name, unit_cost_brl, fabricacao_cost_brl, acervo_cost_brl, sale_price_brl, pricing_mode, product_type')
         .order('name');
       if (error) throw new Error(error.message);
       return { products: data };
@@ -2553,7 +2639,7 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
       if (!search) throw new Error('name é obrigatório');
       const { data, error } = await supabase
         .from('products_with_cost')
-        .select('id, name, unit_cost_brl, sale_price_brl, pricing_mode')
+        .select('id, name, unit_cost_brl, fabricacao_cost_brl, acervo_cost_brl, sale_price_brl, pricing_mode, product_type')
         .ilike('name', `%${search}%`)
         .order('name');
       if (error) throw new Error(error.message);
@@ -2570,7 +2656,7 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
           const ids = fuzzy.map((p) => p.id);
           const { data: enriched } = await supabase
             .from('products_with_cost')
-            .select('id, name, unit_cost_brl, sale_price_brl, pricing_mode')
+            .select('id, name, unit_cost_brl, fabricacao_cost_brl, acervo_cost_brl, sale_price_brl, pricing_mode, product_type')
             .in('id', ids);
           // Preserva ordem de similaridade
           const byId = new Map((enriched ?? []).map((p: any) => [p.id, p]));
@@ -2592,6 +2678,7 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
           component_name: b.component_name,
           quantity_per_product: b.quantity,
           value_unit_brl: b.target_price_brl,
+          tipo: b.tipo,
         })),
         other_matches: products.slice(1).map((p) => ({ id: p.id, name: p.name })),
       };
@@ -2604,27 +2691,38 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
         supabase.from('products').select('*').eq('id', productId).single(),
         supabase
           .from('products_with_cost')
-          .select('unit_cost_brl, sale_price_brl')
+          .select('unit_cost_brl, fabricacao_cost_brl, acervo_cost_brl, sale_price_brl')
           .eq('id', productId)
           .single(),
         getProductWithBom(productId),
       ]);
       if (pRes.error || !pRes.data) throw new Error(pRes.error?.message ?? 'Produto não encontrado');
       const product: any = pRes.data;
+      const fabricacaoBom = bomData.bom.filter((b) => b.tipo === 'fabricacao');
+      const acervoBom     = bomData.bom.filter((b) => b.tipo === 'acervo');
       return {
         id: product.id,
         name: product.name,
         description: product.description,
         pricing_mode: product.pricing_mode,
         custom_markup_pct: product.custom_markup_pct,
+        product_type: product.product_type,
         unit_cost_brl: costRes.data?.unit_cost_brl ?? 0,
+        fabricacao_cost_brl: costRes.data?.fabricacao_cost_brl ?? 0,
+        acervo_cost_brl: costRes.data?.acervo_cost_brl ?? 0,
         sale_price_brl: costRes.data?.sale_price_brl ?? null,
+        bom_summary: {
+          fabricacao_count: fabricacaoBom.length,
+          acervo_count:     acervoBom.length,
+          total_count:      bomData.bom.length,
+        },
         bom: bomData.bom.map((b) => ({
           bom_item_id: b.id,
           component_id: b.component_id,
           component_name: b.component_name,
           quantity_per_product: b.quantity,
           value_unit_brl: b.target_price_brl,
+          tipo: b.tipo,
         })),
       };
     }
@@ -2690,7 +2788,7 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
     case 'list_components': {
       const { data, error } = await supabase
         .from('components')
-        .select('id, name')
+        .select('id, name, mount_type, sku, unit')
         .order('name');
       if (error) throw new Error(error.message);
       return { components: data };
@@ -2701,7 +2799,7 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
       if (!search) throw new Error('name é obrigatório');
       const { data, error } = await supabase
         .from('components')
-        .select('id, name')
+        .select('id, name, mount_type, sku, unit')
         .ilike('name', `%${search}%`)
         .limit(10);
       if (error) throw new Error(error.message);
@@ -2791,39 +2889,178 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
       };
     }
 
+    // ---------- AÇÕES — RELATÓRIOS ----------
+    case 'export_components_pdf': {
+      const productName = args.product_name ? String(args.product_name).trim() : '';
+      const excludeItems: string[] = Array.isArray(args.exclude_items)
+        ? args.exclude_items.map((s: any) => String(s).trim()).filter(Boolean)
+        : [];
+      const resetVisibility = Boolean(args.reset_visibility);
+
+      // Modo catálogo geral (sem produto)
+      if (!productName) {
+        const [{ data: compsRaw, error: compsErr }, { data: linksRaw, error: linksErr }] = await Promise.all([
+          supabase.from('components').select('*').order('name'),
+          supabase.from('bom_items').select('product_id, component_id, quantity, target_price_brl, tipo, show_in_pdf, created_at'),
+        ]);
+        if (compsErr) throw new Error(compsErr.message);
+        if (linksErr) throw new Error(linksErr.message);
+        exportComponentsGeneral(
+          (compsRaw ?? []) as Component[],
+          (linksRaw ?? []) as ExportBomLink[]
+        );
+        return {
+          downloaded: true,
+          mode: 'catalogo_geral',
+          components_count: compsRaw?.length ?? 0,
+          message: `PDF do catálogo geral baixado (${compsRaw?.length ?? 0} componentes).`,
+        };
+      }
+
+      // Modo produto específico
+      // 1. Localiza produto (fuzzy)
+      const { data: prods, error: pErr } = await supabase
+        .from('products').select('id, name').ilike('name', `%${productName}%`).limit(1);
+      if (pErr) throw new Error(pErr.message);
+      const product = (prods as any[])?.[0];
+      if (!product) throw new Error(`Produto "${productName}" não encontrado.`);
+
+      // 2. Aplica reset_visibility se solicitado
+      if (resetVisibility) {
+        await supabase
+          .from('bom_items')
+          .update({ show_in_pdf: true })
+          .eq('product_id', product.id);
+      }
+
+      // 3. Aplica exclude_items: pra cada keyword, busca bom_items daquele produto
+      //    cujo componente bate com a keyword e marca show_in_pdf=false.
+      const excludedNames: string[] = [];
+      const excludeFailed: string[] = [];
+      if (excludeItems.length > 0) {
+        const { data: bomRows } = await supabase
+          .from('bom_items')
+          .select('id, component:components(name)')
+          .eq('product_id', product.id);
+        const allRows = ((bomRows ?? []) as any[]).map((b) => ({
+          id: b.id as string,
+          name: (b.component?.name ?? '') as string,
+        }));
+        for (const keyword of excludeItems) {
+          const lower = keyword.toLowerCase();
+          const matches = allRows.filter((r) => r.name.toLowerCase().includes(lower));
+          if (matches.length === 0) {
+            excludeFailed.push(keyword);
+            continue;
+          }
+          const ids = matches.map((m) => m.id);
+          await supabase.from('bom_items').update({ show_in_pdf: false }).in('id', ids);
+          for (const m of matches) excludedNames.push(m.name);
+        }
+      }
+
+      // 4. Re-busca os dados atualizados (pra refletir os toggles aplicados)
+      const [{ data: compsRaw, error: compsErr }, { data: linksRaw, error: linksErr }] = await Promise.all([
+        supabase.from('components').select('*').order('name'),
+        supabase.from('bom_items').select('product_id, component_id, quantity, target_price_brl, tipo, show_in_pdf, created_at'),
+      ]);
+      if (compsErr) throw new Error(compsErr.message);
+      if (linksErr) throw new Error(linksErr.message);
+
+      // 5. Gera o PDF (dispara download)
+      exportComponentsByProduct(
+        { id: product.id, name: product.name },
+        (compsRaw ?? []) as Component[],
+        (linksRaw ?? []) as ExportBomLink[]
+      );
+
+      const productLinks = ((linksRaw ?? []) as ExportBomLink[]).filter(
+        (l) => l.product_id === product.id
+      );
+      const visibleCount = productLinks.filter((l) => l.show_in_pdf !== false).length;
+      const hiddenCount = productLinks.length - visibleCount;
+
+      return {
+        downloaded: true,
+        mode: 'produto',
+        product: product.name,
+        items_in_pdf: visibleCount,
+        items_hidden: hiddenCount,
+        excluded_now: excludedNames,
+        exclude_keywords_not_matched: excludeFailed,
+        message:
+          `PDF do ${product.name} baixado` +
+          (excludedNames.length > 0
+            ? ` (omitidos: ${excludedNames.join(', ')})`
+            : '') +
+          (excludeFailed.length > 0
+            ? `. Não encontrei: ${excludeFailed.join(', ')}.`
+            : '.') +
+          ` Total no PDF: ${visibleCount}${hiddenCount > 0 ? `, ocultos: ${hiddenCount}` : ''}.`,
+      };
+    }
+
     // ---------- ESCRITAS — COMPONENTES ----------
     case 'create_component': {
       const cname = String(args.name ?? '').trim();
       if (!cname) throw new Error('name é obrigatório');
+      const mountType = normalizeMountType(args.mount_type, cname);
+      const insertPayload: any = { name: cname };
+      if (mountType) insertPayload.mount_type = mountType;
       const { data, error } = await supabase
         .from('components')
-        .insert({ name: cname })
-        .select('id, name')
+        .insert(insertPayload)
+        .select('id, name, mount_type')
         .single();
       if (error) throw new Error(error.message);
       return { created: data };
     }
 
     case 'bulk_create_components': {
-      const names: string[] = Array.isArray(args.names)
-        ? args.names.map((s: any) => String(s).trim()).filter(Boolean)
-        : [];
-      if (names.length === 0) throw new Error('names deve ter pelo menos 1 item');
+      // Aceita 2 formatos: legado (names: string[]) ou novo (components: {name, mount_type}[])
+      let items: { name: string; mount_type: 'SMD' | 'PTH' | null }[] = [];
+      if (Array.isArray(args.components) && args.components.length > 0) {
+        items = args.components
+          .map((c: any) => {
+            const name = String(c?.name ?? '').trim();
+            return name ? { name, mount_type: normalizeMountType(c?.mount_type, name) } : null;
+          })
+          .filter(Boolean) as any[];
+      } else if (Array.isArray(args.names)) {
+        items = args.names
+          .map((s: any) => String(s).trim())
+          .filter(Boolean)
+          .map((name: string) => ({ name, mount_type: normalizeMountType(null, name) }));
+      }
+      if (items.length === 0) throw new Error('Forneça components (preferido) ou names com pelo menos 1 item');
       const { data, error } = await supabase
         .from('components')
-        .insert(names.map((name) => ({ name })))
-        .select('id, name');
+        .insert(items.map((it) => {
+          const row: any = { name: it.name };
+          if (it.mount_type) row.mount_type = it.mount_type;
+          return row;
+        }))
+        .select('id, name, mount_type');
       if (error) throw new Error(error.message);
       return { created_count: data?.length ?? 0, components: data };
     }
 
     case 'update_component': {
       const id = String(args.component_id ?? '');
-      const cname = String(args.name ?? '').trim();
-      if (!id || !cname) throw new Error('component_id e name são obrigatórios');
-      const { error } = await supabase.from('components').update({ name: cname }).eq('id', id);
+      if (!id) throw new Error('component_id é obrigatório');
+      const payload: Record<string, unknown> = {};
+      if (args.name !== undefined) {
+        const cname = String(args.name).trim();
+        if (!cname) throw new Error('name não pode ser vazio');
+        payload.name = cname;
+      }
+      if (args.mount_type !== undefined) {
+        payload.mount_type = normalizeMountType(args.mount_type, String(args.name ?? ''));
+      }
+      if (Object.keys(payload).length === 0) throw new Error('Nada a atualizar (forneça name ou mount_type).');
+      const { error } = await supabase.from('components').update(payload).eq('id', id);
       if (error) throw new Error(error.message);
-      return { updated: true, id, name: cname };
+      return { updated: true, id, changes: payload };
     }
 
     case 'delete_component': {
@@ -2957,11 +3194,14 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
         .maybeSingle();
       if (lookupErr) throw new Error(lookupErr.message);
 
+      const tipoArg = args.tipo === 'acervo' ? 'acervo' : args.tipo === 'fabricacao' ? 'fabricacao' : null;
+
       if (existing) {
         const updatePayload: any = { quantity: qty };
         if (args.value_unit !== undefined) {
           updatePayload.target_price_brl = Number(args.value_unit);
         }
+        if (tipoArg) updatePayload.tipo = tipoArg;
         const { error: upErr } = await supabase
           .from('bom_items')
           .update(updatePayload)
@@ -2972,7 +3212,7 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
           bom_item_id: (existing as any).id,
           note: `Esse componente já estava na BOM — atualizei qty pra ${qty}${
             args.value_unit !== undefined ? ` e valor pra ${args.value_unit}` : ''
-          }.`,
+          }${tipoArg ? ` e tipo pra ${tipoArg}` : ''}.`,
         };
       }
 
@@ -2980,12 +3220,13 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
         product_id: productId,
         component_id: componentId,
         quantity: qty,
+        tipo: tipoArg ?? 'fabricacao',
       };
       if (args.value_unit !== undefined) payload.target_price_brl = Number(args.value_unit);
       const { data, error } = await supabase
         .from('bom_items')
         .insert(payload)
-        .select('id, component_id, quantity, target_price_brl')
+        .select('id, component_id, quantity, target_price_brl, tipo')
         .single();
       if (error) throw new Error(error.message);
       return { action: 'created', bom_item: data };
@@ -2997,6 +3238,13 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
       const payload: any = {};
       if (args.quantity !== undefined) payload.quantity = Number(args.quantity);
       if (args.value_unit !== undefined) payload.target_price_brl = Number(args.value_unit);
+      if (args.tipo !== undefined) {
+        const t = String(args.tipo).toLowerCase();
+        if (t !== 'fabricacao' && t !== 'acervo') {
+          throw new Error('tipo deve ser "fabricacao" ou "acervo".');
+        }
+        payload.tipo = t;
+      }
       if (Object.keys(payload).length === 0) throw new Error('Nada a atualizar');
       const { error } = await supabase.from('bom_items').update(payload).eq('id', id);
       if (error) throw new Error(error.message);
@@ -3761,7 +4009,7 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
       if (!componentId) throw new Error('component_id ou component_name obrigatório');
       const { data, error } = await supabase
         .from('bom_items')
-        .select('quantity, target_price_brl, product:products(id, name)')
+        .select('quantity, target_price_brl, tipo, product:products(id, name)')
         .eq('component_id', componentId);
       if (error) throw new Error(error.message);
       return {
@@ -3772,6 +4020,7 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
           product_name: b.product?.name,
           quantity_per_product: Number(b.quantity),
           value_unit_brl: b.target_price_brl != null ? Number(b.target_price_brl) : null,
+          tipo: (b.tipo === 'acervo' ? 'acervo' : 'fabricacao') as 'fabricacao' | 'acervo',
         })),
       };
     }
@@ -4020,6 +4269,7 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
         name: string; sku?: string; quantity: number; unit?: string;
         target_price_brl?: number; value_unit?: number; price?: number;
         tipo?: 'fabricacao' | 'acervo';
+        mount_type?: string;
       }>;
       if (!components.length) throw new Error('Informe pelo menos um componente.');
 
@@ -4061,25 +4311,33 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
         // Busca por SKU exato primeiro, depois fuzzy por nome
         let compRow: any = null;
         if (comp.sku) {
-          const { data } = await supabase.from('components').select('id, name').ilike('sku', comp.sku).maybeSingle();
+          const { data } = await supabase.from('components').select('id, name, mount_type').ilike('sku', comp.sku).maybeSingle();
           compRow = data;
         }
         if (!compRow) {
-          const { data } = await supabase.from('components').select('id, name').ilike('name', `%${comp.name}%`).limit(1);
+          const { data } = await supabase.from('components').select('id, name, mount_type').ilike('name', `%${comp.name}%`).limit(1);
           compRow = (data as any[])?.[0] ?? null;
         }
 
+        const mountType = normalizeMountType(comp.mount_type, comp.name);
+
         if (compRow) {
           componentId = compRow.id;
+          // Se detectamos mount_type pelo nome e o componente ainda não tinha, preenche
+          if (mountType && !compRow.mount_type) {
+            await supabase.from('components').update({ mount_type: mountType }).eq('id', componentId);
+          }
         } else {
           // Cria componente automaticamente
+          const insertPayload: any = {
+            name: comp.name.trim(),
+            sku: comp.sku?.trim() ?? null,
+            unit: comp.unit ?? 'un',
+          };
+          if (mountType) insertPayload.mount_type = mountType;
           const { data: newComp, error: compErr } = await supabase
             .from('components')
-            .insert({
-              name: comp.name.trim(),
-              sku: comp.sku?.trim() ?? null,
-              unit: comp.unit ?? 'un',
-            })
+            .insert(insertPayload)
             .select('id')
             .single();
           if (compErr) throw new Error(`Erro ao criar componente "${comp.name}": ${compErr.message}`);
@@ -5903,11 +6161,12 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
       const product = (prods as any[])?.[0];
       if (!product) throw new Error(`Produto "${productName}" não encontrado.`);
 
-      // Busca BOM
+      // Busca BOM (apenas itens de fabricação — produção/montagem não consome acervo)
       const { data: bom } = await supabase
         .from('bom_items')
-        .select('quantity, component:components(id, name, sku, unit)')
-        .eq('product_id', product.id);
+        .select('quantity, tipo, component:components(id, name, sku, unit)')
+        .eq('product_id', product.id)
+        .eq('tipo', 'fabricacao');
       if (!bom?.length) throw new Error(`${product.name} não tem BOM cadastrado.`);
 
       // Cria a ordem
@@ -6154,6 +6413,7 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
         return {
           component:        b.component_name,
           qty_per_unit:     b.quantity,
+          tipo:             b.tipo,
           stock:            qty,
           reserved:         reserved,
           available:        available,
@@ -6190,13 +6450,14 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
       const product = (products as any[])?.[0];
       if (!product) return { feasible: false, message: `Produto "${productName}" não encontrado no catálogo.` };
 
-      // Busca BOM completo do produto
+      // Busca BOM completo do produto (apenas fabricação — produção/montagem não consome acervo)
       const { data: bom } = await supabase
         .from('bom_items')
-        .select('quantity, component:components(id, name, sku, unit)')
-        .eq('product_id', product.id);
+        .select('quantity, tipo, component:components(id, name, sku, unit)')
+        .eq('product_id', product.id)
+        .eq('tipo', 'fabricacao');
 
-      if (!bom?.length) return { feasible: false, message: `${product.name} não tem BOM cadastrado. Cadastre os componentes primeiro.` };
+      if (!bom?.length) return { feasible: false, message: `${product.name} não tem BOM de fabricação cadastrado. Cadastre os componentes primeiro.` };
 
       // Para cada componente do BOM, busca estoque disponível
       const analysis: any[] = [];
@@ -6360,12 +6621,14 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
       const product = (products as any[])?.[0];
       if (!product) throw new Error(`Produto "${productName}" não encontrado.`);
 
+      // Apenas itens de fabricação descontam estoque na produção (acervo é embalagem/etiqueta)
       const { data: bom } = await supabase
         .from('bom_items')
-        .select('quantity, component:components(id, name, sku, unit)')
-        .eq('product_id', product.id);
+        .select('quantity, tipo, component:components(id, name, sku, unit)')
+        .eq('product_id', product.id)
+        .eq('tipo', 'fabricacao');
 
-      if (!bom?.length) throw new Error(`${product.name} não tem BOM cadastrado.`);
+      if (!bom?.length) throw new Error(`${product.name} não tem BOM de fabricação cadastrado.`);
 
       const results: any[] = [];
       for (const item of bom as any[]) {
@@ -6658,11 +6921,12 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
             itemAnalysis.push({ item: prod.name, type: 'revenda', needed: qty, available, can_fulfill: canFulfill, missing: Math.max(0, qty - available) });
 
           } else {
-            // Fabricação — cruza BOM × estoque de componentes
+            // Fabricação — cruza BOM × estoque de componentes (apenas tipo='fabricacao')
             const { data: bom } = await supabase
               .from('bom_items')
               .select('quantity, component:components(id, name, sku)')
-              .eq('product_id', prod.id);
+              .eq('product_id', prod.id)
+              .eq('tipo', 'fabricacao');
 
             if (!bom?.length) {
               itemAnalysis.push({ item: prod.name, type: 'fabricacao', needed: qty, can_fulfill: false, note: 'BOM não cadastrado' });

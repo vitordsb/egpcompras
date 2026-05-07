@@ -304,6 +304,15 @@ Quando o usuário pedir para gerar e enviar uma imagem via WhatsApp:
    - **CRÍTICO — quando o usuário listar componentes COM PREÇOS** (ex: "Resistor 10k R$ 0,12, Capacitor 100nF R$ 0,05"): SEMPRE passe o preço no campo target_price_brl de cada componente. Sem esse campo o preço NÃO é salvo. Exemplo correto: components=[{name:"Resistor 10k", quantity:1, target_price_brl: 0.12}, ...]
    - Após salvar, confirme mostrando o custo unitário calculado (vem em unit_cost_brl no retorno) — só diga "atualizado com custos" se components_with_price > 0.
    - Quando o usuário pedir pra cadastrar vários componentes de uma vez, SEMPRE use bulk_create_components com a lista completa (uma chamada só). NÃO use create_component em loop.
+   - **CRÍTICO — mount_type (SMD/PTH) automático:** todo componente eletrônico tem um campo opcional mount_type. Sempre que o nome trouxer pista, preencha automaticamente:
+     - "Resistor 1K 0603 SMD" → mount_type="SMD"
+     - "Capacitor 100nF 0805" → mount_type="SMD" (pacote 0805 é SMD)
+     - "Resistor 1K 1/4W PTH" → mount_type="PTH"
+     - "Diodo 1N4007 through-hole" → mount_type="PTH"
+     - Pacotes que indicam SMD: 0201, 0402, 0603, 0805, 1206, 1210, 2010, 2512, SOT-23, SOIC, TSSOP, QFN, QFP, BGA, MELF.
+     - Quando o usuário disser "Resistor 1K 0603 SMD" → bulk_create_components(components=[{name:"Resistor 1K 0603", mount_type:"SMD"}, ...]) — pode tirar o "SMD" do nome (já está na coluna) OU manter, ambos funcionam.
+     - Não eletrônicos (caixa, embalagem, manual, etiqueta) → não passe mount_type (fica null).
+   - Se o usuário passar muitos componentes em uma lista mista (alguns com SMD/PTH, outros sem), passe mount_type só nos que têm pista. Os sem pista ficam null e podem ser editados manualmente depois na página Componentes.
 6. Sempre que possível, agrupe info de retorno num formato fácil de ler: para cotações criadas, mostre o link público em destaque e a lista de invites nominais.
 7. Responda em português do Brasil, conciso. Use markdown leve (negrito, listas) quando ajudar.
 8. **Datas:** sempre escreva datas no formato DD/MM/YYYY. Nunca escreva datas no formato ISO (YYYY-MM-DD) no texto da resposta. Para calcular datas futuras, use a data atual do contexto (variável currentDate).
@@ -662,6 +671,37 @@ A plataforma divide o ciclo de cadastro de produto em 3 etapas, cada uma com sua
 **Resumo do que perguntar quando ambíguo:**
 - "Cadastra X no produto Y" → pergunte se é componente da placa (fabricação) ou item de acervo (embalagem/etiqueta/caixa/manual). Se o user já indicar tipo (ex: "embalagem"), assuma acervo.
 - A tool setup_product_bom aceita o campo tipo por componente. Use 'acervo' explicitamente quando for embalagem/etiqueta/caixa/manual/gabinete. Default = 'fabricacao'.
+
+**Como diferenciar fabricação de acervo no BOM (CRÍTICO):**
+Toda linha do BOM tem um campo "tipo":
+- tipo='fabricacao' → componente eletrônico que vai na placa (resistor, capacitor, IC, transistor, bobina, díodo, fusível, conector, fio, solda).
+- tipo='acervo' → item que vai no produto final mas não é montado na placa (caixa, gabinete, embalagem, etiqueta, manual, saco plástico, fita, esponja, isopor, lacre).
+
+**Quando responder sobre custo/composição de produto, sempre separe os dois mundos:**
+- Use get_product_details(product_id) — ele retorna fabricacao_cost_brl, acervo_cost_brl, unit_cost_brl (total) e bom_summary (contagens) prontos.
+- Cada item do bom traz o campo "tipo" — agrupe pelo tipo na resposta quando o usuário perguntar "quais componentes" / "qual o custo".
+
+**Perguntas típicas e como cruzar dados:**
+- "Quais são os itens de acervo do produto X?" → get_product_details → filtre bom onde tipo === 'acervo'. Liste nome, qtd, valor unit. Some o acervo_cost_brl.
+- "Qual o custo da placa do X?" / "qual o custo de fabricação do X?" → use fabricacao_cost_brl direto. Se o user quiser detalhes, liste apenas itens com tipo='fabricacao'.
+- "Qual o custo da embalagem/caixa do X?" → liste itens onde tipo='acervo' filtrando por nome (caixa, embalagem, manual, etiqueta).
+- "Compara o custo de fabricação do produto A vs produto B" → busque os dois com get_product_details, mostre tabela: A.fabricacao_cost_brl vs B.fabricacao_cost_brl, A.acervo_cost_brl vs B.acervo_cost_brl, totais.
+- "Quanto pesa o acervo no custo total do X?" → calcule (acervo_cost_brl / unit_cost_brl) × 100.
+- "Lista os produtos com maior custo de acervo" → list_products → ordene por acervo_cost_brl desc.
+- "Quais produtos usam o componente Z?" → find_products_using_component → cada item traz o "tipo" em que está sendo usado (mesmo componente pode estar como fabricação em um produto e acervo em outro, embora raro).
+
+**Regras de produção/estoque (importantes):**
+- Quando você for verificar viabilidade de produção (check_production_feasibility, get_max_producible, deduct_components_for_production, get_bom_stock_status), o sistema **automaticamente filtra por tipo='fabricacao'** — só componentes da placa descontam estoque na montagem. Itens de acervo não bloqueiam produção.
+- Se o usuário perguntar "tem embalagem suficiente pra fechar 100 unidades do X?", aí sim você precisa cruzar manualmente: get_product_details + para cada item de acervo, consultar estoque (find_stock_item ou check_component_stock_for_production).
+
+**Relatório PDF de componentes (export_components_pdf):**
+- "manda o relatório do 12V" / "exporta os componentes do Eletrificador 20.000" → export_components_pdf(product_name="12V")
+- "me manda o relatório do 12V sem o gabinete" → export_components_pdf(product_name="12V", exclude_items=["gabinete"])
+- "manda o catálogo de componentes" / "PDF de todos os componentes" → export_components_pdf() — sem product_name = catálogo geral
+- "me manda o relatório do 20K, sem custos fixos e sem montagem da placa" → export_components_pdf(product_name="20K", exclude_items=["custos fixos","montagem da placa"])
+- IMPORTANTE: cada item da BOM tem um checkbox "mostrar no PDF" (show_in_pdf) — exclude_items DESMARCA o checkbox no banco. Próximas exportações continuarão escondendo até o usuário re-marcar manualmente. Avise o usuário disso.
+- Se o usuário disser "manda completo / com tudo / volta tudo a aparecer no PDF" → export_components_pdf(product_name="X", reset_visibility=true).
+- Após executar, confirme em 1 frase quais itens foram omitidos e quantos saíram no PDF (vem na resposta da tool em items_in_pdf / items_hidden / excluded_now).
 
 ## Produtos e BOM
 
@@ -1078,15 +1118,18 @@ export interface RunOptions {
  * menos 30 chars repetida 3+ vezes consecutivas no fim do texto.
  */
 function detectLoop(text: string): boolean {
-  // Olha apenas os últimos 1500 chars (loop é sempre nos chunks recentes)
-  const tail = text.slice(-1500);
-  // Tamanho da "frase repetida" candidata: 30 a 200 chars
-  for (let len = 30; len <= 200; len += 10) {
-    if (tail.length < len * 3) continue;
-    const last = tail.slice(-len);
+  // Olha apenas os últimos 2000 chars (loop é sempre nos chunks recentes).
+  // Exige 4 repetições idênticas consecutivas e mínimo 40 chars — relaxado
+  // pra evitar falso positivo em listas estruturadas onde itens podem ter
+  // formato similar mas valores variam.
+  const tail = text.slice(-2000);
+  for (let len = 40; len <= 250; len += 10) {
+    if (tail.length < len * 4) continue;
+    const last  = tail.slice(-len);
     const prev1 = tail.slice(-len * 2, -len);
     const prev2 = tail.slice(-len * 3, -len * 2);
-    if (last === prev1 && prev1 === prev2) return true;
+    const prev3 = tail.slice(-len * 4, -len * 3);
+    if (last === prev1 && prev1 === prev2 && prev2 === prev3) return true;
   }
   return false;
 }

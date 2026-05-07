@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { supabase } from '@/lib/supabase';
-import type { Component } from '@/types/db';
+import type { Component, ComponentMountType } from '@/types/db';
 import { Button } from '@/components/ui/Button';
 import { Card, CardBody } from '@/components/ui/Card';
 import { Input, Label } from '@/components/ui/Input';
@@ -10,6 +10,7 @@ import { ConfirmModal } from '@/components/ui/ConfirmModal';
 import { useBodyScrollLock } from '@/hooks/useBodyScrollLock';
 import { cn } from '@/lib/utils';
 import { friendlyDbError } from '@/lib/db-error';
+import { exportComponentsByProduct, exportComponentsGeneral } from './components-pdf';
 
 interface BomEditRow {
   /** id do bom_items existente. null = linha nova (insert no submit) */
@@ -27,6 +28,8 @@ interface FormState {
   id: string | null;
   name: string;
   originalName: string;
+  /** Tipo de montagem na placa: SMD, PTH ou null (não eletrônico / não especificado) */
+  mountType: ComponentMountType | null;
   /** Em quantos produtos este componente é usado (calculado ao abrir o modal). */
   usageCount: number;
   /** Linhas editáveis do bom — cada linha = 1 produto que usa este componente */
@@ -43,6 +46,7 @@ const emptyForm: FormState = {
   id: null,
   name: '',
   originalName: '',
+  mountType: null,
   usageCount: 0,
   usageRows: [],
   usageRowsOriginal: [],
@@ -65,6 +69,7 @@ interface BomLink {
   target_price_brl: number | null;
   tipo: BomTipo;
   quantity: number;
+  show_in_pdf: boolean;
   created_at: string;
 }
 
@@ -99,7 +104,7 @@ export default function ComponentsPage() {
     const [{ data: comps, error: ce }, { data: prods }, { data: links }] = await Promise.all([
       supabase.from('components').select('*').order('name'),
       supabase.from('products').select('id, name').order('name'),
-      supabase.from('bom_items').select('id, product_id, component_id, target_price_brl, tipo, quantity, created_at'),
+      supabase.from('bom_items').select('id, product_id, component_id, target_price_brl, tipo, quantity, show_in_pdf, created_at'),
     ]);
     if (ce) setError(ce.message);
     else setComponents((comps ?? []) as Component[]);
@@ -139,6 +144,7 @@ export default function ComponentsPage() {
       id: c.id,
       name: c.name,
       originalName: c.name,
+      mountType: (c as any).mount_type ?? null,
       usageCount: totalUsageCount,
       usageRows,
       usageRowsOriginal: usageRows.map((r) => ({ ...r })),
@@ -246,7 +252,10 @@ export default function ComponentsPage() {
     }
     setSaving(true);
 
-    const payload = { name: form.name.trim() };
+    const payload: Record<string, unknown> = {
+      name: form.name.trim(),
+      mount_type: form.mountType,
+    };
 
     try {
       if (form.id) {
@@ -402,6 +411,29 @@ export default function ComponentsPage() {
     cancelEditQty();
   }
 
+  /**
+   * Toggle do checkbox "mostrar no PDF" para um bom_item específico.
+   * Usado quando há filtro de produto: marca/desmarca o item que vai aparecer
+   * no relatório PDF do produto.
+   */
+  async function toggleShowInPdf(bomItemId: string, current: boolean) {
+    // Otimista: atualiza UI primeiro, depois banco
+    setBomLinks((prev) =>
+      prev.map((l) => (l.id === bomItemId ? { ...l, show_in_pdf: !current } : l))
+    );
+    const { error: updErr } = await supabase
+      .from('bom_items')
+      .update({ show_in_pdf: !current })
+      .eq('id', bomItemId);
+    if (updErr) {
+      // Reverte se deu erro
+      setBomLinks((prev) =>
+        prev.map((l) => (l.id === bomItemId ? { ...l, show_in_pdf: current } : l))
+      );
+      toast.error('Falha ao atualizar', friendlyDbError(updErr));
+    }
+  }
+
 
   async function remove(c: Component) {
     const usageLinks = bomLinks.filter((l) => l.component_id === c.id);
@@ -515,6 +547,21 @@ export default function ComponentsPage() {
     ? products.find((p) => p.id === productFilter)?.name ?? ''
     : '';
 
+  function handleExport() {
+    if (productFilter) {
+      const product = products.find((p) => p.id === productFilter);
+      if (!product) {
+        toast.error('Erro', 'Produto do filtro não encontrado.');
+        return;
+      }
+      exportComponentsByProduct(product, components, bomLinks);
+      toast.success('PDF gerado', `Composição do ${product.name} exportada.`);
+    } else {
+      exportComponentsGeneral(components, bomLinks);
+      toast.success('PDF gerado', `Catálogo com ${components.length} componentes.`);
+    }
+  }
+
   return (
     <div className="p-8">
       <div className="mb-6 flex items-center justify-between gap-4">
@@ -524,7 +571,21 @@ export default function ComponentsPage() {
             Catálogo de matérias-primas usado nas BOMs dos produtos.
           </p>
         </div>
-        <Button onClick={openCreate}>+ Novo componente</Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="secondary"
+            onClick={handleExport}
+            disabled={loading || components.length === 0}
+            title={
+              productFilter
+                ? `Exportar PDF com fabricação + acervo do ${filteredProductName}`
+                : 'Exportar PDF do catálogo completo'
+            }
+          >
+            ↓ Exportar PDF
+          </Button>
+          <Button onClick={openCreate}>+ Novo componente</Button>
+        </div>
       </div>
 
       <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center">
@@ -590,7 +651,13 @@ export default function ComponentsPage() {
             <table className="w-full text-sm">
               <thead className="border-b border-slate-200 bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
                 <tr>
+                  {productFilter && (
+                    <th className="px-3 py-3 text-center" title="Marca/desmarca para incluir no PDF de exportação">
+                      PDF
+                    </th>
+                  )}
                   <th className="px-5 py-3">Nome</th>
+                  <th className="px-5 py-3 text-center">Tipo</th>
                   <th className="px-5 py-3 text-center">
                     {productFilter ? 'Qtd / produto' : 'Usado em'}
                   </th>
@@ -612,10 +679,47 @@ export default function ComponentsPage() {
                     cost = sorted.find((l) => l.target_price_brl != null)?.target_price_brl ?? null;
                   }
 
+                  const mountType = (c as any).mount_type as ComponentMountType | null;
+                  const filterLink = productFilter
+                    ? links.find((l) => l.product_id === productFilter)
+                    : null;
+                  const showInPdf = filterLink ? filterLink.show_in_pdf !== false : true;
                   return (
-                    <tr key={c.id} className="border-b border-slate-100 last:border-0">
+                    <tr key={c.id} className={cn(
+                      'border-b border-slate-100 last:border-0',
+                      productFilter && !showInPdf && 'bg-slate-50/70 text-slate-400'
+                    )}>
+                      {productFilter && (
+                        <td className="px-3 py-3 text-center">
+                          {filterLink ? (
+                            <input
+                              type="checkbox"
+                              checked={showInPdf}
+                              onChange={() => toggleShowInPdf(filterLink.id, showInPdf)}
+                              title={showInPdf ? 'Aparece no PDF — clique para esconder' : 'Oculto no PDF — clique para mostrar'}
+                              className="h-4 w-4 cursor-pointer rounded border-slate-300 text-brand-600 focus:ring-brand-500"
+                            />
+                          ) : (
+                            <span className="text-xs text-slate-300">—</span>
+                          )}
+                        </td>
+                      )}
                       <td className="px-5 py-3 font-medium text-slate-900">
                         {c.name}
+                      </td>
+                      <td className="px-5 py-3 text-center">
+                        {mountType ? (
+                          <span className={cn(
+                            'inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide',
+                            mountType === 'SMD'
+                              ? 'border-purple-200 bg-purple-50 text-purple-700'
+                              : 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                          )}>
+                            {mountType}
+                          </span>
+                        ) : (
+                          <span className="text-xs text-slate-300">—</span>
+                        )}
                       </td>
                       <td className="px-5 py-3 text-center text-slate-600">
                         {productFilter ? (() => {
@@ -771,15 +875,35 @@ export default function ComponentsPage() {
                     {error}
                   </div>
                 )}
-                <div>
-                  <Label htmlFor="cmp-name">Nome *</Label>
-                  <Input
-                    id="cmp-name"
-                    value={form.name}
-                    onChange={(e) => setForm({ ...form, name: e.target.value })}
-                    placeholder="Ex: Indutor 47nh"
-                    autoFocus
-                  />
+                <div className="grid gap-3 sm:grid-cols-[1fr_140px]">
+                  <div>
+                    <Label htmlFor="cmp-name">Nome *</Label>
+                    <Input
+                      id="cmp-name"
+                      value={form.name}
+                      onChange={(e) => setForm({ ...form, name: e.target.value })}
+                      placeholder="Ex: Resistor 1K 0603 SMD"
+                      autoFocus
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor="cmp-mount">Montagem</Label>
+                    <select
+                      id="cmp-mount"
+                      value={form.mountType ?? ''}
+                      onChange={(e) =>
+                        setForm({
+                          ...form,
+                          mountType: (e.target.value || null) as ComponentMountType | null,
+                        })
+                      }
+                      className="block w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
+                    >
+                      <option value="">— (não eletrônico)</option>
+                      <option value="SMD">SMD (superfície)</option>
+                      <option value="PTH">PTH (furo passante)</option>
+                    </select>
+                  </div>
                 </div>
 
                 {/* Criação direta vinculada a um produto — só ativa quando há filtro de produto */}

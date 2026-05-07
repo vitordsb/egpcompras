@@ -5,6 +5,8 @@ export type Currency = 'BRL' | 'USD';
 export type QuotationStatus = 'draft' | 'sent' | 'closed';
 export type InviteStatus = 'pending' | 'sent' | 'opened' | 'responded' | 'expired';
 
+export type ComponentMountType = 'SMD' | 'PTH';
+
 export interface Component {
   id: string;
   sku: string | null;
@@ -14,6 +16,8 @@ export interface Component {
   unit: string;
   /** Quando este componente é uma "variante" (fork) de outro, aponta pro pai */
   parent_component_id: string | null;
+  /** Tipo de montagem na placa — opcional, só pra componentes eletrônicos */
+  mount_type: ComponentMountType | null;
   created_at: string;
 }
 
