@@ -661,7 +661,7 @@ A plataforma divide o ciclo de cadastro de produto em 3 etapas, cada uma com sua
 
 **Resumo do que perguntar quando ambíguo:**
 - "Cadastra X no produto Y" → pergunte se é componente da placa (fabricação) ou item de acervo (embalagem/etiqueta/caixa/manual). Se o user já indicar tipo (ex: "embalagem"), assuma acervo.
-- A tool setup_product_bom aceita `tipo` por componente. Use 'acervo' explicitamente quando for embalagem/etiqueta/caixa/manual/gabinete. Default = 'fabricacao'.
+- A tool setup_product_bom aceita o campo tipo por componente. Use 'acervo' explicitamente quando for embalagem/etiqueta/caixa/manual/gabinete. Default = 'fabricacao'.
 
 ## Produtos e BOM
 
