@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { supabase } from '@/lib/supabase';
-import type { BomItem, Component, Product, ProductWithCost } from '@/types/db';
+import type { Component, Product, ProductWithCost } from '@/types/db';
 import { Button } from '@/components/ui/Button';
 import { Card, CardBody } from '@/components/ui/Card';
 import { Input, Label, Textarea } from '@/components/ui/Input';
@@ -9,11 +9,15 @@ import { useToast } from '@/components/ui/Toast';
 
 const BOM_PAGE_SIZE = 5;
 
+type BomTipo = 'fabricacao' | 'acervo';
+
 interface BomRow {
   id?: string;
   component_id: string;
+  component_name?: string;
   quantity: number | null;
   target_price_brl: number | null;
+  tipo: BomTipo;
   notes: string | null;
 }
 
@@ -80,7 +84,7 @@ export default function CostsPage() {
     setBomPage(0);
     const { data: bomData, error } = await supabase
       .from('bom_items')
-      .select('*')
+      .select('*, component:components(id, name)')
       .eq('product_id', p.id);
     if (error) {
       setFormError(error.message);
@@ -90,11 +94,13 @@ export default function CostsPage() {
       id: p.id,
       name: p.name,
       description: p.description ?? '',
-      bom: ((bomData ?? []) as BomItem[]).map((b) => ({
+      bom: ((bomData ?? []) as any[]).map((b) => ({
         id: b.id,
         component_id: b.component_id,
+        component_name: b.component?.name ?? '',
         quantity: Number(b.quantity),
         target_price_brl: b.target_price_brl != null ? Number(b.target_price_brl) : null,
+        tipo: (b.tipo ?? 'fabricacao') as BomTipo,
         notes: b.notes,
       })),
     });
@@ -111,12 +117,16 @@ export default function CostsPage() {
 
   function addRow() {
     if (!form) return;
-    const next = [
+    // Custos = adiciona apenas itens de acervo (embalagens, etiquetas, gabinetes...)
+    // Itens de fabricação (componentes da placa) são gerenciados em Componentes.
+    const next: BomRow[] = [
       ...form.bom,
-      { component_id: '', quantity: null, target_price_brl: null, notes: null },
+      { component_id: '', quantity: null, target_price_brl: null, notes: null, tipo: 'acervo' },
     ];
     patchForm({ bom: next });
-    setBomPage(Math.floor((next.length - 1) / BOM_PAGE_SIZE));
+    // Pula pra última página da lista de acervo
+    const acervoCount = next.filter((r) => r.tipo === 'acervo').length;
+    setBomPage(Math.floor((acervoCount - 1) / BOM_PAGE_SIZE));
   }
 
   function updateRow(idx: number, patch: Partial<BomRow>) {
@@ -140,11 +150,12 @@ export default function CostsPage() {
       setFormError('Nome é obrigatório.');
       return;
     }
-    const invalid = form.bom.find(
-      (r) => !r.component_id || r.quantity == null || r.quantity <= 0
+    // Valida apenas itens de acervo (os de fabricação são read-only, vêm de Componentes)
+    const invalidAcervo = form.bom.find(
+      (r) => r.tipo === 'acervo' && (!r.component_id || r.quantity == null || r.quantity <= 0)
     );
-    if (invalid) {
-      setFormError('Cada componente da lista precisa estar selecionado e com quantidade > 0.');
+    if (invalidAcervo) {
+      setFormError('Cada item de acervo precisa estar selecionado e com quantidade > 0.');
       return;
     }
     setSaving(true);
@@ -176,18 +187,28 @@ export default function CostsPage() {
       productId = data.id as string;
     }
 
-    // Re-grava BOM
-    await supabase.from('bom_items').delete().eq('product_id', productId);
-    if (form.bom.length > 0) {
-      const { error: insErr } = await supabase.from('bom_items').insert(
-        form.bom.map((r) => ({
-          product_id: productId,
-          component_id: r.component_id,
-          quantity: r.quantity,
-          target_price_brl: r.target_price_brl,
-          notes: r.notes,
-        }))
-      );
+    // ATENÇÃO: a CostsPage só gerencia itens de ACERVO. Itens de fabricação
+    // (vindo de Componentes) NÃO são tocados aqui — preserva o que foi
+    // cadastrado lá.
+    // Estratégia: apaga só os bom_items tipo='acervo' deste produto e
+    // reinsere os do form com tipo='acervo'.
+    await supabase
+      .from('bom_items')
+      .delete()
+      .eq('product_id', productId)
+      .eq('tipo', 'acervo');
+    const acervoToInsert = form.bom
+      .filter((r) => r.tipo === 'acervo' && r.component_id && r.quantity != null && r.quantity > 0)
+      .map((r) => ({
+        product_id: productId,
+        component_id: r.component_id,
+        quantity: r.quantity,
+        target_price_brl: r.target_price_brl,
+        tipo: 'acervo' as const,
+        notes: r.notes,
+      }));
+    if (acervoToInsert.length > 0) {
+      const { error: insErr } = await supabase.from('bom_items').insert(acervoToInsert);
       if (insErr) {
         setFormError(insErr.message);
         setSaving(false);
@@ -376,37 +397,101 @@ export default function CostsPage() {
                   />
                 </div>
 
-                <div>
+                {/* === Painel: Fabricação (read-only — vem de Componentes) === */}
+                <div className="rounded-md border border-blue-200 bg-blue-50/30 p-3">
                   <div className="mb-2 flex items-center justify-between">
-                    <Label className="!mb-0">Componentes do produto</Label>
+                    <Label className="!mb-0 text-blue-800">
+                      Fabricação (placa eletrônica)
+                    </Label>
+                    <span className="text-xs text-blue-700">
+                      somente leitura — edite em <strong>Componentes</strong>
+                    </span>
+                  </div>
+                  {(() => {
+                    const fabricacaoItems = form.bom.filter((r) => r.tipo === 'fabricacao');
+                    if (fabricacaoItems.length === 0) {
+                      return (
+                        <p className="rounded bg-white border border-dashed border-blue-200 px-3 py-3 text-xs text-slate-500">
+                          Nenhum componente de fabricação cadastrado. Vá em <strong>Componentes</strong> e adicione com o filtro deste produto ativo.
+                        </p>
+                      );
+                    }
+                    const subtotal = fabricacaoItems.reduce(
+                      (s, r) => s + Number(r.target_price_brl ?? 0) * Number(r.quantity || 0),
+                      0
+                    );
+                    return (
+                      <>
+                        <div className="space-y-1">
+                          {fabricacaoItems.slice(0, 6).map((r, i) => (
+                            <div key={r.id ?? i} className="flex items-center justify-between rounded border border-blue-100 bg-white px-2 py-1 text-xs">
+                              <span className="truncate text-slate-700">
+                                {r.component_name || components.find((c) => c.id === r.component_id)?.name || '(componente)'}
+                              </span>
+                              <span className="ml-2 shrink-0 text-slate-500 tabular-nums">
+                                {r.quantity}× {r.target_price_brl != null ? formatBRL(Number(r.target_price_brl)) : '—'}
+                              </span>
+                            </div>
+                          ))}
+                          {fabricacaoItems.length > 6 && (
+                            <p className="text-[11px] text-blue-600">
+                              + {fabricacaoItems.length - 6} {fabricacaoItems.length - 6 === 1 ? 'item' : 'itens'} (ver lista completa em Componentes)
+                            </p>
+                          )}
+                        </div>
+                        <div className="mt-2 flex items-center justify-between border-t border-blue-200 pt-2">
+                          <span className="text-xs text-blue-800">
+                            {fabricacaoItems.length} {fabricacaoItems.length === 1 ? 'item' : 'itens'} de fabricação
+                          </span>
+                          <span className="text-sm font-semibold text-blue-900">
+                            Subtotal: {formatBRL(subtotal)}
+                          </span>
+                        </div>
+                      </>
+                    );
+                  })()}
+                </div>
+
+                {/* === Painel: Acervo (editável aqui) === */}
+                <div className="rounded-md border border-amber-200 bg-amber-50/30 p-3">
+                  <div className="mb-2 flex items-center justify-between">
+                    <Label className="!mb-0 text-amber-800">
+                      Acervo (embalagens, etiquetas, gabinetes, manuais…)
+                    </Label>
                     <Button type="button" variant="secondary" size="sm" onClick={addRow}>
-                      + adicionar
+                      + adicionar item de acervo
                     </Button>
                   </div>
-                  <p className="mb-2 text-xs text-slate-500">
-                    Quantidade que vai em <strong>cada unidade</strong> do produto. A soma do total
-                    de cada linha é o <strong>custo unitário</strong> do produto.
-                  </p>
-                  {form.bom.length === 0 ? (
-                    <p className="text-sm text-slate-500">Nenhum componente adicionado.</p>
-                  ) : (
-                    <>
-                      <div className="overflow-x-auto rounded-md border border-slate-200">
-                        <table className="w-full text-sm">
-                          <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
-                            <tr>
-                              <th className="py-2 px-3">Componente</th>
-                              <th className="py-2 px-3 w-24">Qtd / produto</th>
-                              <th className="py-2 px-3 w-32">Valor unit. (R$)</th>
-                              <th className="py-2 px-3 w-32 text-right">Total</th>
-                              <th className="py-2 px-3 w-10"></th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {form.bom
-                              .slice(bomPage * BOM_PAGE_SIZE, bomPage * BOM_PAGE_SIZE + BOM_PAGE_SIZE)
-                              .map((row, relIdx) => {
-                                const idx = bomPage * BOM_PAGE_SIZE + relIdx;
+                  {(() => {
+                    const acervoRows = form.bom
+                      .map((r, idx) => ({ row: r, idx }))
+                      .filter(({ row }) => row.tipo === 'acervo');
+                    if (acervoRows.length === 0) {
+                      return (
+                        <p className="rounded bg-white border border-dashed border-amber-200 px-3 py-3 text-xs text-slate-500">
+                          Nenhum item de acervo. Clique em <strong>+ adicionar item de acervo</strong> pra incluir embalagens, etiquetas, caixas, manuais ou gabinetes.
+                        </p>
+                      );
+                    }
+                    const subtotal = acervoRows.reduce(
+                      (s, { row }) => s + Number(row.target_price_brl ?? 0) * Number(row.quantity || 0),
+                      0
+                    );
+                    return (
+                      <>
+                        <div className="overflow-x-auto rounded-md border border-amber-200 bg-white">
+                          <table className="w-full text-sm">
+                            <thead className="bg-amber-50 text-left text-xs uppercase tracking-wide text-amber-800">
+                              <tr>
+                                <th className="py-2 px-3">Item de acervo</th>
+                                <th className="py-2 px-3 w-24">Qtd / produto</th>
+                                <th className="py-2 px-3 w-32">Valor unit. (R$)</th>
+                                <th className="py-2 px-3 w-32 text-right">Total</th>
+                                <th className="py-2 px-3 w-10"></th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {acervoRows.map(({ row, idx }) => {
                                 const subtotal =
                                   Number(row.target_price_brl ?? 0) * Number(row.quantity || 0);
                                 const usedElsewhere = new Set(
@@ -419,7 +504,7 @@ export default function CostsPage() {
                                   (c) => c.id === row.component_id || !usedElsewhere.has(c.id)
                                 );
                                 return (
-                                  <tr key={idx} className="border-t border-slate-100">
+                                  <tr key={idx} className="border-t border-amber-100">
                                     <td className="py-2 px-3">
                                       <select
                                         value={row.component_id}
@@ -484,52 +569,37 @@ export default function CostsPage() {
                                   </tr>
                                 );
                               })}
-                            <tr className="border-t border-slate-200 bg-slate-50 font-medium">
-                              <td className="py-2 px-3" colSpan={3}>
-                                Custo unitário do produto
-                              </td>
-                              <td className="py-2 px-3 text-right">{formatBRL(totalCostBRL)}</td>
-                              <td></td>
-                            </tr>
-                          </tbody>
-                        </table>
-                      </div>
-                      {form.bom.length > BOM_PAGE_SIZE && (
-                        <div className="mt-2 flex items-center justify-end gap-2 text-xs text-slate-600">
-                          <button
-                            type="button"
-                            onClick={() => setBomPage((p) => Math.max(0, p - 1))}
-                            disabled={bomPage === 0}
-                            className="rounded border border-slate-300 px-2 py-1 hover:bg-slate-50 disabled:opacity-40"
-                          >
-                            ‹
-                          </button>
-                          <span>
-                            Página {bomPage + 1} de {Math.ceil(form.bom.length / BOM_PAGE_SIZE)}
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setBomPage((p) =>
-                                Math.min(Math.ceil(form.bom.length / BOM_PAGE_SIZE) - 1, p + 1)
-                              )
-                            }
-                            disabled={bomPage >= Math.ceil(form.bom.length / BOM_PAGE_SIZE) - 1}
-                            className="rounded border border-slate-300 px-2 py-1 hover:bg-slate-50 disabled:opacity-40"
-                          >
-                            ›
-                          </button>
+                              <tr className="border-t border-amber-200 bg-amber-50 font-medium">
+                                <td className="py-2 px-3" colSpan={3}>
+                                  Subtotal de acervo
+                                </td>
+                                <td className="py-2 px-3 text-right text-amber-900">{formatBRL(subtotal)}</td>
+                                <td></td>
+                              </tr>
+                            </tbody>
+                          </table>
                         </div>
-                      )}
-                    </>
-                  )}
-                  {components.length === 0 && (
-                    <p className="mt-2 text-xs text-amber-600">
-                      Nenhum componente cadastrado. Cadastre na aba <strong>Componentes</strong>{' '}
-                      primeiro.
-                    </p>
-                  )}
+                      </>
+                    );
+                  })()}
                 </div>
+
+                {/* === Total (soma fabricação + acervo) === */}
+                <div className="rounded-md border-2 border-brand-300 bg-brand-50/30 p-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-semibold text-brand-900">Custo unitário do produto</span>
+                    <span className="text-lg font-bold text-brand-900">{formatBRL(totalCostBRL)}</span>
+                  </div>
+                  <p className="mt-1 text-xs text-brand-700">
+                    Fabricação + Acervo. A margem de venda é configurada na aba <strong>Vendas → Produtos</strong>.
+                  </p>
+                </div>
+
+                {components.length === 0 && (
+                  <p className="text-xs text-amber-600">
+                    Nenhum componente cadastrado. Cadastre na aba <strong>Componentes</strong> primeiro.
+                  </p>
+                )}
               </div>
 
               <div className="flex justify-end gap-3 border-t border-slate-200 px-5 py-3">
