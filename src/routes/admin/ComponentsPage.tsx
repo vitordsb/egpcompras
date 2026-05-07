@@ -9,6 +9,7 @@ import { useToast } from '@/components/ui/Toast';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
 import { useBodyScrollLock } from '@/hooks/useBodyScrollLock';
 import { cn } from '@/lib/utils';
+import { friendlyDbError } from '@/lib/db-error';
 
 interface BomEditRow {
   /** id do bom_items existente. null = linha nova (insert no submit) */
@@ -295,7 +296,7 @@ export default function ComponentsPage() {
       .eq('id', target.id);
     setSavingCostId(null);
     if (updErr) {
-      toast.error('Erro', updErr.message);
+      toast.error('Erro', friendlyDbError(updErr));
       return;
     }
     // Atualiza estado local sem refetch completo
@@ -366,7 +367,7 @@ export default function ComponentsPage() {
       .eq('id', assimilateTarget.id);
     setAssimilateSaving(false);
     if (updErr) {
-      toast.error('Erro', updErr.message);
+      toast.error('Erro', friendlyDbError(updErr));
       return;
     }
     if (parentId) {
@@ -380,15 +381,60 @@ export default function ComponentsPage() {
   }
 
   async function remove(c: Component) {
+    // Antes de pedir confirmação, conta em quantos produtos o componente
+    // está em uso (bom_items) — assim a mensagem fica clara sobre o impacto.
+    const usageLinks = bomLinks.filter((l) => l.component_id === c.id);
+    const usageCount = usageLinks.length;
+
+    if (usageCount === 0) {
+      // Sem uso — remoção direta e simples
+      setConfirm({
+        message: `Remover componente "${c.name}"?`,
+        onConfirm: async () => {
+          setConfirm(null);
+          const { error } = await supabase.from('components').delete().eq('id', c.id);
+          if (error) {
+            toast.error('Não foi possível remover', friendlyDbError(error));
+            return;
+          }
+          toast.success('Removido', `Componente "${c.name}" excluído.`);
+          await load();
+        },
+      });
+      return;
+    }
+
+    // Em uso — mostra os produtos afetados e oferece cascade
+    const affectedProductIds = new Set(usageLinks.map((l) => l.product_id));
+    const affectedProductNames = products
+      .filter((p) => affectedProductIds.has(p.id))
+      .map((p) => p.name);
+    const productsLabel = affectedProductNames.length > 3
+      ? `${affectedProductNames.slice(0, 3).join(', ')} e mais ${affectedProductNames.length - 3}`
+      : affectedProductNames.join(', ');
+
     setConfirm({
-      message: `Remover componente "${c.name}"?`,
+      message:
+        `"${c.name}" está sendo usado em ${usageCount} ${usageCount === 1 ? 'produto' : 'produtos'} (${productsLabel}). ` +
+        `Remover vai apagar das BOMs desses produtos e o custo de fabricação será recalculado. Confirma?`,
       onConfirm: async () => {
         setConfirm(null);
-        const { error } = await supabase.from('components').delete().eq('id', c.id);
-        if (error) {
-          toast.error('Erro', `Não foi possível remover: ${error.message}`);
+        // Apaga as referências da BOM primeiro
+        const { error: bomErr } = await supabase
+          .from('bom_items')
+          .delete()
+          .eq('component_id', c.id);
+        if (bomErr) {
+          toast.error('Falha ao limpar BOMs', friendlyDbError(bomErr));
           return;
         }
+        // Agora apaga o componente
+        const { error: compErr } = await supabase.from('components').delete().eq('id', c.id);
+        if (compErr) {
+          toast.error('Não foi possível remover', friendlyDbError(compErr));
+          return;
+        }
+        toast.success('Removido', `"${c.name}" excluído de ${usageCount} ${usageCount === 1 ? 'BOM' : 'BOMs'}.`);
         await load();
       },
     });
