@@ -53,11 +53,15 @@ export const geminiProvider: AgentProvider = {
         systemInstruction,
         tools: [{ functionDeclarations: tools as any }],
         temperature: 0.2,
-        // Limite alto pra dar espaço pro thinking interno (que o Flash 2.5 usa
-        // pra ler PDFs e raciocinar) + output. NÃO desligar thinking — quebra
-        // importação de PDF e comparações complexas. Deixa dinâmico (default).
+        // maxOutputTokens alto pra evitar truncar respostas longas + thinking.
+        // thinkingBudget=2048 é equilíbrio: dá raciocínio suficiente pra ler
+        // PDFs/XMLs e escolher a tool certa, mas não consome todo o output
+        // (deixando ~6k tokens pra conteúdo + tool calls). Dinâmico (-1) pode
+        // gastar tudo em thinking e cortar o output ou as tool calls; 0 quebra
+        // importação de PDF.
         maxOutputTokens: 8192,
-      },
+        thinkingConfig: { thinkingBudget: 2048 },
+      } as any,
     });
 
     const calls = response.functionCalls ?? [];
@@ -86,11 +90,15 @@ export const geminiProvider: AgentProvider = {
         systemInstruction,
         tools: [{ functionDeclarations: tools as any }],
         temperature: 0.2,
-        // Limite alto pra dar espaço pro thinking interno (que o Flash 2.5 usa
-        // pra ler PDFs e raciocinar) + output. NÃO desligar thinking — quebra
-        // importação de PDF e comparações complexas. Deixa dinâmico (default).
+        // maxOutputTokens alto pra evitar truncar respostas longas + thinking.
+        // thinkingBudget=2048 é equilíbrio: dá raciocínio suficiente pra ler
+        // PDFs/XMLs e escolher a tool certa, mas não consome todo o output
+        // (deixando ~6k tokens pra conteúdo + tool calls). Dinâmico (-1) pode
+        // gastar tudo em thinking e cortar o output ou as tool calls; 0 quebra
+        // importação de PDF.
         maxOutputTokens: 8192,
-      },
+        thinkingConfig: { thinkingBudget: 2048 },
+      } as any,
     });
 
     let lastUsage: any = undefined;
