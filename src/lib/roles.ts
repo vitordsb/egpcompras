@@ -105,7 +105,8 @@ export const PAGE_DEFINITIONS: Record<PageKey, PageDef> = {
     tools: ['get_private_label_orders','find_partial_shipment','create_shipment',
             'list_shipments','get_shipment_details','mark_shipment_status','update_shipment',
             'delete_shipment','add_shipment_observation','list_late_shipments',
-            'find_shipments_with_observations','link_document_to_shipment','add_shipment_items',
+            'find_shipments_with_observations','find_shipments_by_item',
+            'link_document_to_shipment','add_shipment_items',
             'duplicate_shipment','bulk_mark_shipped','list_client_brands','register_client_brand',
             'delete_client_brand','check_order_fulfillment','generate_shipment_report','search_all'],
   },
@@ -113,7 +114,7 @@ export const PAGE_DEFINITIONS: Record<PageKey, PageDef> = {
     label: 'Saídas',
     group: 'Expedição',
     paths: ['/admin/expedicao/saidas'],
-    tools: ['list_shipments','get_shipment_details','mark_shipment_status','search_all'],
+    tools: ['list_shipments','get_shipment_details','mark_shipment_status','find_shipments_by_item','search_all'],
   },
   financeira: {
     label: 'Financeira',

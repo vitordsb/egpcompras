@@ -2037,6 +2037,31 @@ export const toolDeclarations = [
     },
   },
   {
+    name: 'find_shipments_by_item',
+    description:
+      'Busca pedidos que contêm um item específico (cabo, sapata, controle, etc). Faz match por substring no nome do item E aplica normalização de plural/singular automaticamente — "cabos" acha "cabo coaxial", "sapatas" acha "base de haste sapata", "luzes" acha "luz de emergência". ' +
+      'Use quando o usuário pedir "quais pedidos têm cabo?", "achar pedidos com sapata", "lista pedidos com X". Mostra agrupado por pedido. ' +
+      'NÃO use list_shipments — esse não filtra por item; use ESTA tool sempre que o filtro for por produto/item.',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        term: {
+          type: 'STRING' as Type,
+          description: 'Termo a buscar no nome do item. Pode ser singular ou plural — a tool normaliza. Ex: "cabo", "cabos", "sapata", "controle 2 botões".',
+        },
+        status: {
+          type: 'STRING' as Type,
+          description: 'Filtro opcional: "pending" (pendentes) | "shipped" (saíram) | "all" (todos). Default: pending.',
+        },
+        limit: {
+          type: 'INTEGER' as Type,
+          description: 'Máximo de pedidos retornados (default 50).',
+        },
+      },
+      required: ['term'],
+    },
+  },
+  {
     name: 'component_cost_alert',
     description: 'Lista componentes onde o custo atual está acima do target_price_brl definido na BOM. Use quando pedirem "componentes fora do target" ou "alertas de custo".',
     parameters: { type: 'OBJECT' as Type, properties: {} },
@@ -2400,6 +2425,36 @@ function normalizeMountType(arg: unknown, name?: string): 'SMD' | 'PTH' | null {
     if (/\b0(2|4|6|8)0[235]\b|\b1(20|21|81)6\b|\b2[05]1[02]\b|SOT[- ]?\d|SOIC|TSSOP|QFN|QFP|BGA|MELF/i.test(name)) return 'SMD';
   }
   return null;
+}
+
+/**
+ * Devolve o "radical" curto de um termo de busca pra ilike — resolve plural/
+ * singular automaticamente. Exemplos:
+ *   - CABOS  → CABO   (ilike %CABO% casa com CABO, CABOS, CABO COAXIAL)
+ *   - LUZES  → LUZ
+ *   - SAPATAS → SAPATA
+ *   - CONEXÕES → CONEX (casa com CONEXÃO, CONEXÕES, CONEXAO)
+ *   - PARAFUSO (já singular) → PARAFUSO (mantém)
+ *
+ * Aceita false positives (ex: "BOT" casa com "BOTÃO" e "BOTA"). Pra busca
+ * é OK — false positives < false negatives. O user filtra visualmente
+ * o ruído mas perderia o pedido de "CABO COAXIAL" se buscar "CABOS".
+ */
+function searchRoot(term: string): string {
+  const t = term.trim().toLowerCase();
+  if (t.length <= 3) return t;
+  if (t.endsWith('ões') || t.endsWith('ãos')) return t.slice(0, -3); // CONEXÕES → CONEX
+  if (t.endsWith('ais') || t.endsWith('eis') || t.endsWith('ois') || t.endsWith('uis')) return t.slice(0, -2); // PAPÉIS → PAPÉ
+  if (t.endsWith('es') && t.length > 4) return t.slice(0, -2); // LUZES → LUZ
+  if (t.endsWith('s') && t.length > 3) return t.slice(0, -1);  // CABOS → CABO
+  return t;
+}
+
+/** Quebra termo composto em palavras-chave (mín 3 chars), aplicando searchRoot
+ *  em cada uma. Útil pra "CABO COAXIAL" → ["cabo", "coaxial"]. */
+function searchKeywords(term: string): string[] {
+  const words = term.trim().toLowerCase().split(/\s+/).filter((w) => w.length >= 3);
+  return words.map(searchRoot);
 }
 
 /**
@@ -6029,7 +6084,7 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
         .order('updated_at', { ascending: false })
         .limit(100);
       if (shipId) q = q.eq('shipment_id', shipId);
-      if (args.item_name) q = q.ilike('item_name', `%${String(args.item_name)}%`);
+      if (args.item_name) q = q.ilike('item_name', `%${searchRoot(String(args.item_name))}%`);
       if (statusFilter) {
         q = q.eq('status', statusFilter);
       } else {
@@ -6046,7 +6101,7 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
       let needId = args.need_id ? String(args.need_id) : null;
       if (!needId) {
         let q = supabase.from('purchase_needs').select('id').limit(1);
-        if (args.item_name) q = q.ilike('item_name', `%${String(args.item_name)}%`);
+        if (args.item_name) q = q.ilike('item_name', `%${searchRoot(String(args.item_name))}%`);
         if (args.shipment_id) q = q.eq('shipment_id', String(args.shipment_id));
         else if (args.numero_venda || args.client_name) {
           const r = await resolveShipmentId(args);
@@ -6158,7 +6213,7 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
       let needId = args.need_id ? String(args.need_id) : null;
       if (!needId) {
         let q = supabase.from('purchase_needs').select('id').limit(1);
-        if (args.item_name) q = q.ilike('item_name', `%${String(args.item_name)}%`);
+        if (args.item_name) q = q.ilike('item_name', `%${searchRoot(String(args.item_name))}%`);
         if (args.shipment_id) q = q.eq('shipment_id', String(args.shipment_id));
         else if (args.numero_venda || args.client_name) {
           const r = await resolveShipmentId(args);
@@ -6276,7 +6331,8 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
         .order('item_name');
       if (args.item_code) q = q.ilike('item_code', `%${String(args.item_code)}%`);
       if (args.item_name) {
-        const nameFilter = String(args.item_name);
+        // Aplica radical pra resolver plural/singular (CABOS → CABO, SAPATAS → SAPATA)
+        const nameFilter = searchRoot(String(args.item_name));
         // Busca direta por nome
         q = q.ilike('item_name', `%${nameFilter}%`);
         // Também resolve via aliases: se houver alias com esse nome, inclui o item canônico
@@ -6334,7 +6390,7 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
         const { data } = await supabase.from('stock_items').select('*').ilike('item_code', String(args.item_code)).maybeSingle();
         item = data;
       } else if (args.item_name) {
-        const { data } = await supabase.from('stock_items').select('*').ilike('item_name', `%${String(args.item_name)}%`).limit(1);
+        const { data } = await supabase.from('stock_items').select('*').ilike('item_name', `%${searchRoot(String(args.item_name))}%`).limit(1);
         item = (data as any)?.[0];
       }
       if (!item) throw new Error('Item não encontrado no estoque.');
@@ -7010,7 +7066,7 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
         .in('status', ['pedido'])
         .not('expected_arrival', 'is', null)
         .order('expected_arrival', { ascending: true });
-      if (args.item_name) q = q.ilike('item_name', `%${String(args.item_name)}%`);
+      if (args.item_name) q = q.ilike('item_name', `%${searchRoot(String(args.item_name))}%`);
       if (args.due_before) q = q.lte('expected_arrival', String(args.due_before));
       const { data, error } = await q;
       if (error) throw new Error(error.message);
@@ -7722,6 +7778,88 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
       const { error } = await supabase.from('shipments').update({ status: 'shipped', data_saida: now, updated_at: now }).in('id', ids);
       if (error) throw new Error(error.message);
       return { marked_shipped: ids.length, shipment_ids: ids };
+    }
+
+    case 'find_shipments_by_item': {
+      const term = String(args.term ?? '').trim();
+      if (!term) throw new Error('term é obrigatório');
+      const status = String(args.status ?? 'pending').toLowerCase();
+      const limit = Number(args.limit ?? 50);
+
+      // Aplica radical pra resolver plural/singular automaticamente
+      const root = searchRoot(term);
+      const keywords = searchKeywords(term);
+
+      // Busca shipment_items que casem com o radical principal OU com qualquer
+      // palavra-chave (pra termos compostos tipo "cabo coaxial" buscar tanto
+      // "cabo" quanto "coaxial").
+      const itemFilters = [`item_name.ilike.%${root}%`];
+      for (const kw of keywords) {
+        if (kw !== root) itemFilters.push(`item_name.ilike.%${kw}%`);
+      }
+      // Busca também por item_code (casos onde só o código bate)
+      itemFilters.push(`item_code.ilike.%${root}%`);
+
+      let q = supabase
+        .from('shipment_items')
+        .select(`
+          id, item_name, item_code, quantity, unit_price,
+          shipment:shipments!inner(
+            id, client_name, numero_venda, numero_nfe, status,
+            data_venda, data_prevista, data_saida, valor_total
+          )
+        `)
+        .or(itemFilters.join(','))
+        .limit(limit * 5); // pega mais itens, vamos agrupar por shipment depois
+
+      // Filtra por status do shipment
+      if (status !== 'all') {
+        q = q.eq('shipments.status', status);
+      }
+
+      const { data, error } = await q;
+      if (error) throw new Error(error.message);
+
+      // Agrupa por shipment_id
+      const grouped = new Map<string, any>();
+      for (const row of (data ?? []) as any[]) {
+        const ship = row.shipment;
+        if (!ship) continue;
+        if (!grouped.has(ship.id)) {
+          grouped.set(ship.id, {
+            shipment_id: ship.id,
+            client_name: ship.client_name,
+            numero_venda: ship.numero_venda,
+            numero_nfe: ship.numero_nfe,
+            status: ship.status,
+            data_venda: ship.data_venda,
+            data_prevista: ship.data_prevista,
+            data_saida: ship.data_saida,
+            valor_total: ship.valor_total,
+            items_matched: [],
+          });
+        }
+        grouped.get(ship.id)!.items_matched.push({
+          item_name: row.item_name,
+          item_code: row.item_code,
+          quantity: row.quantity,
+          unit_price: row.unit_price,
+        });
+      }
+
+      const results = Array.from(grouped.values()).slice(0, limit);
+      return {
+        term,
+        normalized_root: root,
+        keywords_used: keywords,
+        status_filter: status,
+        shipments_found: results.length,
+        items_matched_total: results.reduce((s, r) => s + r.items_matched.length, 0),
+        shipments: results,
+        message: results.length === 0
+          ? `Nenhum pedido${status !== 'all' ? ` com status "${status}"` : ''} contém item parecido com "${term}" (busquei pela raiz "${root}"). Tenta outros termos ou status="all".`
+          : `Encontrei ${results.length} pedido(s) com itens batendo "${term}" (raiz: "${root}").`,
+      };
     }
 
     case 'search_all': {
