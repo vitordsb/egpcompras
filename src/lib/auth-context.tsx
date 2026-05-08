@@ -50,28 +50,36 @@ export function InternalAuthProvider({
       return;
     }
 
-    // Busca cargo + permissões em paralelo
-    Promise.all([
-      supabase.from('user_profiles').select('role').eq('email', userEmail.toLowerCase()).maybeSingle(),
-      supabase.from('role_page_permissions').select('page_key').eq('role',
-        // placeholder — será sobrescrito após buscar o role real
-        'vendas'
-      ),
-    ]).then(async ([profileRes]) => {
-      const role: UserRole = (profileRes.data?.role as UserRole) ?? 'vendas';
-      setUserRole(role);
+    // Busca cargo do user_profiles
+    supabase
+      .from('user_profiles')
+      .select('role')
+      .eq('email', userEmail.toLowerCase())
+      .maybeSingle()
+      .then(async ({ data }) => {
+        const role: UserRole = (data?.role as UserRole) ?? 'vendas';
+        setUserRole(role);
 
-      // Agora busca as permissões com o role correto
-      const { data: permsData } = await supabase
-        .from('role_page_permissions')
-        .select('page_key')
-        .eq('role', role);
+        // ADMIN sempre tem acesso a TUDO — não depende de role_page_permissions
+        // estar completa. Antes a gente fazia lookup e se faltasse uma key
+        // (ex: 'pedidos') o admin não conseguia criar pedido pela IA, alucinando
+        // sucesso pro usuário.
+        if (role === 'admin') {
+          setAllowedPageKeys('*');
+          return;
+        }
 
-      const keys = ((permsData ?? []) as { page_key: string }[])
-        .map((r) => r.page_key)
-        .filter((k) => ALL_PAGE_KEYS.includes(k as PageKey)) as PageKey[];
-      setAllowedPageKeys(keys);
-    });
+        // Para roles não-admin, busca as permissões cadastradas
+        const { data: permsData } = await supabase
+          .from('role_page_permissions')
+          .select('page_key')
+          .eq('role', role);
+
+        const keys = ((permsData ?? []) as { page_key: string }[])
+          .map((r) => r.page_key)
+          .filter((k) => ALL_PAGE_KEYS.includes(k as PageKey)) as PageKey[];
+        setAllowedPageKeys(keys);
+      });
   }, [isMaster, userEmail]);
 
   return (

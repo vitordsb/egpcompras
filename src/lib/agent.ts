@@ -330,6 +330,13 @@ Quando o usuário pedir para gerar e enviar uma imagem via WhatsApp:
 - Mostrar argumentos técnicos: NUNCA exponha IDs internos, nomes de campos ou JSON na mensagem para o usuário.
 - Narrar o processo: NUNCA explique quais funções foram executadas. Só o resultado final importa.
 - A resposta ao usuário deve parecer que uma pessoa digitou — não um log de sistema.
+
+**REGRA INVIOLÁVEL — Anti-alucinação de sucesso:**
+- Você NUNCA pode dizer "cadastrei", "criei", "salvei", "registrei", "atualizei", "removi" sem ter chamado a tool correspondente E recebido resposta de SUCESSO (sem campo error).
+- Se a tool retornou error (qualquer mensagem de erro), você DEVE falar pro usuário o que falhou. Exemplo: "Falhei ao cadastrar o pedido: [mensagem do erro]. Quer que eu tente de novo?"
+- Se você tentou chamar uma função e ela não está disponível (não existe na tua lista de tools), DIGA isso ao usuário. NÃO invente que cadastrou. Sugira: "Não consegui executar essa ação aqui — pode ser permissão ou função não disponível. Avise o admin."
+- Se você simplesmente NÃO chamou a tool (esqueceu, decidiu não chamar), você não fez a ação. Não pode dizer que fez.
+- Falar "feito" sem ter feito é o pior bug possível: o usuário acha que tem o pedido no banco quando não tem, e descobre tarde demais. Vale mais reportar o erro do que disfarçar.
 - **NUNCA dumpar dados extraídos de PDF/XML como bloco de código** (cercas triplas com json, yaml ou qualquer linguagem). Quando recebe um documento, vai DIRETO pra tool call (create_shipment, create_rma, etc.). Nada de "Eis os dados extraídos: {...}" antes — isso queima tokens, não chama a tool, e o usuário vê uma caixa preta enorme sem ação executada.
 - **Code blocks só são permitidos** no formato de confirmação em lote (✓ N pedidos cadastrados) — depois que as tools já foram executadas. Antes da execução: zero code block.
 
@@ -1052,7 +1059,8 @@ const RH_AUTHORIZED = ['vitor@grupoegp.com.br', 'joane@grupoegp.com.br'];
 function buildSystemInstruction(
   memories: { id: string; content: string }[],
   procedures: { name: string; description: string | null }[],
-  currentUser?: string
+  currentUser?: string,
+  allowedPageKeys?: import('@/lib/roles').PageKey[] | '*'
 ): string {
   const hoje = new Date().toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'America/Sao_Paulo' });
   const hojeISO = new Date().toLocaleDateString('sv-SE', { timeZone: 'America/Sao_Paulo' }); // YYYY-MM-DD para cálculos internos
@@ -1060,6 +1068,28 @@ function buildSystemInstruction(
   out += `\n\n## Data atual\nHoje é **${hoje}** (${hojeISO}). Use esse valor para qualquer cálculo de prazo, "daqui a X dias", "5 dias úteis", etc.`;
   if (currentUser) {
     out += `\n\n## Sessão atual\nUsuário logado: **${currentUser}**\nSempre que uma tool aceitar o campo "author", passe "${currentUser}". Isso registra internamente quem fez cada ação.`;
+  }
+  // Injeta info sobre as áreas que este usuário tem acesso. Quando filtrado,
+  // a IA pode tentar chamar uma tool que não existe na lista — o SDK rejeita
+  // mas o modelo pode "alucinar" sucesso. Avisar previne isso.
+  if (allowedPageKeys && allowedPageKeys !== '*') {
+    const labels = allowedPageKeys.map((k) => {
+      // Lazy lookup pra evitar import cíclico — mapeamento manual leve
+      const labelMap: Record<string, string> = {
+        produtos: 'Produtos', componentes: 'Componentes', custos: 'Custos',
+        cotacoes: 'Cotações', briefing: 'Briefing', compras: 'Compras',
+        fornecedores: 'Fornecedores', pedidos: 'Pedidos (criar/editar)', saidas: 'Saídas (apenas leitura)',
+        financeira: 'Financeira', producao: 'Produção', estoque: 'Estoque',
+        rmas: 'RMAs', whatsapp: 'WhatsApp', marketing: 'Marketing',
+      };
+      return labelMap[k] ?? k;
+    }).join(', ');
+    out +=
+      '\n\n## Permissões deste usuário (CRÍTICO)\n' +
+      `Este usuário tem acesso APENAS a: **${labels}**.\n` +
+      'Se ele pedir uma ação que requer área NÃO listada (ex: criar pedido sem ter "Pedidos"; mexer em RH; criar componente sem ter "Componentes"), você SIMPLESMENTE NÃO TEM a função pra executar — ela foi removida da sua caixa de ferramentas.\n' +
+      '**NUNCA** invente sucesso ("Pedido cadastrado!") quando não chamou a tool — isso confunde o usuário e perde dados.\n' +
+      'Quando faltar permissão, fale claramente: "Não tenho permissão pra X aqui. Pede pro admin liberar a área Y, ou peça pra alguém que tenha acesso (ex: você mesmo, com login admin)."';
   }
   // Injeta seção RH apenas para usuários autorizados
   const isRhAuthorized = currentUser != null && RH_AUTHORIZED.includes(currentUser.toLowerCase());
@@ -1247,7 +1277,7 @@ export async function runAgent({
   // Se o user usar remember/define_procedure durante o loop, vão valer só no
   // próximo runAgent — aceitável.
   const [memories, procedures] = await Promise.all([loadMemories(), loadProcedureCatalog()]);
-  const fullSystemInstruction = buildSystemInstruction(memories, procedures, currentUser);
+  const fullSystemInstruction = buildSystemInstruction(memories, procedures, currentUser, allowedPageKeys);
 
   // Filtra tools: usa allowedPageKeys (DB) se disponível, senão cai no role hardcoded
   const { getToolsForPageKeys } = await import('@/lib/roles');
