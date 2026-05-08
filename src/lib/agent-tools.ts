@@ -1206,7 +1206,8 @@ export const toolDeclarations = [
   {
     name: 'create_shipment',
     description:
-      'Cria um pedido de saída (controle paralelo ao Conta Azul). Use quando o usuário disser "adiciona pedido X pra sair", "registra a saída de X", "cadastra pedido Y do cliente Z", ou ao importar um PDF de venda. Pode incluir produtos com qtd e todos os dados do Conta Azul.',
+      'Cria um pedido de saída (controle paralelo ao Conta Azul). Use quando o usuário disser "adiciona pedido X pra sair", "registra a saída de X", "cadastra pedido Y do cliente Z", ou ao importar um PDF de venda. Pode incluir produtos com qtd e todos os dados do Conta Azul. ' +
+      'CRÍTICO ao importar PDF: extraia TODOS os itens da tabela de produtos do documento. Antes de chamar, conte quantas linhas de produto o PDF tem e passe expected_items_count. A tool valida que items.length === expected_items_count — se não bater, ela falha e o pedido é descartado. Isso impede a perda silenciosa de produtos quando o PDF tem muitos itens.',
     parameters: {
       type: 'OBJECT' as Type,
       properties: {
@@ -1230,9 +1231,17 @@ export const toolDeclarations = [
         condicao_pagamento:   { type: 'STRING' as Type, description: 'Ex: À VISTA, 28-56-84.' },
         chave_acesso:         { type: 'STRING' as Type, description: 'Chave de acesso da NF-e (44 dígitos, SEFAZ).' },
         notes: { type: 'STRING' as Type, description: 'Observação geral (opcional).' },
+        expected_items_count: {
+          type: 'INTEGER' as Type,
+          description: 'OBRIGATÓRIO ao importar PDF: número de linhas de produto que VOCÊ contou no documento. A tool valida que items.length === este valor; se não bater, falha e descarta o pedido. Pra criação manual sem PDF, omita.',
+        },
+        expected_total: {
+          type: 'NUMBER' as Type,
+          description: 'OPCIONAL: total esperado do pedido (do PDF). A tool compara contra a soma de quantity*unit_price dos items inseridos. Se diferir mais de 5%, retorna um aviso (não bloqueia).',
+        },
         items: {
           type: 'ARRAY' as Type,
-          description: 'Itens do pedido. Cada item pode ter product_name (fuzzy match), item_code, item_name, unit_price e quantity.',
+          description: 'Itens do pedido. Cada item pode ter product_name (fuzzy match), item_code, item_name, unit_price e quantity. OBRIGATÓRIO em vendas (tipo_nota="venda"): pelo menos 1 item.',
           items: {
             type: 'OBJECT' as Type,
             properties: {
@@ -5492,6 +5501,32 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
       const clientName = String(args.client_name ?? '').trim();
       if (!clientName) throw new Error('client_name é obrigatório');
 
+      // ── Pré-validações de itens (CRÍTICO pra evitar pedido sem produtos) ─────
+      const itemsInputRaw = Array.isArray(args.items) ? args.items : [];
+      const validTipos = ['venda','retorno_conserto','retorno_garantia','remessa_demonstracao','remessa_conserto','remessa_industrializacao','rma','outro'];
+      const tipoNotaPre = args.tipo_nota && validTipos.includes(String(args.tipo_nota)) ? String(args.tipo_nota) : 'venda';
+
+      // Vendas SEMPRE precisam de itens. Outros tipos (RMA, retorno) podem ser vazios.
+      const tiposQueExigemItens = new Set(['venda', 'remessa_demonstracao', 'remessa_industrializacao']);
+      if (tiposQueExigemItens.has(tipoNotaPre) && itemsInputRaw.length === 0) {
+        throw new Error(
+          `Pedido tipo "${tipoNotaPre}" exige ao menos 1 item. Você passou items vazio. ` +
+          `Se importou um PDF, releia a tabela de produtos e extraia TODAS as linhas — não pode criar venda sem produtos.`
+        );
+      }
+
+      // expected_items_count (cross-check do que a IA viu no PDF vs o que extraiu)
+      const expectedItems = args.expected_items_count != null ? Number(args.expected_items_count) : null;
+      if (expectedItems != null && Number.isFinite(expectedItems) && expectedItems > 0) {
+        if (itemsInputRaw.length !== expectedItems) {
+          throw new Error(
+            `Cross-check de itens FALHOU: você disse que o PDF tem ${expectedItems} itens, mas só extraiu ${itemsInputRaw.length}. ` +
+            `NÃO crie o pedido com dados parciais — releia o PDF, extraia TODAS as linhas e tente de novo. ` +
+            `Itens parciais geram pedido errado no banco e a equipe descobre tarde demais.`
+          );
+        }
+      }
+
       // Previne duplicata: checa por numero_nfe ou numero_venda + cliente
       const nfe   = args.numero_nfe    ? String(args.numero_nfe).trim()   : null;
       const nvenda = args.numero_venda ? String(args.numero_venda).trim() : null;
@@ -5509,8 +5544,7 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
         }
       }
 
-      const validTipos = ['venda','retorno_conserto','retorno_garantia','remessa_demonstracao','remessa_conserto','remessa_industrializacao','rma','outro'];
-      const tipoNota = args.tipo_nota && validTipos.includes(String(args.tipo_nota)) ? String(args.tipo_nota) : 'venda';
+      const tipoNota = tipoNotaPre;
       const payload: Record<string, unknown> = {
         client_name:         clientName,
         client_trade_name:   args.client_trade_name   ? String(args.client_trade_name).trim() : null,
@@ -5592,9 +5626,65 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
             product_id: productId || null, item_code: it.item_code,
             item_name: it.item_name ?? it.product_name, quantity: qty,
             is_private_label: isPrivateLabel, brand_name: it.brand_name, item_color: it.item_color,
+            unit_price: it.unit_price,
           });
         }
       }
+
+      // ── Post-validação CRÍTICA: count + total ────────────────────────────
+      // 1) Count real no banco (não confiar só no array em memória)
+      const { count: realCount } = await supabase
+        .from('shipment_items')
+        .select('id', { count: 'exact', head: true })
+        .eq('shipment_id', shipmentId);
+      const realInserted = realCount ?? 0;
+
+      // Se tipo exige itens mas nada foi persistido → ROLLBACK do pedido
+      if (tiposQueExigemItens.has(tipoNota) && realInserted === 0) {
+        await supabase.from('shipments').delete().eq('id', shipmentId);
+        throw new Error(
+          `Pedido descartado: tipo "${tipoNota}" exige itens mas nenhum foi persistido. ` +
+          `Falhas: ${itemsFailed.map((f) => `${f.item_name}: ${f.error}`).join('; ')}. ` +
+          `Corrija os itens e tente de novo — pedido NÃO foi criado no banco.`
+        );
+      }
+
+      // Se expected_items_count foi passado e não bate com o que persistiu → ROLLBACK
+      if (expectedItems != null && expectedItems > 0 && realInserted !== expectedItems) {
+        await supabase.from('shipments').delete().eq('id', shipmentId);
+        throw new Error(
+          `Pedido descartado: esperava ${expectedItems} itens mas apenas ${realInserted} foram persistidos. ` +
+          `Itens que falharam: ${itemsFailed.map((f) => `${f.item_name}: ${f.error}`).join('; ') || 'nenhum erro reportado, mas count não bate'}. ` +
+          `Releia o PDF, corrija os itens e tente de novo — pedido NÃO foi criado no banco.`
+        );
+      }
+
+      // Se algum item falhou na inserção (mas count bate ou expected não foi passado),
+      // ainda é problema — relata pra IA reagir
+      if (itemsFailed.length > 0) {
+        await supabase.from('shipments').delete().eq('id', shipmentId);
+        throw new Error(
+          `Pedido descartado: ${itemsFailed.length} item(ns) falharam na inserção. ` +
+          `Detalhes: ${itemsFailed.map((f) => `"${f.item_name}": ${f.error}`).join(' | ')}. ` +
+          `Corrija e tente de novo — pedido NÃO foi criado no banco.`
+        );
+      }
+
+      // 2) Cross-check de total (aviso, não bloqueia)
+      const expectedTotal = args.expected_total != null ? Number(args.expected_total) : null;
+      let totalWarning: string | null = null;
+      if (expectedTotal != null && Number.isFinite(expectedTotal) && expectedTotal > 0) {
+        const computedTotal = itemsAdded.reduce(
+          (sum, it: any) => sum + (Number(it.unit_price ?? 0) * Number(it.quantity ?? 0)),
+          0
+        );
+        const diff = Math.abs(computedTotal - expectedTotal);
+        const diffPct = (diff / expectedTotal) * 100;
+        if (diffPct > 5) {
+          totalWarning = `Total dos itens (R$ ${computedTotal.toFixed(2)}) diverge do esperado (R$ ${expectedTotal.toFixed(2)}) em ${diffPct.toFixed(1)}% — confira preços/quantidades.`;
+        }
+      }
+
       // Auto-registra purchase_needs para itens sem estoque suficiente
       const needsAutoCreated: string[] = [];
       for (const it of itemsAdded) {
@@ -5638,10 +5728,14 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
       const privateLabelItems = itemsAdded.filter((i) => i.is_private_label);
       return {
         created,
+        verified: true,
         verified_id: shipmentId,
         confirmed_in_database: true,
         items_added: itemsAdded,
+        items_inserted_count: realInserted,
+        items_expected_count: expectedItems,
         items_failed: itemsFailed,
+        total_warning: totalWarning,
         private_label_count: privateLabelsDetected,
         private_label_items: privateLabelItems,
         private_label_alert: privateLabelsDetected > 0

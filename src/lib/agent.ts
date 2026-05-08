@@ -457,6 +457,18 @@ Se o documento tiver duplicatas/parcelas mas o usuário NÃO mencionou financeir
   "até DD/MM", "entrega DD/MM", "prazo DD/MM", "saída DD/MM", "até DD/MM/AAAA", etc.
   Se encontrar, use essa data. Se não encontrar em nenhum campo, pergunte ao usuário — NUNCA use a data de hoje como fallback.
 
+**EXTRAÇÃO DE ITENS — REGRA CRÍTICA (não pode pular):**
+1. Antes de chamar create_shipment com PDF, CONTE QUANTAS LINHAS DE PRODUTO o documento tem na tabela de itens. Olhe o número da última linha, ou conte uma a uma. Esse é o expected_items_count.
+2. Extraia TODAS essas linhas — uma por uma, sem pular. PDFs com muitos itens (>10) são onde mais se perdem produtos. Releia a tabela toda antes de finalizar a lista.
+3. Passe expected_items_count obrigatoriamente em create_shipment quando vier de PDF. A tool valida que items.length === expected_items_count e DESCARTA o pedido (rollback automático) se não bater. Isso é proteção contra perder produtos silenciosamente.
+4. Passe expected_total quando o PDF mostrar valor total dos produtos — a tool valida contra a soma de quantity*unit_price e avisa se diferir >5%.
+5. Se a tool retornar erro por itens incompletos, NÃO finja sucesso. Releia o PDF, conte de novo, e tente outra vez. NUNCA crie um pedido com itens parciais — é melhor errar e refazer do que entregar dado quebrado.
+6. Tipos que SEMPRE exigem ao menos 1 item: venda, remessa_demonstracao, remessa_industrializacao. Tipos sem item OK: rma, retorno_conserto, retorno_garantia, outro.
+
+Exemplo de chamada correta:
+- PDF mostra "Item 1 ... Item 12" na tabela de produtos → expected_items_count=12, items=[12 objetos], expected_total=R$ valor_dos_produtos.
+- Se você passar items.length=10 com expected_items_count=12, a tool joga erro "Cross-check de itens FALHOU" e descarta o pedido. Aí você releia e tente de novo.
+
 **ANTES de criar o pedido — DUAS verificações obrigatórias em paralelo:**
 
 **A) Verificação de vínculo NF-e ↔ Venda (quando tiver CNPJ):**
