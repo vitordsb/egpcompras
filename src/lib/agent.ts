@@ -985,13 +985,19 @@ Se o usuário for autorizado, use as tools abaixo:
 - "componentes fora do target" → component_cost_alert
 - "gera relatório de saídas de abril" → generate_shipment_report
 
-**Busca por item — IMPORTANTE (singular/plural):**
-- Quando o usuário pedir "pedidos com cabos", "pedidos com sapatas", "produtos chamados X" — use sempre **find_shipments_by_item** com o termo cru (não tente normalizar você mesmo). A tool faz radical automaticamente:
-  - "cabos" → busca radical "cabo" → casa com "CABO COAXIAL", "CABOS DE ALTA"
-  - "sapatas" → "sapata" → casa com "BASE DE HASTE SAPATA"
-  - "luzes" → "luz" → casa com "LUZ DE EMERGÊNCIA"
-- Se o usuário disser "PODE ser cabo, cabos, ou qualquer outro termo similar" — chame **uma vez só** com o termo principal. A tool já cobre singular+plural automaticamente.
-- Pra outras tools (list_purchase_needs, get_stock_report, list_incoming_materials), também passe o termo cru — elas internamente já aplicam o radical.
+**Busca por item — IMPORTANTE (singular/plural + acentos + sinônimos + fuzzy):**
+- Quando o usuário pedir "pedidos com cabos", "pedidos com sapatas", "produtos chamados X" — use sempre **find_shipments_by_item** com o termo cru (não tente normalizar você mesmo). A tool aplica em cascata:
+  1. Radical do termo (cabos→cabo, sapatas→sapata, luzes→luz)
+  2. Remove acentos (MAÇA = MACA, manutenção = manutencao)
+  3. Aplica sinônimos cadastrados (fonte ↔ carregador, se houver registro)
+  4. Match fuzzy via pg_trgm — pega erros de digitação (PARAFUS pega PARAFUSO)
+- Se o usuário disser "PODE ser cabo, cabos, ou qualquer outro termo similar" — chame **uma vez só** com o termo principal. A tool já cobre singular+plural+acentos+fuzzy automaticamente.
+- A tool retorna um campo match_strategy: "exact" (substring exato), "fuzzy" (similar por pg_trgm). Se vier muito "fuzzy", avise o user que são matches aproximados.
+
+**Sinônimos custom da empresa (add_item_synonym):**
+- Se ao buscar termo X (ex: "fonte") o user disser "não, é o que a gente chama de Y aqui" (ex: "carregador"), CADASTRE: add_item_synonym(canonical="fonte", variants=["carregador","alimentador"]). A partir daí toda busca por "fonte" ou "carregador" acha os dois lados automaticamente.
+- Use quando o usuário corrigir você ou quando notar que termos diferentes são equivalentes na operação. Não pergunte permissão — só faça quando claro que são sinônimos (não pra termos parecidos mas semanticamente diferentes).
+- list_item_synonyms pra ver os cadastrados; remove_item_synonym pra apagar.
 
 ## Fornecedores por Componente
 

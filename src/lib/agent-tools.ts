@@ -2040,6 +2040,50 @@ export const toolDeclarations = [
       required: ['query'],
     },
   },
+  // ---------- SINÔNIMOS DE BUSCA ----------
+  {
+    name: 'add_item_synonym',
+    description:
+      'Cadastra um sinônimo customizado da empresa pra busca por itens. ' +
+      'Use quando notar que o usuário busca um termo X mas os itens reais usam termo Y (ex: "fonte" ↔ "carregador"). ' +
+      'A busca find_shipments_by_item usa esses sinônimos automaticamente — quem buscar "fonte" também acha "carregador".',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        canonical: {
+          type: 'STRING' as Type,
+          description: 'Termo principal (ex: "fonte"). Será normalizado (lower + sem acentos) antes de salvar.',
+        },
+        variants: {
+          type: 'ARRAY' as Type,
+          items: { type: 'STRING' as Type },
+          description: 'Lista de sinônimos equivalentes. Ex: ["carregador","alimentador","fontinha"].',
+        },
+        notes: {
+          type: 'STRING' as Type,
+          description: 'Contexto/motivo do cadastro (opcional).',
+        },
+      },
+      required: ['canonical', 'variants'],
+    },
+  },
+  {
+    name: 'list_item_synonyms',
+    description: 'Lista todos os sinônimos cadastrados pra busca de itens.',
+    parameters: { type: 'OBJECT' as Type, properties: {} },
+  },
+  {
+    name: 'remove_item_synonym',
+    description: 'Remove um sinônimo cadastrado. Use o id (de list_item_synonyms) ou o canonical.',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        synonym_id: { type: 'STRING' as Type, description: 'UUID do sinônimo (preferido).' },
+        canonical:  { type: 'STRING' as Type, description: 'Termo principal — alternativa ao id.' },
+      },
+    },
+  },
+
   {
     name: 'find_shipments_by_item',
     description:
@@ -2432,6 +2476,21 @@ function normalizeMountType(arg: unknown, name?: string): 'SMD' | 'PTH' | null {
 }
 
 /**
+ * Remove acentos da string (lado JS, simétrico ao unaccent do PG).
+ * "MAÇÃ" → "MACA", "manutenção" → "manutencao"
+ */
+function stripAccents(s: string): string {
+  return s.normalize('NFD').replace(/[̀-ͯ]/g, '');
+}
+
+/**
+ * Normaliza pra busca: lower + sem acentos. Casa com normalize_search() do PG.
+ */
+function normalizeForSearch(s: string): string {
+  return stripAccents(s.toLowerCase().trim());
+}
+
+/**
  * Devolve o "radical" curto de um termo de busca pra ilike — resolve plural/
  * singular automaticamente. Exemplos:
  *   - CABOS  → CABO   (ilike %CABO% casa com CABO, CABOS, CABO COAXIAL)
@@ -2454,12 +2513,6 @@ function searchRoot(term: string): string {
   return t;
 }
 
-/** Quebra termo composto em palavras-chave (mín 3 chars), aplicando searchRoot
- *  em cada uma. Útil pra "CABO COAXIAL" → ["cabo", "coaxial"]. */
-function searchKeywords(term: string): string[] {
-  const words = term.trim().toLowerCase().split(/\s+/).filter((w) => w.length >= 3);
-  return words.map(searchRoot);
-}
 
 /**
  * Verifica que um registro foi de fato persistido depois de um insert/update.
@@ -7923,85 +7976,135 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
       return { marked_shipped: ids.length, shipment_ids: ids };
     }
 
+    case 'add_item_synonym': {
+      const canonical = normalizeForSearch(String(args.canonical ?? ''));
+      if (!canonical) throw new Error('canonical é obrigatório');
+      const variantsRaw = Array.isArray(args.variants) ? args.variants : [];
+      const variants = variantsRaw
+        .map((v: any) => normalizeForSearch(String(v ?? '')))
+        .filter((v: string) => v.length > 0 && v !== canonical);
+      if (variants.length === 0) throw new Error('variants precisa ter pelo menos 1 item válido');
+
+      // Upsert: se canonical já existe, mescla as variants (sem duplicar)
+      const { data: existing } = await supabase
+        .from('item_synonyms').select('id, variants').eq('canonical', canonical).maybeSingle();
+      if (existing) {
+        const merged = Array.from(new Set([...(existing as any).variants ?? [], ...variants]));
+        const { error: upErr } = await supabase
+          .from('item_synonyms')
+          .update({ variants: merged, notes: args.notes ? String(args.notes) : null })
+          .eq('id', (existing as any).id);
+        if (upErr) throw new Error(upErr.message);
+        return { updated: true, id: (existing as any).id, canonical, variants: merged };
+      }
+
+      const { data: created, error } = await supabase
+        .from('item_synonyms')
+        .insert({
+          canonical,
+          variants,
+          notes: args.notes ? String(args.notes) : null,
+          created_by: ctx.currentUser ?? null,
+        })
+        .select('id, canonical, variants')
+        .single();
+      if (error || !created) throw new Error(error?.message ?? 'Falha ao criar sinônimo');
+      await verifyWrite('item_synonyms', (created as any).id, 'add_item_synonym');
+      return { created: true, verified: true, synonym: created };
+    }
+
+    case 'list_item_synonyms': {
+      const { data, error } = await supabase
+        .from('item_synonyms')
+        .select('id, canonical, variants, notes, created_at, created_by')
+        .order('canonical');
+      if (error) throw new Error(error.message);
+      return { synonyms: data ?? [], count: (data ?? []).length };
+    }
+
+    case 'remove_item_synonym': {
+      let id = args.synonym_id ? String(args.synonym_id) : null;
+      if (!id && args.canonical) {
+        const can = normalizeForSearch(String(args.canonical));
+        const { data } = await supabase
+          .from('item_synonyms').select('id').eq('canonical', can).maybeSingle();
+        id = (data as any)?.id ?? null;
+      }
+      if (!id) throw new Error('Forneça synonym_id ou canonical.');
+      const { error } = await supabase.from('item_synonyms').delete().eq('id', id);
+      if (error) throw new Error(error.message);
+      return { deleted: true, id };
+    }
+
     case 'find_shipments_by_item': {
       const term = String(args.term ?? '').trim();
       if (!term) throw new Error('term é obrigatório');
       const status = String(args.status ?? 'pending').toLowerCase();
       const limit = Number(args.limit ?? 50);
 
-      // Aplica radical pra resolver plural/singular automaticamente
+      // Aplica radical (singular/plural) e remove acentos antes de mandar pra RPC
       const root = searchRoot(term);
-      const keywords = searchKeywords(term);
+      const normalized = normalizeForSearch(root);
 
-      // Busca shipment_items que casem com o radical principal OU com qualquer
-      // palavra-chave (pra termos compostos tipo "cabo coaxial" buscar tanto
-      // "cabo" quanto "coaxial").
-      const itemFilters = [`item_name.ilike.%${root}%`];
-      for (const kw of keywords) {
-        if (kw !== root) itemFilters.push(`item_name.ilike.%${kw}%`);
-      }
-      // Busca também por item_code (casos onde só o código bate)
-      itemFilters.push(`item_code.ilike.%${root}%`);
-
-      let q = supabase
-        .from('shipment_items')
-        .select(`
-          id, item_name, item_code, quantity, unit_price,
-          shipment:shipments!inner(
-            id, client_name, numero_venda, numero_nfe, status,
-            data_venda, data_prevista, data_saida, valor_total
-          )
-        `)
-        .or(itemFilters.join(','))
-        .limit(limit * 5); // pega mais itens, vamos agrupar por shipment depois
-
-      // Filtra por status do shipment
-      if (status !== 'all') {
-        q = q.eq('shipments.status', status);
-      }
-
-      const { data, error } = await q;
+      // Chama RPC inteligente: combina unaccent + sinônimos + pg_trgm fuzzy
+      const { data: rows, error } = await supabase.rpc('search_shipment_items_smart', {
+        p_term: normalized,
+        p_status: status === 'all' ? null : status,
+        p_limit: limit * 5,
+      });
       if (error) throw new Error(error.message);
 
       // Agrupa por shipment_id
       const grouped = new Map<string, any>();
-      for (const row of (data ?? []) as any[]) {
-        const ship = row.shipment;
-        if (!ship) continue;
-        if (!grouped.has(ship.id)) {
-          grouped.set(ship.id, {
-            shipment_id: ship.id,
-            client_name: ship.client_name,
-            numero_venda: ship.numero_venda,
-            numero_nfe: ship.numero_nfe,
-            status: ship.status,
-            data_venda: ship.data_venda,
-            data_prevista: ship.data_prevista,
-            data_saida: ship.data_saida,
-            valor_total: ship.valor_total,
+      let bestMatchVia: 'exact' | 'fuzzy' | 'partial' = 'partial';
+      for (const row of ((rows ?? []) as any[])) {
+        const sid = row.shipment_id;
+        if (!grouped.has(sid)) {
+          grouped.set(sid, {
+            shipment_id: sid,
+            client_name: row.client_name,
+            numero_venda: row.numero_venda,
+            numero_nfe: row.numero_nfe,
+            status: row.shipment_status,
+            data_venda: row.data_venda,
+            data_prevista: row.data_prevista,
+            valor_total: row.valor_total,
+            best_match_score: Number(row.match_score ?? 0),
             items_matched: [],
           });
         }
-        grouped.get(ship.id)!.items_matched.push({
+        const ship = grouped.get(sid)!;
+        const score = Number(row.match_score ?? 0);
+        if (score > ship.best_match_score) ship.best_match_score = score;
+        ship.items_matched.push({
           item_name: row.item_name,
           item_code: row.item_code,
           quantity: row.quantity,
           unit_price: row.unit_price,
+          match_score: score,
+          matched_via: row.matched_via,
         });
+        if (row.matched_via === 'exact') bestMatchVia = 'exact';
+        else if (row.matched_via === 'fuzzy' && bestMatchVia !== 'exact') bestMatchVia = 'fuzzy';
       }
 
-      const results = Array.from(grouped.values()).slice(0, limit);
+      // Ordena pedidos por score (melhor match primeiro)
+      const results = Array.from(grouped.values())
+        .sort((a, b) => b.best_match_score - a.best_match_score)
+        .slice(0, limit);
+
       return {
         term,
         normalized_root: root,
-        keywords_used: keywords,
+        normalized_search: normalized,
+        match_strategy: bestMatchVia,
         status_filter: status,
         shipments_found: results.length,
         items_matched_total: results.reduce((s, r) => s + r.items_matched.length, 0),
         shipments: results,
         message: results.length === 0
-          ? `Nenhum pedido${status !== 'all' ? ` com status "${status}"` : ''} contém item parecido com "${term}" (busquei pela raiz "${root}"). Tenta outros termos ou status="all".`
-          : `Encontrei ${results.length} pedido(s) com itens batendo "${term}" (raiz: "${root}").`,
+          ? `Nenhum pedido${status !== 'all' ? ` com status "${status}"` : ''} contém item parecido com "${term}". Tenta outros termos ou status="all". Se for um termo da operação que costuma aparecer com outro nome, considere cadastrar como sinônimo via add_item_synonym.`
+          : `Encontrei ${results.length} pedido(s) com itens batendo "${term}"${bestMatchVia === 'fuzzy' ? ' (match aproximado — alguns por similaridade)' : ''}.`,
       };
     }
 

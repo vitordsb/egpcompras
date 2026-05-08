@@ -108,7 +108,8 @@ export const PAGE_DEFINITIONS: Record<PageKey, PageDef> = {
             'find_shipments_with_observations','find_shipments_by_item',
             'link_document_to_shipment','add_shipment_items',
             'duplicate_shipment','bulk_mark_shipped','list_client_brands','register_client_brand',
-            'delete_client_brand','check_order_fulfillment','generate_shipment_report','search_all'],
+            'delete_client_brand','check_order_fulfillment','generate_shipment_report','search_all',
+            'add_item_synonym','list_item_synonyms','remove_item_synonym'],
   },
   saidas: {
     label: 'Saídas',
