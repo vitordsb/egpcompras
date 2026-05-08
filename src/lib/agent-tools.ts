@@ -174,6 +174,48 @@ export const toolDeclarations = [
     },
   },
 
+  // ---------- META — AUTO-VALIDAÇÃO ----------
+  {
+    name: 'verify_records_exist',
+    description:
+      'Valida que registros que VOCÊ acabou de criar/atualizar realmente existem no banco. ' +
+      'Use SEMPRE depois de operações em lote (criou 5 pedidos, registrou 3 títulos) ou em ações isoladas críticas (financeira, RMA com valor, deleção) ANTES de confirmar sucesso ao usuário. ' +
+      'Você passa uma lista de "claims" (afirmações que pretende fazer) e a tool verifica cada uma. ' +
+      'Resposta: { all_verified: bool, results: [{claim, exists, found_data, error}] }. Se all_verified=false, NÃO afirme sucesso — reporte o que falhou.',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        claims: {
+          type: 'ARRAY' as Type,
+          description: 'Lista de afirmações a validar.',
+          items: {
+            type: 'OBJECT' as Type,
+            properties: {
+              entity: {
+                type: 'STRING' as Type,
+                description: 'Tipo: shipment, rma, titulo, production_order, component, product, bom_item, stock_item, financeira',
+              },
+              by_id: {
+                type: 'STRING' as Type,
+                description: 'UUID do registro (preferido quando disponível).',
+              },
+              by_field: {
+                type: 'STRING' as Type,
+                description: 'Nome do campo de busca (ex: "numero_venda", "numero_nfe", "numero", "name", "client_name").',
+              },
+              by_value: {
+                type: 'STRING' as Type,
+                description: 'Valor do campo (ex: "5807" para numero_venda, "Eletrificador 12V" para name).',
+              },
+            },
+            required: ['entity'],
+          },
+        },
+      },
+      required: ['claims'],
+    },
+  },
+
   // ---------- AÇÕES — RELATÓRIOS ----------
   {
     name: 'export_components_pdf',
@@ -2351,6 +2393,37 @@ function normalizeMountType(arg: unknown, name?: string): 'SMD' | 'PTH' | null {
   return null;
 }
 
+/**
+ * Verifica que um registro foi de fato persistido depois de um insert/update.
+ * Faz um SELECT pelo id e joga erro descritivo se não encontrar — assim a IA
+ * recebe `error` na toolResponse e não consegue alucinar sucesso.
+ *
+ * Use logo após insert/update de tabelas críticas:
+ * shipments, rmas, rma_items, titulos, production_orders, stock_movements,
+ * components, products, bom_items.
+ */
+async function verifyWrite(
+  table: string,
+  id: string | number,
+  context: string = ''
+): Promise<void> {
+  const { data, error } = await supabase
+    .from(table)
+    .select('id')
+    .eq('id', id)
+    .maybeSingle();
+  if (error) {
+    throw new Error(`Erro ao verificar ${table}#${id}${context ? ` (${context})` : ''}: ${error.message}`);
+  }
+  if (!data) {
+    throw new Error(
+      `${table}#${id} não foi persistido${context ? ` (${context})` : ''}. ` +
+      `O insert/update aparentemente passou mas o registro não está no banco. ` +
+      `NÃO confirme sucesso ao usuário — investigue.`
+    );
+  }
+}
+
 async function findComponentByName(name: string): Promise<{ id: string; name: string } | null> {
   const { data } = await supabase
     .from('components')
@@ -2886,6 +2959,79 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
           status: inv.status,
           url: buildPublicQuoteUrl(inv.token),
         })),
+      };
+    }
+
+    // ---------- META — AUTO-VALIDAÇÃO ----------
+    case 'verify_records_exist': {
+      const claims = Array.isArray(args.claims) ? args.claims : [];
+      if (claims.length === 0) throw new Error('claims é obrigatório (lista não vazia)');
+
+      // Mapeia entity -> tabela + campos default de busca
+      const entityMap: Record<string, { table: string; defaultField: string; selectFields: string }> = {
+        shipment:         { table: 'shipments',         defaultField: 'numero_venda',  selectFields: 'id, client_name, numero_venda, numero_nfe, status' },
+        rma:              { table: 'rmas',              defaultField: 'numero',        selectFields: 'id, numero, client_name, status' },
+        titulo:           { table: 'titulos',           defaultField: 'numero_titulo', selectFields: 'id, client_name, valor, status, vencimento' },
+        production_order: { table: 'production_orders', defaultField: 'id',            selectFields: 'id, product_name, quantity_ordered, status' },
+        component:        { table: 'components',        defaultField: 'name',          selectFields: 'id, name, sku, mount_type' },
+        product:          { table: 'products',          defaultField: 'name',          selectFields: 'id, name, product_type' },
+        bom_item:         { table: 'bom_items',         defaultField: 'id',            selectFields: 'id, product_id, component_id, quantity, tipo' },
+        stock_item:       { table: 'stock_items',       defaultField: 'item_code',     selectFields: 'id, item_code, item_name, quantity' },
+        financeira:       { table: 'financeiras',       defaultField: 'nome',          selectFields: 'id, nome' },
+        rma_item:         { table: 'rma_items',         defaultField: 'id',            selectFields: 'id, rma_id, item_name' },
+      };
+
+      const results: any[] = [];
+      let allVerified = true;
+      for (const c of claims as any[]) {
+        const entity = String(c?.entity ?? '').toLowerCase();
+        const cfg = entityMap[entity];
+        if (!cfg) {
+          results.push({ claim: c, exists: false, error: `entity "${entity}" desconhecida` });
+          allVerified = false;
+          continue;
+        }
+        const byId = c?.by_id ? String(c.by_id) : '';
+        const byField = c?.by_field ? String(c.by_field) : cfg.defaultField;
+        const byValue = c?.by_value != null ? String(c.by_value) : '';
+
+        let q = supabase.from(cfg.table).select(cfg.selectFields).limit(1);
+        if (byId) {
+          q = q.eq('id', byId);
+        } else if (byValue) {
+          // Numero (numérico) usa eq exato; texto usa ilike
+          if (byField === 'numero' || byField === 'id') {
+            q = (q as any).eq(byField, isNaN(Number(byValue)) ? byValue : Number(byValue));
+          } else {
+            q = (q as any).ilike(byField, byValue);
+          }
+        } else {
+          results.push({ claim: c, exists: false, error: 'forneça by_id OU by_field+by_value' });
+          allVerified = false;
+          continue;
+        }
+
+        const { data, error } = await q;
+        if (error) {
+          results.push({ claim: c, exists: false, error: error.message });
+          allVerified = false;
+          continue;
+        }
+        const rows = (data ?? []) as any[];
+        if (rows.length === 0) {
+          results.push({ claim: c, exists: false, error: 'registro não encontrado' });
+          allVerified = false;
+        } else {
+          results.push({ claim: c, exists: true, found_data: rows[0] });
+        }
+      }
+
+      return {
+        all_verified: allVerified,
+        results,
+        summary: allVerified
+          ? `Todas as ${claims.length} afirmações conferem com o banco. Pode confirmar ao usuário.`
+          : `${results.filter((r) => !r.exists).length} de ${claims.length} afirmação(ões) FALHOU. NÃO confirme sucesso geral — reporte o que existe e o que não existe.`,
       };
     }
 
@@ -5595,7 +5741,15 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
       if (newStatus === 'returned') payload.data_retorno = new Date().toISOString();
       const { error } = await supabase.from('shipments').update(payload).eq('id', id);
       if (error) throw new Error(error.message);
-      return { updated: true, shipment_id: id, new_status: newStatus };
+      // Read-after-write: confirma que o status realmente mudou no banco
+      const { data: verify } = await supabase
+        .from('shipments').select('id, status').eq('id', id).maybeSingle();
+      if (!verify || verify.status !== newStatus) {
+        throw new Error(
+          `Update aparentemente passou mas status não bate (esperado: ${newStatus}, atual: ${verify?.status ?? 'inexistente'}). NÃO confirme ao usuário.`
+        );
+      }
+      return { updated: true, verified: true, shipment_id: id, new_status: newStatus };
     }
 
     case 'update_shipment': {
@@ -5622,7 +5776,8 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
       if (Object.keys(payload).length === 1) throw new Error('Nada a atualizar');
       const { error } = await supabase.from('shipments').update(payload).eq('id', id);
       if (error) throw new Error(error.message);
-      return { updated: true, shipment_id: id, changes: payload };
+      await verifyWrite('shipments', id, 'update_shipment');
+      return { updated: true, verified: true, shipment_id: id, changes: payload };
     }
 
     case 'delete_shipment': {
@@ -5630,7 +5785,13 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
       if (!id) throw new Error('shipment_id é obrigatório');
       const { error } = await supabase.from('shipments').delete().eq('id', id);
       if (error) throw new Error(error.message);
-      return { deleted: true, shipment_id: id };
+      // Verifica que sumiu
+      const { data: stillExists } = await supabase
+        .from('shipments').select('id').eq('id', id).maybeSingle();
+      if (stillExists) {
+        throw new Error(`Delete aparentemente passou mas pedido ainda existe (id ${id}). NÃO confirme ao usuário.`);
+      }
+      return { deleted: true, verified: true, shipment_id: id };
     }
 
     case 'add_shipment_observation': {
@@ -6090,9 +6251,17 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
         quantity: diff, type: 'ajuste', notes: args.notes ? String(args.notes) : null,
         created_by: args.author ?? null,
       });
+      // Verifica que a quantidade bate
+      const { data: verify } = await supabase
+        .from('stock_items').select('id, quantity').eq('id', item.id).maybeSingle();
+      if (!verify || Number(verify.quantity) !== newQty) {
+        throw new Error(
+          `Ajuste de estoque não bateu (esperado ${newQty}, atual ${verify?.quantity ?? 'nada'}). NÃO confirme.`
+        );
+      }
       const newAvail = newQty - Number(item.reserved_quantity ?? 0);
       await checkMinStockAndCreateNeed(item.item_code, item.item_name, newAvail, Number(item.min_quantity ?? 0));
-      return { adjusted: true, item_code: item.item_code, old_quantity: item.quantity, new_quantity: newQty };
+      return { adjusted: true, verified: true, item_code: item.item_code, old_quantity: item.quantity, new_quantity: newQty };
     }
 
     case 'deduct_stock_for_shipment': {
@@ -6180,8 +6349,9 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
           notes: args.notes ? String(args.notes) : null,
         })
         .select('id').single();
-      if (orderErr) throw new Error(orderErr.message);
-      const orderId = order!.id;
+      if (orderErr || !order) throw new Error(orderErr?.message ?? 'Falha ao criar ordem de produção');
+      const orderId = order.id;
+      await verifyWrite('production_orders', orderId, 'create_production_order');
 
       // Monta overrides de itens faltantes
       const missingMap: Record<string, { qty_sent: number; notes: string }> = {};
@@ -7584,8 +7754,9 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
         })
         .select('id, nome, contato')
         .single();
-      if (error) throw new Error(error.message);
-      return { created: data };
+      if (error || !data) throw new Error(error?.message ?? 'Falha ao criar financeira');
+      await verifyWrite('financeiras', (data as any).id, 'create_financeira');
+      return { created: data, verified: true };
     }
 
     case 'register_titulo': {
@@ -7637,8 +7808,9 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
         .insert(payload)
         .select('id, financeira_id, client_name, valor, vencimento, status')
         .single();
-      if (error) throw new Error(error.message);
-      return { registered: true, titulo: data, financeira: financeira.nome };
+      if (error || !data) throw new Error(error?.message ?? 'Falha ao registrar título');
+      await verifyWrite('titulos', (data as any).id, 'register_titulo');
+      return { registered: true, verified: true, titulo: data, financeira: financeira.nome };
     }
 
     case 'list_titulos': {
@@ -7687,7 +7859,12 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
       }
       const { error } = await supabase.from('titulos').update(patch).eq('id', id);
       if (error) throw new Error(error.message);
-      return { updated: true, titulo_id: id, new_status: newStatus };
+      const { data: verify } = await supabase
+        .from('titulos').select('id, status').eq('id', id).maybeSingle();
+      if (!verify || verify.status !== newStatus) {
+        throw new Error(`Status do título não bate (esperado ${newStatus}, atual ${verify?.status ?? 'nada'}). NÃO confirme.`);
+      }
+      return { updated: true, verified: true, titulo_id: id, new_status: newStatus };
     }
 
     case 'get_financeira_summary': {
@@ -7799,6 +7976,7 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
       const { data: created, error } = await supabase.from('rmas').insert(payload).select('id, numero').single();
       if (error || !created) throw new Error(error?.message ?? 'Falha ao criar RMA');
       const rmaId = (created as any).id;
+      await verifyWrite('rmas', rmaId, 'create_rma');
 
       // Itens (opcional)
       const items = Array.isArray(args.items) ? args.items : [];
@@ -7817,9 +7995,18 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
         }));
         const { error: itErr } = await supabase.from('rma_items').insert(itemsPayload);
         if (!itErr) itemsInserted = itemsPayload.length;
+        // Verifica que os itens foram persistidos contando
+        const { count: itemsCount } = await supabase
+          .from('rma_items').select('id', { count: 'exact', head: true }).eq('rma_id', rmaId);
+        if ((itemsCount ?? 0) < itemsPayload.length) {
+          throw new Error(
+            `RMA criado mas itens não bateram (esperado ${itemsPayload.length}, persistido ${itemsCount ?? 0}). NÃO confirme.`
+          );
+        }
       }
       return {
         created: true,
+        verified: true,
         rma_id: rmaId,
         numero: (created as any).numero,
         items_inserted: itemsInserted,
@@ -7849,8 +8036,9 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
         quantity: 1,
       };
       const { data, error } = await supabase.from('rma_items').insert(payload).select('id').single();
-      if (error) throw new Error(error.message);
-      return { added: true, item_id: (data as any)?.id, position: nextPos };
+      if (error || !data) throw new Error(error?.message ?? 'Falha ao adicionar item ao RMA');
+      await verifyWrite('rma_items', (data as any).id, 'add_rma_item');
+      return { added: true, verified: true, item_id: (data as any).id, position: nextPos };
     }
 
     case 'update_rma_status': {
@@ -7874,7 +8062,12 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
       }
       const { error } = await supabase.from('rmas').update(update).eq('id', rmaId);
       if (error) throw new Error(error.message);
-      return { updated: true, rma_id: rmaId, new_status: newStatus };
+      const { data: verify } = await supabase
+        .from('rmas').select('id, status').eq('id', rmaId).maybeSingle();
+      if (!verify || verify.status !== newStatus) {
+        throw new Error(`Status do RMA não bate (esperado ${newStatus}, atual ${verify?.status ?? 'nada'}). NÃO confirme.`);
+      }
+      return { updated: true, verified: true, rma_id: rmaId, new_status: newStatus };
     }
 
     case 'add_rma_observation': {

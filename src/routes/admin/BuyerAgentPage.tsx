@@ -54,6 +54,91 @@ function shiftDay(iso: string, delta: number): string {
 const RH_AUTHORIZED_EMAILS = ['vitor@grupoegp.com.br', 'joane@grupoegp.com.br'];
 const RH_TOOL_NAMES = new Set(['list_prestadores', 'get_prestador', 'update_prestador', 'create_prestador']);
 
+// Tools que MUTAM dados — usadas pra gerar a barra de status real e contrastar
+// com o texto da IA. Se a IA disser "cadastrei" mas nenhuma tool dessa lista
+// rodou com sucesso na resposta, é alucinação.
+const WRITE_TOOL_NAMES = new Set([
+  // shipments
+  'create_shipment', 'update_shipment', 'delete_shipment', 'mark_shipment_status',
+  'add_shipment_items', 'add_shipment_observation', 'duplicate_shipment',
+  'bulk_mark_shipped', 'link_document_to_shipment',
+  // products / components / BOM
+  'create_product', 'update_product', 'delete_product',
+  'create_component', 'update_component', 'delete_component', 'bulk_create_components',
+  'add_bom_item', 'update_bom_item', 'remove_bom_item', 'bulk_update_bom_targets', 'setup_product_bom',
+  'set_product_kit', 'duplicate_product',
+  // suppliers
+  'create_supplier', 'update_supplier', 'delete_supplier',
+  'set_component_supplier', 'remove_component_supplier',
+  // quotations
+  'create_quotation', 'update_quotation', 'delete_quotation',
+  // financeira
+  'create_financeira', 'register_titulo', 'mark_titulo_status', 'delete_titulo',
+  // produção / estoque
+  'create_production_order', 'finish_production_order', 'add_production_note',
+  'register_stock_entry', 'adjust_stock', 'reserve_stock', 'release_stock_reservation',
+  'deduct_stock_for_shipment', 'deduct_components_for_production', 'set_stock_minimum',
+  // RMA
+  'create_rma', 'update_rma', 'add_rma_item', 'update_rma_item', 'delete_rma_item',
+  'update_rma_status', 'add_rma_observation', 'delete_rma',
+  // outras
+  'register_client_brand', 'delete_client_brand',
+  'create_scheduled_task', 'toggle_scheduled_task', 'delete_scheduled_task',
+  'remember', 'update_memory', 'forget_memory',
+  'send_quote_request_whatsapp',
+]);
+
+interface ActionSummary {
+  total: number;
+  success: number;
+  failed: { name: string; error: string }[];
+  verified: number;
+  writeNames: string[];
+}
+
+/**
+ * Para um turno do modelo no índice `modelIdx`, calcula o resumo das tools
+ * de escrita que rodaram desde a última mensagem do usuário até esse turno.
+ * Retorna null se nenhuma tool de escrita foi executada.
+ */
+function getActionSummary(history: ChatTurn[], modelIdx: number): ActionSummary | null {
+  // Acha o índice da mensagem do usuário anterior
+  let userStart = -1;
+  for (let i = modelIdx - 1; i >= 0; i--) {
+    if (history[i].role === 'user' && !history[i].toolResponse) {
+      userStart = i;
+      break;
+    }
+  }
+  if (userStart === -1) userStart = 0;
+
+  let success = 0;
+  let verified = 0;
+  const failed: { name: string; error: string }[] = [];
+  const writeNames: string[] = [];
+
+  for (let i = userStart + 1; i <= modelIdx; i++) {
+    const t = history[i];
+    if (!t.toolResponse) continue;
+    if (!WRITE_TOOL_NAMES.has(t.toolResponse.name)) continue;
+    writeNames.push(t.toolResponse.name);
+    if (t.toolResponse.error) {
+      failed.push({ name: t.toolResponse.name, error: t.toolResponse.error });
+    } else {
+      success++;
+      // Read-after-write retorna { verified: true } no payload
+      const data = t.toolResponse.data as any;
+      if (data && (data.verified === true || data.all_verified === true)) {
+        verified++;
+      }
+    }
+  }
+
+  const total = success + failed.length;
+  if (total === 0) return null;
+  return { total, success, failed, verified, writeNames };
+}
+
 function formatDateLabel(iso: string): string {
   const today = todayIso();
   if (iso === today) return 'Hoje';
@@ -1105,6 +1190,9 @@ export default function BuyerAgentPage() {
                     .join('\n')
                     .trim();
                   if (!cleanText) return null;
+                  // Calcula resumo real das ações de escrita desta resposta
+                  // (apenas no turno final — não enquanto streaming)
+                  const summary = !t.streaming ? getActionSummary(history, idx) : null;
                   return (
                     <div key={idx} className="flex flex-col items-start">
                       <div className="max-w-[85%] rounded-lg bg-white border border-slate-200 px-4 py-3 text-sm text-slate-800 shadow-sm">
@@ -1113,6 +1201,46 @@ export default function BuyerAgentPage() {
                           <span className="ml-0.5 inline-block h-4 w-[2px] -mb-1 animate-pulse bg-brand-500 align-text-bottom" />
                         )}
                       </div>
+                      {summary && (
+                        <div
+                          className={cn(
+                            'mt-1.5 max-w-[85%] rounded-md border px-2.5 py-1.5 text-[11px]',
+                            summary.failed.length > 0
+                              ? 'border-red-200 bg-red-50 text-red-800'
+                              : summary.verified === summary.success && summary.success > 0
+                                ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+                                : 'border-amber-200 bg-amber-50 text-amber-800'
+                          )}
+                          title="Status real das ações executadas no banco — independente do que a IA falou no texto"
+                        >
+                          {summary.failed.length === 0 ? (
+                            <span>
+                              <strong>✓ {summary.success} {summary.success === 1 ? 'ação executada' : 'ações executadas'}</strong>
+                              {summary.verified > 0 && (
+                                <span className="ml-1.5 opacity-75">· {summary.verified} verificada{summary.verified === 1 ? '' : 's'} no banco</span>
+                              )}
+                              {summary.verified < summary.success && (
+                                <span className="ml-1.5 opacity-60">· {summary.success - summary.verified} sem confirmação automática</span>
+                              )}
+                            </span>
+                          ) : (
+                            <div className="space-y-0.5">
+                              <div className="font-semibold">
+                                ⚠ {summary.failed.length} de {summary.total} {summary.total === 1 ? 'ação falhou' : 'ações falharam'}
+                                {summary.success > 0 && <span className="ml-1 opacity-75">· {summary.success} ok</span>}
+                              </div>
+                              {summary.failed.slice(0, 3).map((f, i) => (
+                                <div key={i} className="truncate opacity-80">
+                                  • <code className="font-mono text-[10px]">{f.name}</code>: {f.error.slice(0, 120)}
+                                </div>
+                              ))}
+                              {summary.failed.length > 3 && (
+                                <div className="opacity-60">+ {summary.failed.length - 3} outros erros</div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )}
                       <div className="mt-1 flex items-center gap-2 px-1">
                         {t.provider && !t.streaming && (
                           <span className={cn('text-[11px]', providerColor)}>
