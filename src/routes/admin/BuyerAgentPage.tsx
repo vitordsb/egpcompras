@@ -229,6 +229,18 @@ export default function BuyerAgentPage() {
     return () => clearInterval(id);
   }, [running, runStartedAt]);
 
+  // Ciclagem de mensagens de status enquanto a IA pensa — evita sensação de
+  // que travou. Roda enquanto running=true, incrementa a cada 2.4s.
+  const [statusCycle, setStatusCycle] = useState(0);
+  useEffect(() => {
+    if (!running) {
+      setStatusCycle(0);
+      return;
+    }
+    const id = setInterval(() => setStatusCycle((n) => n + 1), 2400);
+    return () => clearInterval(id);
+  }, [running]);
+
   // Auto-grow do textarea conforme o usuário digita.
   // Mantém altura mínima de 50px (alinha com os botões de 52px do form).
   useEffect(() => {
@@ -1353,19 +1365,36 @@ export default function BuyerAgentPage() {
                   <div className="flex max-w-[85%] flex-col gap-1 rounded-lg bg-white border border-slate-200 px-4 py-3 shadow-sm">
                     <div className="flex items-center gap-3">
                       <span className="inline-flex items-center gap-1">
-                        <span className="h-2 w-2 animate-pulse rounded-full bg-slate-400" />
-                        <span className="h-2 w-2 animate-pulse rounded-full bg-slate-400 [animation-delay:120ms]" />
-                        <span className="h-2 w-2 animate-pulse rounded-full bg-slate-400 [animation-delay:240ms]" />
+                        <span className="h-2 w-2 animate-pulse rounded-full bg-brand-500" />
+                        <span className="h-2 w-2 animate-pulse rounded-full bg-brand-500 [animation-delay:120ms]" />
+                        <span className="h-2 w-2 animate-pulse rounded-full bg-brand-500 [animation-delay:240ms]" />
                       </span>
-                      <span className="text-sm text-slate-700">
+                      <span className="text-sm text-slate-700 transition-opacity duration-300">
                         {(() => {
-                          // Status derivado do último turn no histórico
+                          // Status real (último turn) tem prioridade — quando uma
+                          // tool tá rodando, mostra o nome dela em vez de mensagem genérica.
                           const last = history[history.length - 1];
                           if (last?.toolCall) {
                             return describeToolCall(last.toolCall.name, last.toolCall.args) + '…';
                           }
-                          if (last?.toolResponse) return 'Processando resposta…';
-                          return 'Pensando…';
+
+                          // Sem tool ativa: cicla entre mensagens conforme statusCycle.
+                          // Se já houve toolResponse, IA tá decidindo próximo passo.
+                          // Senão é o primeiro turno: lendo, pensando, gerando.
+                          const messagesAfterTool = [
+                            'Processando resposta…',
+                            'Decidindo próximo passo…',
+                            'Conferindo dados…',
+                            'Quase lá…',
+                          ];
+                          const messagesInitial = [
+                            'Lendo seu pedido…',
+                            'Pensando…',
+                            'Implementando…',
+                            'Gerando resposta…',
+                          ];
+                          const messages = last?.toolResponse ? messagesAfterTool : messagesInitial;
+                          return messages[statusCycle % messages.length];
                         })()}
                       </span>
                       <span className="text-xs text-slate-400">{elapsedSec}s</span>
