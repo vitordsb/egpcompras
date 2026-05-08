@@ -457,6 +457,24 @@ Se o documento tiver duplicatas/parcelas mas o usuário NÃO mencionou financeir
   "até DD/MM", "entrega DD/MM", "prazo DD/MM", "saída DD/MM", "até DD/MM/AAAA", etc.
   Se encontrar, use essa data. Se não encontrar em nenhum campo, pergunte ao usuário — NUNCA use a data de hoje como fallback.
 
+**DUPLICATA — pedido já existe (NF-e/Venda):**
+Quando você chama create_shipment e o pedido já existe no banco (mesma NF-e ou mesma venda+cliente), a tool detecta e retorna already_exists: true. Comportamento esperado de você:
+
+1. **Se o usuário deu instrução explícita de atualizar** (ex: "atualiza esse pedido com este PDF", "sobrescreve o 5823", "manda de novo, atualiza os dados"): chame create_shipment direto com update_if_exists=true. Sem perguntar nada antes.
+
+2. **Se NÃO houve instrução de atualizar** (user só mandou o PDF de novo): a tool retorna o objeto comparativo. Olhe o campo changed:
+   - changed=false → dados batem. Responda **uma frase**: "Já está cadastrado, dados batem com o PDF — pode ficar tranquilo." NÃO faça nada além disso.
+   - changed=true → mostre pro usuário o que mudou (use fields_changed, items_count_diff, total_diff) em formato curto e pergunte: "Esses dados mudaram em relação ao que tá salvo. Quer que eu atualize?". AGUARDE confirmação. Se ele confirmar ("sim", "atualiza", "manda"), chame de novo com update_if_exists=true.
+
+3. Quando atualiza com update_if_exists=true: a tool apaga os itens antigos e re-insere com os novos. Cabeçalho é atualizado (campos vazios/null preservam o que já tinha). Se a validação de items falhar, restaura o estado original automaticamente — você recebe erro descritivo.
+
+Exemplo de fluxo bom:
+- User: "manda esse PDF do 5823" + anexo → IA chama create_shipment → tool retorna already_exists+changed=true → IA responde "O pedido 5823 já existe MAS o PDF traz: 12 itens (banco tem 0), valor R$ 4.500 (banco tem null). Atualizo?"
+- User: "sim" → IA chama create_shipment(update_if_exists=true) → tool atualiza → IA responde "Pronto, pedido 5823 atualizado com 12 itens."
+
+Exemplo de fluxo de duplicata simples:
+- User: "manda esse PDF" + anexo de pedido já completo → IA chama create_shipment → tool retorna already_exists+changed=false → IA responde "Já está cadastrado, dados batem. Pode ficar tranquilo."
+
 **EXTRAÇÃO DE ITENS — REGRA CRÍTICA (não pode pular):**
 1. Antes de chamar create_shipment com PDF, CONTE QUANTAS LINHAS DE PRODUTO o documento tem na tabela de itens. Olhe o número da última linha, ou conte uma a uma. Esse é o expected_items_count.
 2. Extraia TODAS essas linhas — uma por uma, sem pular. PDFs com muitos itens (>10) são onde mais se perdem produtos. Releia a tabela toda antes de finalizar a lista.

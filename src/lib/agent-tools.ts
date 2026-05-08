@@ -1239,6 +1239,10 @@ export const toolDeclarations = [
           type: 'NUMBER' as Type,
           description: 'OPCIONAL: total esperado do pedido (do PDF). A tool compara contra a soma de quantity*unit_price dos items inseridos. Se diferir mais de 5%, retorna um aviso (não bloqueia).',
         },
+        update_if_exists: {
+          type: 'BOOLEAN' as Type,
+          description: 'Default false. Se true e o pedido já existe (mesma NF-e ou venda+cliente): apaga itens antigos, atualiza cabeçalho e re-insere itens com os dados novos. Use quando o user disser explicitamente "atualiza", "sobrescreve" ou quando o pedido existente está incompleto/errado e o PDF traz dados completos. Se false e duplicata detectada, retorna a comparação old vs new pra você mostrar e perguntar antes de atualizar.',
+        },
         items: {
           type: 'ARRAY' as Type,
           description: 'Itens do pedido. Cada item pode ter product_name (fuzzy match), item_code, item_name, unit_price e quantity. OBRIGATÓRIO em vendas (tipo_nota="venda"): pelo menos 1 item.',
@@ -5585,18 +5589,89 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
       // Previne duplicata: checa por numero_nfe ou numero_venda + cliente
       const nfe   = args.numero_nfe    ? String(args.numero_nfe).trim()   : null;
       const nvenda = args.numero_venda ? String(args.numero_venda).trim() : null;
+      const updateIfExists = Boolean(args.update_if_exists);
+      let existingShipment: any = null;
       if (nfe || nvenda) {
-        let dupQ = supabase.from('shipments').select('id, client_name, numero_venda, numero_nfe, status');
+        let dupQ = supabase.from('shipments').select('*');
         if (nfe)    dupQ = dupQ.eq('numero_nfe',    nfe);
         else        dupQ = dupQ.eq('numero_venda',  nvenda!).ilike('client_name', `%${clientName}%`);
         const { data: existing } = await dupQ.limit(1).maybeSingle();
-        if (existing) {
-          return {
-            already_exists: true,
-            shipment_id: (existing as any).id,
-            message: `Pedido já existe (${(existing as any).client_name} — ${nfe ? `NF-e ${nfe}` : `Venda #${nvenda}`}, status: ${(existing as any).status}). Nenhum novo registro criado.`,
-          };
+        existingShipment = existing;
+      }
+
+      if (existingShipment && !updateIfExists) {
+        // Compara dados pra a IA poder decidir entre "tudo igual" vs "mudou"
+        const existingId = existingShipment.id as string;
+        const { data: oldItems } = await supabase
+          .from('shipment_items')
+          .select('id, item_code, item_name, quantity, unit_price')
+          .eq('shipment_id', existingId);
+        const oldItemsArr = (oldItems ?? []) as any[];
+        const oldItemsCount = oldItemsArr.length;
+        const oldTotal = oldItemsArr.reduce(
+          (s, it: any) => s + Number(it.quantity ?? 0) * Number(it.unit_price ?? 0),
+          0
+        );
+        const newItemsCount = itemsInputRaw.length;
+        const newTotal = itemsInputRaw.reduce(
+          (s: number, it: any) => s + Number(it.quantity ?? 0) * Number(it.unit_price ?? 0),
+          0
+        );
+
+        // Compara campos principais do cabeçalho (apenas onde o user/IA passou valor)
+        const fieldsCompared: Record<string, { old: any; new: any }> = {};
+        const compareFields = [
+          'client_name', 'client_trade_name', 'client_cnpj', 'client_phone',
+          'client_email', 'client_address', 'numero_nfe', 'numero_venda',
+          'data_venda', 'data_prevista', 'valor_total', 'total_produtos',
+          'frete_tipo', 'frete_valor', 'forma_pagamento', 'condicao_pagamento',
+        ];
+        for (const f of compareFields) {
+          const newVal = (args as any)[f];
+          if (newVal === undefined || newVal === null || newVal === '') continue;
+          const oldVal = existingShipment[f];
+          // Compara como string trimada pra evitar falso positivo de número/string
+          const oldStr = oldVal == null ? '' : String(oldVal).trim();
+          const newStr = String(newVal).trim();
+          if (oldStr !== newStr) {
+            fieldsCompared[f] = { old: oldVal ?? null, new: newVal };
+          }
         }
+
+        const itemsCountChanged = newItemsCount !== oldItemsCount;
+        const totalChanged = Math.abs(newTotal - oldTotal) > 0.01;
+        const headerChanged = Object.keys(fieldsCompared).length > 0;
+        const anythingChanged = itemsCountChanged || totalChanged || headerChanged;
+
+        return {
+          already_exists: true,
+          changed: anythingChanged,
+          shipment_id: existingId,
+          existing: {
+            client_name: existingShipment.client_name,
+            numero_nfe: existingShipment.numero_nfe,
+            numero_venda: existingShipment.numero_venda,
+            status: existingShipment.status,
+            valor_total: existingShipment.valor_total,
+            data_venda: existingShipment.data_venda,
+            items_count: oldItemsCount,
+            items_total_calculated: oldTotal,
+          },
+          incoming: {
+            items_count: newItemsCount,
+            items_total_calculated: newTotal,
+          },
+          fields_changed: fieldsCompared,
+          items_count_diff: { old: oldItemsCount, new: newItemsCount },
+          total_diff: { old: oldTotal, new: newTotal },
+          message: anythingChanged
+            ? `Pedido ${nfe ? `NF-e ${nfe}` : `Venda #${nvenda}`} já existe MAS com dados diferentes. ` +
+              `Cabeçalho: ${headerChanged ? Object.keys(fieldsCompared).join(', ') : 'igual'}. ` +
+              `Itens: ${oldItemsCount} → ${newItemsCount}. ` +
+              `Total: R$ ${oldTotal.toFixed(2)} → R$ ${newTotal.toFixed(2)}. ` +
+              `MOSTRE essa comparação pro usuário e pergunte se ele quer ATUALIZAR (chame de novo com update_if_exists=true).`
+            : `Pedido ${nfe ? `NF-e ${nfe}` : `Venda #${nvenda}`} já existe e os dados batem com o que o PDF traz. Nada a fazer — só informe ao usuário "Já está cadastrado, tudo certo".`,
+        };
       }
 
       const tipoNota = tipoNotaPre;
@@ -5622,13 +5697,82 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
         chave_acesso:        args.chave_acesso        ? String(args.chave_acesso).replace(/\D/g,'').slice(0,44) || null : null,
         notes:               args.notes               ? String(args.notes).trim()             : null,
       };
-      const { data: created, error } = await supabase
-        .from('shipments')
-        .insert(payload)
-        .select('id, client_name, numero_venda, numero_nfe, status')
-        .single();
-      if (error || !created) throw new Error(error?.message ?? 'Falha ao criar pedido');
-      const shipmentId = (created as any).id as string;
+
+      let shipmentId: string;
+      let created: any;
+      let isUpdate = false;
+      // Backup dos itens antigos pra restore em caso de falha em modo update
+      let oldItemsBackup: any[] = [];
+      let oldHeaderBackup: any = null;
+
+      if (existingShipment && updateIfExists) {
+        // ── MODO UPDATE: pedido já existe e usuário pediu pra atualizar ──
+        isUpdate = true;
+        shipmentId = existingShipment.id as string;
+
+        // Backup pra restore caso post-validação falhe
+        oldHeaderBackup = { ...existingShipment };
+        const { data: oldItems } = await supabase
+          .from('shipment_items').select('*').eq('shipment_id', shipmentId);
+        oldItemsBackup = (oldItems ?? []) as any[];
+
+        // Atualiza só campos que vieram com valor (não apaga campos antigos
+        // que não estão na nova chamada — preserva o que o user já tinha)
+        const updatePayload: Record<string, unknown> = {};
+        for (const [k, v] of Object.entries(payload)) {
+          if (v !== null && v !== undefined && v !== '') updatePayload[k] = v;
+        }
+        updatePayload.updated_at = new Date().toISOString();
+        const { error: upErr } = await supabase
+          .from('shipments').update(updatePayload).eq('id', shipmentId);
+        if (upErr) throw new Error(`Falha ao atualizar pedido: ${upErr.message}`);
+        // Apaga itens antigos pra inserir os novos (substituição completa)
+        const { error: delErr } = await supabase
+          .from('shipment_items').delete().eq('shipment_id', shipmentId);
+        if (delErr) throw new Error(`Falha ao limpar itens antigos: ${delErr.message}`);
+        const { data: ship } = await supabase
+          .from('shipments')
+          .select('id, client_name, numero_venda, numero_nfe, status')
+          .eq('id', shipmentId).maybeSingle();
+        created = ship;
+      } else {
+        // ── MODO CREATE: pedido novo ──
+        const { data: c, error } = await supabase
+          .from('shipments')
+          .insert(payload)
+          .select('id, client_name, numero_venda, numero_nfe, status')
+          .single();
+        if (error || !c) throw new Error(error?.message ?? 'Falha ao criar pedido');
+        created = c;
+        shipmentId = (c as any).id as string;
+      }
+
+      // Helper: restaura estado original em caso de falha durante update
+      async function restoreOnFailure(reason: string): Promise<never> {
+        if (isUpdate && oldHeaderBackup) {
+          // Restaura cabeçalho
+          const restoreHeader: Record<string, unknown> = {};
+          for (const [k, v] of Object.entries(oldHeaderBackup)) {
+            if (k === 'id' || k === 'created_at') continue;
+            restoreHeader[k] = v;
+          }
+          await supabase.from('shipments').update(restoreHeader).eq('id', shipmentId);
+          // Limpa qualquer item parcial e re-insere os antigos
+          await supabase.from('shipment_items').delete().eq('shipment_id', shipmentId);
+          if (oldItemsBackup.length > 0) {
+            const restoredItems = oldItemsBackup.map((it: any) => {
+              const { id: _ignore, created_at: _ignore2, ...rest } = it;
+              return rest;
+            });
+            await supabase.from('shipment_items').insert(restoredItems);
+          }
+          throw new Error(reason + ` Estado original do pedido foi restaurado.`);
+        } else {
+          // Modo create: deleta o pedido recém-criado
+          await supabase.from('shipments').delete().eq('id', shipmentId);
+          throw new Error(reason + ` Pedido NÃO foi criado no banco.`);
+        }
+      }
 
       // Verificação pós-criação: confirma que o registro existe de fato no banco
       const { data: verified, error: verifyErr } = await supabase
@@ -5694,34 +5838,28 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
         .eq('shipment_id', shipmentId);
       const realInserted = realCount ?? 0;
 
-      // Se tipo exige itens mas nada foi persistido → ROLLBACK do pedido
+      // Se tipo exige itens mas nada foi persistido → ROLLBACK
       if (tiposQueExigemItens.has(tipoNota) && realInserted === 0) {
-        await supabase.from('shipments').delete().eq('id', shipmentId);
-        throw new Error(
-          `Pedido descartado: tipo "${tipoNota}" exige itens mas nenhum foi persistido. ` +
-          `Falhas: ${itemsFailed.map((f) => `${f.item_name}: ${f.error}`).join('; ')}. ` +
-          `Corrija os itens e tente de novo — pedido NÃO foi criado no banco.`
+        await restoreOnFailure(
+          `Operação descartada: tipo "${tipoNota}" exige itens mas nenhum foi persistido. ` +
+          `Falhas: ${itemsFailed.map((f) => `${f.item_name}: ${f.error}`).join('; ')}.`
         );
       }
 
       // Se expected_items_count foi passado e não bate com o que persistiu → ROLLBACK
       if (expectedItems != null && expectedItems > 0 && realInserted !== expectedItems) {
-        await supabase.from('shipments').delete().eq('id', shipmentId);
-        throw new Error(
-          `Pedido descartado: esperava ${expectedItems} itens mas apenas ${realInserted} foram persistidos. ` +
-          `Itens que falharam: ${itemsFailed.map((f) => `${f.item_name}: ${f.error}`).join('; ') || 'nenhum erro reportado, mas count não bate'}. ` +
-          `Releia o PDF, corrija os itens e tente de novo — pedido NÃO foi criado no banco.`
+        await restoreOnFailure(
+          `Operação descartada: esperava ${expectedItems} itens mas apenas ${realInserted} foram persistidos. ` +
+          `Itens que falharam: ${itemsFailed.map((f) => `${f.item_name}: ${f.error}`).join('; ') || 'nenhum erro reportado, mas count não bate'}.`
         );
       }
 
       // Se algum item falhou na inserção (mas count bate ou expected não foi passado),
       // ainda é problema — relata pra IA reagir
       if (itemsFailed.length > 0) {
-        await supabase.from('shipments').delete().eq('id', shipmentId);
-        throw new Error(
-          `Pedido descartado: ${itemsFailed.length} item(ns) falharam na inserção. ` +
-          `Detalhes: ${itemsFailed.map((f) => `"${f.item_name}": ${f.error}`).join(' | ')}. ` +
-          `Corrija e tente de novo — pedido NÃO foi criado no banco.`
+        await restoreOnFailure(
+          `Operação descartada: ${itemsFailed.length} item(ns) falharam na inserção. ` +
+          `Detalhes: ${itemsFailed.map((f) => `"${f.item_name}": ${f.error}`).join(' | ')}.`
         );
       }
 
@@ -5782,6 +5920,7 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
 
       const privateLabelItems = itemsAdded.filter((i) => i.is_private_label);
       return {
+        action: isUpdate ? 'updated' : 'created',
         created,
         verified: true,
         verified_id: shipmentId,
@@ -5789,6 +5928,7 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
         items_added: itemsAdded,
         items_inserted_count: realInserted,
         items_expected_count: expectedItems,
+        items_replaced_count: isUpdate ? oldItemsBackup.length : 0,
         items_failed: itemsFailed,
         total_warning: totalWarning,
         private_label_count: privateLabelsDetected,
@@ -5797,6 +5937,9 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
           ? `⚠️ ${privateLabelsDetected} item(ns) com marca própria detectado(s): ${privateLabelItems.map((i) => `${i.quantity}x ${i.item_color ?? i.item_name} — ${i.brand_name}`).join(' | ')}`
           : null,
         purchase_needs_auto_created: needsAutoCreated,
+        message: isUpdate
+          ? `Pedido ${created?.numero_venda ?? created?.numero_nfe ?? shipmentId} atualizado: ${oldItemsBackup.length} item(ns) substituído(s) por ${realInserted} novo(s).`
+          : `Pedido ${created?.numero_venda ?? created?.numero_nfe ?? shipmentId} criado com ${realInserted} item(ns).`,
       };
     }
 
