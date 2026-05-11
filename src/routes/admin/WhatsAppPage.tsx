@@ -9,6 +9,8 @@ interface Session {
   lastMsg?: string;
   lastDir?: 'in' | 'out';
   unread?: number;
+  /** Quando true, vendedora assumiu a conversa e a IA não responde. */
+  human_takeover?: boolean;
 }
 
 type DeliveryStatus = 'sent' | 'delivered' | 'read' | 'failed' | null;
@@ -179,7 +181,7 @@ export default function WhatsAppPage() {
       if (phones.length === 0) { setSessions([]); setLoading(false); return; }
     }
 
-    let q = supabase.from('whatsapp_sessions').select('phone, updated_at')
+    let q = supabase.from('whatsapp_sessions').select('phone, updated_at, human_takeover')
       .order('updated_at', { ascending: false });
     if (phones) q = q.in('phone', phones);
     const { data: sess } = await q;
@@ -200,6 +202,29 @@ export default function WhatsAppPage() {
     );
     setSessions(enriched);
     setLoading(false);
+  }
+
+  /** Toggle "Atender manualmente" — pausa/retoma a IA pra essa conversa.
+   *  Atualização otimista: UI muda imediatamente, rollback se DB falhar. */
+  async function toggleHumanTakeover() {
+    if (!selected) return;
+    const current = selectedSession?.human_takeover ?? false;
+    const next = !current;
+    // Otimista: atualiza UI antes de confirmar no banco
+    setSessions((prev) =>
+      prev.map((s) => (s.phone === selected ? { ...s, human_takeover: next } : s))
+    );
+    const { error } = await supabase
+      .from('whatsapp_sessions')
+      .update({ human_takeover: next })
+      .eq('phone', selected);
+    if (error) {
+      // Reverte se falhou
+      setSessions((prev) =>
+        prev.map((s) => (s.phone === selected ? { ...s, human_takeover: current } : s))
+      );
+      console.error('[wa] toggle human_takeover falhou:', error);
+    }
   }
 
   async function sendManualMessage() {
@@ -285,10 +310,53 @@ export default function WhatsAppPage() {
     loadConversation(selected);
     // Focus no input ao abrir conversa
     setTimeout(() => inputRef.current?.focus(), 50);
-    // Polling a cada 10s para novas mensagens
-    const id = setInterval(() => loadConversation(selected), 10000);
-    return () => clearInterval(id);
+
+    // Realtime: subscribe a INSERT/UPDATE em whatsapp_messages pra esse phone.
+    // Substitui o polling de 10s — latência cai pra <1s sem requests extras.
+    const channel = supabase
+      .channel(`wa-msgs:${selected}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'whatsapp_messages',
+          filter: `phone=eq.${selected}`,
+        },
+        () => loadConversation(selected),
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'whatsapp_messages',
+          filter: `phone=eq.${selected}`,
+        },
+        () => loadConversation(selected),
+      )
+      .subscribe();
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, [selected]);
+
+  // Realtime global: subscribe em whatsapp_sessions pra atualizar a lista
+  // de conversas quando uma nova chega ou o human_takeover muda em outra aba.
+  useEffect(() => {
+    const channel = supabase
+      .channel('wa-sessions')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'whatsapp_sessions' },
+        () => loadSessions(),
+      )
+      .subscribe();
+    return () => {
+      supabase.removeChannel(channel);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const selectedSession = sessions.find((s) => s.phone === selected);
 
@@ -372,7 +440,11 @@ export default function WhatsAppPage() {
           </div>
         </div>
       ) : (
-        <div className="flex flex-1 flex-col overflow-hidden bg-slate-50">
+        <div className={cn(
+          'flex flex-1 flex-col overflow-hidden bg-slate-50',
+          // Borda lateral âmbar quando vendedora assumiu — sinal visual
+          selectedSession?.human_takeover === true && 'border-l-4 border-l-amber-400'
+        )}>
 
           {/* Header */}
           <div className="shrink-0 border-b border-slate-200 bg-white px-3 py-3 md:px-5">
@@ -415,7 +487,44 @@ export default function WhatsAppPage() {
                   {orders.length} pedido{orders.length !== 1 ? 's' : ''}
                 </span>
               )}
+              {/* Toggle "Atender manualmente" — pausa IA pra esta conversa */}
+              {(() => {
+                const isManual = selectedSession?.human_takeover === true;
+                return (
+                  <button
+                    type="button"
+                    onClick={toggleHumanTakeover}
+                    className={cn(
+                      'flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors',
+                      isManual
+                        ? 'border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100'
+                        : 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+                    )}
+                    title={
+                      isManual
+                        ? 'Você está atendendo manualmente. Clique para retomar a IA.'
+                        : 'IA está respondendo automaticamente. Clique para assumir.'
+                    }
+                  >
+                    <span
+                      className={cn(
+                        'inline-block h-1.5 w-1.5 rounded-full',
+                        isManual ? 'bg-amber-500' : 'bg-emerald-500 animate-pulse'
+                      )}
+                    />
+                    {isManual ? 'Atendendo manual' : 'IA ativa'}
+                  </button>
+                );
+              })()}
             </div>
+
+            {/* Banner explicativo quando em modo manual */}
+            {selectedSession?.human_takeover === true && (
+              <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                <strong>Você assumiu essa conversa.</strong> A IA não vai responder enquanto esse modo estiver ativo.
+                Quando terminar, clique no botão acima pra liberar a IA de novo.
+              </div>
+            )}
 
             {/* Form inline para editar nome */}
             {editingContact && (
