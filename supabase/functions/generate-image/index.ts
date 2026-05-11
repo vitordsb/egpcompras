@@ -99,41 +99,95 @@ async function applyBrandingAndProduct(
     }
 
     // 3. Logo EGP no canto inferior esquerdo
+    //    Em lighterBranding (flyer): logo maior + texto "EGP" ao lado +
+    //    barra rosa fina na lateral esquerda pra reforçar identidade.
+    const EGP_PINK = { r: 0xCB, g: 0x14, b: 0x64 }; // #CB1464
+
+    if (opts.lighterBranding) {
+      // Barra rosa vertical fina na lateral esquerda — accent visual da marca
+      const stripeW = Math.max(4, Math.round(W * 0.008));
+      for (let y = 0; y < H; y++) {
+        for (let x = 0; x < stripeW; x++) {
+          img.setPixelColor(
+            Jimp.rgbaToInt(EGP_PINK.r, EGP_PINK.g, EGP_PINK.b, 255),
+            x, y,
+          );
+        }
+      }
+    }
+
     const logoRes = await fetch(LOGO_URL);
     if (logoRes.ok) {
       const logoBuf = await logoRes.arrayBuffer();
       const logo    = await Jimp.read(Buffer.from(logoBuf));
-      // Logo menor em lighterBranding (não compete com o design do flyer)
-      const logoW   = Math.round(W * (opts.lighterBranding ? 0.16 : 0.24));
+      // Logo: 22% no lighterBranding (era 16%), 24% no completo
+      const logoW   = Math.round(W * (opts.lighterBranding ? 0.22 : 0.24));
       logo.resize(logoW, Jimp.AUTO);
-      const pad   = Math.round(W * 0.025);
+      const pad   = Math.round(W * 0.03);
       const logoY = H - logo.getHeight() - pad;
 
-      // Em lighterBranding, adiciona pílula branca translúcida atrás do logo
-      // pra garantir legibilidade sobre fundos coloridos
+      // Em lighterBranding, adiciona "cartão" branco arredondado atrás do
+      // logo + nome "EGP" ao lado em fonte grande pra reforçar a marca.
       if (opts.lighterBranding) {
-        const pillPad = Math.round(W * 0.012);
-        const pillW = logo.getWidth() + pillPad * 2;
-        const pillH = logo.getHeight() + pillPad * 2;
-        const pillX = pad - pillPad;
-        const pillY = logoY - pillPad;
-        for (let y = Math.max(0, pillY); y < Math.min(H, pillY + pillH); y++) {
-          for (let x = Math.max(0, pillX); x < Math.min(W, pillX + pillW); x++) {
+        // Carrega fonte grande pro nome EGP
+        let egpFont: any = null;
+        try {
+          egpFont = await Jimp.loadFont(Jimp.FONT_SANS_64_BLACK);
+        } catch { /* fallback */ }
+
+        const egpText = 'EGP';
+        const textW = egpFont ? img.measureText(egpFont, egpText) : 0;
+        const textH = egpFont ? img.measureTextHeight(egpFont, egpText, textW) : 0;
+        const gap   = Math.round(W * 0.015);
+
+        // Cartão branco que envolve logo + texto
+        const cardPad = Math.round(W * 0.018);
+        const cardW   = logo.getWidth() + (egpFont ? gap + textW : 0) + cardPad * 2;
+        const cardH   = Math.max(logo.getHeight(), textH) + cardPad * 2;
+        const cardX   = pad - cardPad;
+        const cardY   = H - cardH - pad + cardPad;
+
+        for (let y = Math.max(0, cardY); y < Math.min(H, cardY + cardH); y++) {
+          for (let x = Math.max(0, cardX); x < Math.min(W, cardX + cardW); x++) {
+            // Branco sólido com leve transparência onde tem fundo escuro
             const c = Jimp.intToRGBA(img.getPixelColor(x, y));
             img.setPixelColor(
               Jimp.rgbaToInt(
-                Math.round(c.r * 0.2 + 255 * 0.8),
-                Math.round(c.g * 0.2 + 255 * 0.8),
-                Math.round(c.b * 0.2 + 255 * 0.8),
+                Math.round(c.r * 0.06 + 255 * 0.94),
+                Math.round(c.g * 0.06 + 255 * 0.94),
+                Math.round(c.b * 0.06 + 255 * 0.94),
                 255,
               ),
               x, y,
             );
           }
         }
-      }
 
-      img.composite(logo, pad, logoY, { mode: Jimp.BLEND_SOURCE_OVER, opacitySource: 1, opacityDest: 1 });
+        // Borda rosa fina embaixo do cartão (acent EGP)
+        const borderH = Math.max(2, Math.round(W * 0.004));
+        for (let y = cardY + cardH - borderH; y < cardY + cardH; y++) {
+          for (let x = Math.max(0, cardX); x < Math.min(W, cardX + cardW); x++) {
+            img.setPixelColor(
+              Jimp.rgbaToInt(EGP_PINK.r, EGP_PINK.g, EGP_PINK.b, 255),
+              x, y,
+            );
+          }
+        }
+
+        // Logo (centralizado verticalmente no cartão)
+        const logoYInCard = cardY + Math.round((cardH - logo.getHeight()) / 2);
+        img.composite(logo, pad, logoYInCard, { mode: Jimp.BLEND_SOURCE_OVER, opacitySource: 1, opacityDest: 1 });
+
+        // Texto "EGP" ao lado direito do logo
+        if (egpFont) {
+          const textX = pad + logo.getWidth() + gap;
+          const textY = cardY + Math.round((cardH - textH) / 2);
+          img.print(egpFont, textX, textY, egpText);
+        }
+      } else {
+        // Branding completo (não-flyer) — logo simples no canto
+        img.composite(logo, pad, logoY, { mode: Jimp.BLEND_SOURCE_OVER, opacitySource: 1, opacityDest: 1 });
+      }
     }
 
     // 4. CNPJ + nome (apenas no branding completo — em flyers fica poluído)

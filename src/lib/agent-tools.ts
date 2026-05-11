@@ -4955,106 +4955,114 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
         throw new Error('main_text muito longo — máximo 60 chars. A IA escreve no design, textos longos viram ilegíveis.');
       }
 
-      // Mapeia holiday → cena + paleta default
+      // Identidade visual EGP — TODA holiday é gerada com fundo claro e
+      // o rosa da marca (#CB1464) como cor de destaque/acento.
+      const EGP_BRAND_PINK = '#CB1464';
+
+      // Mapeia holiday → cena + paleta (cada paleta já inclui o EGP pink)
       const HOLIDAY_CFG: Record<string, { scene: string; palette: string; vibe: string }> = {
         maes: {
-          scene: 'a tender Mother\'s Day scene with a mother joyfully lifting a smiling baby in soft warm light, floating rose petals and heart-shaped decorations, dreamy bokeh background',
-          palette: 'soft pink, rose gold, blush, cream',
-          vibe: 'tender, warm, loving, celebratory',
+          scene: 'a tender Mother\'s Day scene with a mother joyfully holding a smiling baby in soft window light, floating pink rose petals and heart accents, bright airy bokeh, predominantly white and light cream background with delicate pink decorative elements on the sides',
+          palette: `bright white background dominant, EGP signature pink ${EGP_BRAND_PINK}, soft blush, rose gold accents, cream highlights`,
+          vibe: 'tender, warm, loving, celebratory, fresh and bright',
         },
         pais: {
-          scene: 'a heartwarming Father\'s Day scene with a smiling father and child sharing a moment outdoors, golden hour sunlight, sentimental atmosphere',
-          palette: 'navy blue, golden amber, warm earth tones',
-          vibe: 'strong, warm, family, gratitude',
+          scene: 'a heartwarming Father\'s Day scene with a smiling father and child sharing a moment, bright window light, white minimalist background with subtle pink and warm accents on borders',
+          palette: `clean white background, EGP brand pink ${EGP_BRAND_PINK} accents, warm grey, soft gold details`,
+          vibe: 'strong, warm, family, gratitude, modern and clean',
         },
         namorados: {
-          scene: 'a romantic Valentine\'s Day scene with floating red roses, heart-shaped balloons, soft candlelight ambiance',
-          palette: 'deep red, rose gold, cream',
-          vibe: 'romantic, passionate, elegant',
+          scene: 'a romantic minimalist scene with floating pink roses and elegant hearts, bright white airy background, soft natural lighting',
+          palette: `pure white background, EGP brand pink ${EGP_BRAND_PINK}, blush rose, cream`,
+          vibe: 'romantic, elegant, fresh, modern',
         },
         criancas: {
-          scene: 'a joyful Children\'s Day scene with colorful balloons, candy and toys floating, cheerful playful atmosphere, cartoon-like illustration style',
-          palette: 'vibrant rainbow colors, primary colors',
-          vibe: 'playful, joyful, energetic',
+          scene: 'a joyful minimalist Children\'s Day scene with floating colorful pastel balloons, candies, and playful stars on a bright white background',
+          palette: `white dominant background, EGP brand pink ${EGP_BRAND_PINK}, pastel rainbow accents (soft blue, mint, yellow)`,
+          vibe: 'playful, joyful, energetic, fresh and bright',
         },
         professor: {
-          scene: 'a tribute scene to teachers: an apple, an open book, eyeglasses and chalkboard with knowledge symbols, warm appreciation atmosphere',
-          palette: 'forest green, warm brown, cream, gold accents',
-          vibe: 'respectful, appreciative, scholarly',
+          scene: 'an elegant tribute to teachers: an open book, eyeglasses, an apple and chalk elements floating with pink ribbon details, bright clean white background',
+          palette: `white background, EGP pink ${EGP_BRAND_PINK} accents, soft gold, warm grey`,
+          vibe: 'respectful, appreciative, scholarly, modern',
         },
         natal: {
-          scene: 'a magical Christmas scene with a decorated Christmas tree, falling snowflakes, golden lights, gift boxes, festive cozy atmosphere',
-          palette: 'deep red, evergreen, gold, white snow',
-          vibe: 'festive, magical, warm, family',
+          scene: 'an elegant minimalist Christmas scene with a decorated Christmas tree, soft falling snowflakes, golden lights, pink and gold ornaments, bright white winter background',
+          palette: `white background, EGP brand pink ${EGP_BRAND_PINK} ornaments, classic Christmas red and gold accents, fresh white snow`,
+          vibe: 'festive, magical, warm, family, fresh and bright',
         },
         ano_novo: {
-          scene: 'a celebratory New Year\'s scene with golden fireworks bursting in a night sky, champagne glasses, confetti, year transition feel',
-          palette: 'midnight blue, gold, silver, white',
-          vibe: 'celebratory, hopeful, glamorous, exciting',
+          scene: 'an elegant New Year scene with golden fireworks, champagne glasses and confetti on a bright minimalist white background with pink accents',
+          palette: `bright white background, gold and EGP pink ${EGP_BRAND_PINK} confetti, silver details`,
+          vibe: 'celebratory, hopeful, glamorous, fresh',
         },
         pascoa: {
-          scene: 'an Easter scene with decorated colorful eggs, spring flowers, soft pastel decoration, a bunny silhouette in background',
-          palette: 'pastel pink, mint green, lavender, cream',
-          vibe: 'fresh, joyful, soft, renewal',
+          scene: 'an Easter scene with pastel decorated eggs, spring flowers, soft bunny silhouettes on a bright white background',
+          palette: `clean white background, EGP brand pink ${EGP_BRAND_PINK}, pastel mint, soft lavender, cream`,
+          vibe: 'fresh, joyful, soft, spring renewal',
         },
         independencia: {
-          scene: 'a patriotic Brazilian Independence Day scene with the Brazilian flag elements (green, yellow, blue), national pride atmosphere',
-          palette: 'Brazilian flag colors: green, yellow, blue, white',
-          vibe: 'patriotic, proud, celebratory',
+          scene: 'a tasteful Brazilian Independence Day scene with subtle Brazilian flag color accents (green, yellow, blue) and EGP pink details, clean white background',
+          palette: `white background, Brazilian flag colors (green, yellow, blue) with EGP brand pink ${EGP_BRAND_PINK} ribbon as accent`,
+          vibe: 'patriotic, proud, modern and clean',
         },
         consumidor: {
-          scene: 'a customer appreciation scene with shopping bags, gift boxes and stars, "thank you" atmosphere',
-          palette: 'corporate blue, white, gold accents',
-          vibe: 'grateful, premium, customer-focused',
+          scene: 'a customer appreciation scene with elegant shopping bags, gift boxes and stars on a bright minimalist white background',
+          palette: `bright white background, EGP brand pink ${EGP_BRAND_PINK}, soft gold accents`,
+          vibe: 'grateful, premium, customer-focused, fresh',
         },
         consciencia_negra: {
-          scene: 'a powerful tribute scene celebrating Black consciousness with diverse smiling people, traditional African pattern accents, strong empowering atmosphere',
-          palette: 'rich earth tones, gold, deep red, warm brown',
-          vibe: 'powerful, respectful, celebratory, dignified',
+          scene: 'a powerful tribute scene celebrating Black consciousness with diverse smiling people portraits and traditional pattern accents on a bright background',
+          palette: `warm cream and white background, rich earth tones, gold, deep red, with EGP pink ${EGP_BRAND_PINK} accent`,
+          vibe: 'powerful, respectful, dignified, modern',
         },
         black_friday: {
-          scene: 'a bold sales promotion scene with neon signs, price tags, shopping bags, dramatic lighting',
-          palette: 'pure black background, neon yellow and orange, white',
-          vibe: 'urgent, bold, energetic, exciting',
+          scene: 'a bold modern sales promotion scene with price tags, shopping bags and dynamic geometric elements on a bright contrasting background',
+          palette: `bright white and EGP pink ${EGP_BRAND_PINK} dominant, with bold black price tags as accent`,
+          vibe: 'energetic, modern, fresh take on black friday',
         },
         aniversario_empresa: {
-          scene: 'a corporate anniversary celebration scene with elegant balloons, golden confetti, premium party atmosphere, abstract company growth elements',
-          palette: 'corporate blue, gold, white, silver',
-          vibe: 'celebratory, premium, professional, milestone',
+          scene: 'a corporate anniversary celebration scene with elegant balloons, golden confetti and EGP pink accents on a bright white background',
+          palette: `bright white background, EGP brand pink ${EGP_BRAND_PINK} dominant, gold and silver accents`,
+          vibe: 'celebratory, premium, professional, fresh milestone',
         },
         outro: {
-          scene: customTheme || 'a beautiful corporate celebration scene with elegant decorative elements',
-          palette: 'harmonious complementary colors',
-          vibe: 'professional, celebratory',
+          scene: (customTheme || 'a beautiful corporate celebration scene') + ' on a bright clean white background with pink decorative accents',
+          palette: `white background dominant, EGP brand pink ${EGP_BRAND_PINK} accents, harmonious complementary tones`,
+          vibe: 'professional, celebratory, fresh and clean',
         },
       };
 
       const cfg = HOLIDAY_CFG[holiday] ?? HOLIDAY_CFG['outro'];
-      const palette = colorPaletteArg || cfg.palette;
+      const palette = colorPaletteArg
+        ? `${colorPaletteArg}, with EGP brand pink ${EGP_BRAND_PINK} as accent color`
+        : cfg.palette;
 
       const STYLE_QUALIFIERS: Record<string, string> = {
-        suave: 'soft pastel tones, dreamy bokeh, gentle warm lighting, romantic atmosphere',
-        vibrante: 'vibrant saturated colors, dynamic energetic composition, bold contrast',
-        elegante: 'refined elegant composition, premium magazine-quality, sophisticated lighting',
-        festivo: 'cheerful festive atmosphere, decorative elements, joyful color palette',
+        suave: 'soft airy lighting, dreamy bokeh, romantic atmosphere, light and bright',
+        vibrante: 'vibrant saturated colors with bright background, dynamic energetic composition',
+        elegante: 'refined elegant composition, premium magazine-quality, sophisticated bright lighting',
+        festivo: 'cheerful festive atmosphere on a bright background, decorative elements',
       };
       const styleQualifier = STYLE_QUALIFIERS[style] ?? STYLE_QUALIFIERS['elegante'];
 
       // Monta prompt em inglês (Flux performa melhor em EN). O texto fica em PT
       // porque a IA escreve LITERAL o que vem entre aspas.
       const textInstruction = secondaryText
-        ? `Large elegant calligraphic script text "${mainText}" as the main visual element, with smaller text "${secondaryText}" placed nearby in a complementary font.`
-        : `Large elegant calligraphic script text "${mainText}" as the main visual element, beautifully integrated into the composition.`;
+        ? `Large elegant calligraphic script text "${mainText}" in EGP pink ${EGP_BRAND_PINK} as the main visual element, with smaller text "${secondaryText}" nearby in a complementary modern font.`
+        : `Large elegant calligraphic script text "${mainText}" in EGP pink ${EGP_BRAND_PINK} as the main visual element, beautifully integrated.`;
 
       const prompt = [
-        'Professional marketing flyer design for social media post.',
+        'Professional EGP-branded marketing flyer for social media (Instagram post).',
         cfg.scene + '.',
         textInstruction,
         `Color palette: ${palette}.`,
         styleQualifier + '.',
         `Mood: ${cfg.vibe}.`,
-        'Leave clean empty space in the bottom-left corner for a small company logo.',
-        'High quality commercial photography or illustration. No watermarks. No stock-image disclaimers.',
+        // Reforço crítico de identidade EGP — o que mais impacta o resultado:
+        `IMPORTANT BRANDING: bright white or very light background dominant (60-80% of the image), EGP signature pink ${EGP_BRAND_PINK} as the main accent color throughout the composition, clean modern corporate aesthetic, generous white space, NOT dark or moody.`,
+        'Leave the bottom-left corner clean and uncluttered for company logo placement.',
+        'High quality commercial design. No watermarks. No stock-image text overlays.',
       ].join(' ');
 
       const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
