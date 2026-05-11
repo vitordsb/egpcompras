@@ -184,6 +184,9 @@ export default function BuyerAgentPage() {
   const [selectedDate, setSelectedDate] = useState<string>(todayIso);
   const [runStartedAt, setRunStartedAt] = useState<number | null>(null);
   const [elapsedSec, setElapsedSec] = useState(0);
+  // Quantas imagens estão sendo "subidas" pra Storage antes de a IA processar.
+  // Quando > 0, mostra mensagem específica em vez do ciclo normal de "pensando".
+  const [uploadingRefs, setUploadingRefs] = useState(0);
   const [retryStatus, setRetryStatus] = useState<RetryStatus | null>(null);
   const [memoryProposal, setMemoryProposal] = useState<MemoryProposal | null>(null);
   const [memorySaving, setMemorySaving] = useState(false);
@@ -628,18 +631,33 @@ export default function BuyerAgentPage() {
     const filesToSend = [...pendingFiles];
     const parsedsToSend = [...pendingParseds];
 
+    // ── BLOQUEIA UI IMEDIATAMENTE ──
+    // Antes de qualquer upload/processamento, marca running pra:
+    // 1. Desabilitar o botão de enviar (impede duplo clique)
+    // 2. Mostrar indicador de status no chat
+    // 3. Limpar input/pendings pra sinalizar visualmente que foi enviado
+    setInput('');
+    setPendingFiles([]);
+    setPendingParseds([]);
+    setError(null);
+    setRunning(true);
+    setRunStartedAt(Date.now());
+    setRetryStatus(null);
+    setUploadingRefs(filesToSend.filter((f) => f.mimeType.startsWith('image/')).length);
+
     // Monta texto da mensagem: texto do usuário + todos os XMLs parseados
     const parsedText = parsedsToSend.map((p) => p.text).join('\n\n');
 
     // Upload de imagens (jpg/png/webp) pra Storage pra IA poder usar como
     // referência visual em generate_holiday_flyer (reference_image_url).
     // PDFs e outros formatos ficam só como inlineData (Gemini lê inline).
+    // Roda em PARALELO pra reduzir tempo de espera.
     const imageRefsForPrompt: string[] = [];
     const imageFiles = filesToSend.filter((f) => f.mimeType.startsWith('image/'));
     if (imageFiles.length > 0) {
       const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
       const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
-      for (const f of imageFiles) {
+      const uploadResults = await Promise.all(imageFiles.map(async (f) => {
         try {
           const uploadRes = await fetch(`${supabaseUrl}/functions/v1/generate-image`, {
             method: 'POST',
@@ -652,15 +670,18 @@ export default function BuyerAgentPage() {
           });
           const uploadJson = await uploadRes.json();
           if (uploadRes.ok && uploadJson.url) {
-            imageRefsForPrompt.push(`[Imagem de referência "${f.name}": ${uploadJson.url}]`);
-          } else {
-            console.warn('[image-ref] upload falhou:', uploadJson);
+            return `[Imagem de referência "${f.name}": ${uploadJson.url}]`;
           }
+          console.warn('[image-ref] upload falhou:', uploadJson);
+          return null;
         } catch (err) {
           console.warn('[image-ref] erro no upload:', err);
+          return null;
         }
-      }
+      }));
+      for (const r of uploadResults) if (r) imageRefsForPrompt.push(r);
     }
+    setUploadingRefs(0);
     const imageRefsText = imageRefsForPrompt.length > 0
       ? '\n\n' + imageRefsForPrompt.join('\n') +
         '\n(Se for usar como referência visual pra gerar nova imagem, ' +
@@ -672,14 +693,6 @@ export default function BuyerAgentPage() {
       : (message || (hasPdfs
           ? `Importar ${filesToSend.length} pedido${filesToSend.length > 1 ? 's' : ''}: ${filesToSend.map((f) => f.name).join(', ')}`
           : ''))) + imageRefsText;
-
-    setInput('');
-    setPendingFiles([]);
-    setPendingParseds([]);
-    setError(null);
-    setRunning(true);
-    setRunStartedAt(Date.now());
-    setRetryStatus(null);
 
     // Captura snapshot pra detectar correção depois que a IA responder
     const historyBeforeSend = [...history];
@@ -891,6 +904,7 @@ export default function BuyerAgentPage() {
       setRunning(false);
       setRunStartedAt(null);
       setRetryStatus(null);
+      setUploadingRefs(0);
       // Garante que se o stream foi interrompido, o ref seja resetado
       // e o cursor piscante seja limpo (caso ainda esteja ativo)
       if (streamingActiveRef.current) {
@@ -1422,6 +1436,14 @@ export default function BuyerAgentPage() {
                       </span>
                       <span className="text-sm text-slate-700 transition-opacity duration-300">
                         {(() => {
+                          // Upload de imagens de referência tem prioridade — explicita
+                          // que a demora é o upload, não a IA travada.
+                          if (uploadingRefs > 0) {
+                            return uploadingRefs === 1
+                              ? 'Subindo imagem de referência…'
+                              : `Subindo ${uploadingRefs} imagens de referência…`;
+                          }
+
                           // Status real (último turn) tem prioridade — quando uma
                           // tool tá rodando, mostra o nome dela em vez de mensagem genérica.
                           const last = history[history.length - 1];
