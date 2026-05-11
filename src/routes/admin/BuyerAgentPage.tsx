@@ -465,6 +465,20 @@ export default function BuyerAgentPage() {
     if (type === 'application/pdf' || name.endsWith('.pdf')) {
       const data = await readFileAsBase64(file);
       setPendingFiles((prev) => [...prev, { name: file.name, mimeType: 'application/pdf', data }]);
+    } else if (
+      type.startsWith('image/') ||
+      name.endsWith('.jpg') || name.endsWith('.jpeg') ||
+      name.endsWith('.png') || name.endsWith('.webp')
+    ) {
+      // Imagem como referência visual: Gemini lê inline, IA pode descrever
+      // e usar como base pra generate_holiday_flyer.
+      const mime = type.startsWith('image/')
+        ? type
+        : name.endsWith('.png') ? 'image/png'
+        : name.endsWith('.webp') ? 'image/webp'
+        : 'image/jpeg';
+      const data = await readFileAsBase64(file);
+      setPendingFiles((prev) => [...prev, { name: file.name, mimeType: mime, data }]);
     } else if (name.endsWith('.xml') || type === 'text/xml' || type === 'application/xml') {
       const content = await file.text();
       const parsed = processXmlFile(file.name, content);
@@ -1623,7 +1637,7 @@ export default function BuyerAgentPage() {
               <input
                 ref={fileInputRef}
                 type="file"
-                accept=".pdf,.xml,.zip,.xlsx,.xls,.csv,application/pdf,text/xml,application/xml,application/zip,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv"
+                accept=".pdf,.xml,.zip,.xlsx,.xls,.csv,.jpg,.jpeg,.png,.webp,application/pdf,text/xml,application/xml,application/zip,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv,image/jpeg,image/png,image/webp"
                 multiple
                 className="sr-only"
                 onChange={(e) => {

@@ -62,7 +62,11 @@ export const PAGE_DEFINITIONS: Record<PageKey, PageDef> = {
     label: 'Imagens IA',
     group: 'Vendas',
     paths: ['/admin/imagens'],
-    tools: [],
+    tools: [
+      'generate_image', 'generate_holiday_flyer',
+      'save_marketing_asset', 'list_marketing_assets', 'delete_marketing_asset',
+      'send_whatsapp_image',
+    ],
   },
   cotacoes: {
     label: 'Cotações + Custos',

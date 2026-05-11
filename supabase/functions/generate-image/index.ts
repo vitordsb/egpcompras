@@ -2,8 +2,9 @@
 // FAL_KEY nunca vai pro frontend.
 //
 // Modos:
-//   { prompt, image_size?, product_filename? }  → gera + produto + branding + armazena
-//   { image_data: "<base64 JPEG>" }             → upload direto (browser já aplicou branding)
+//   { prompt, image_size?, product_filename?, model?, reference_image_url?,
+//     skip_product_overlay?, lighter_branding? }  → gera + composição + armazena
+//   { image_data: "<base64 JPEG>" }               → upload direto
 
 import Jimp from 'npm:jimp@0.22.12';
 
@@ -39,18 +40,24 @@ async function uploadBuffer(buffer: ArrayBuffer | Uint8Array): Promise<string | 
   return `${SUPA_URL}/storage/v1/object/public/wa-images/${fileName}`;
 }
 
+interface CompositingOptions {
+  productFilename?: string;
+  skipProductOverlay?: boolean;
+  lighterBranding?: boolean;
+}
+
 async function applyBrandingAndProduct(
   imageBuffer: ArrayBuffer,
-  productFilename?: string,
+  opts: CompositingOptions,
 ): Promise<ArrayBuffer> {
   try {
     const img = await Jimp.read(Buffer.from(imageBuffer));
     const W = img.getWidth();
     const H = img.getHeight();
 
-    // 1. Foto do produto centralizada (se fornecida)
-    if (productFilename) {
-      const encoded    = encodeURIComponent(`${productFilename}.png`);
+    // 1. Foto do produto centralizada (apenas se NÃO for skip_product_overlay)
+    if (opts.productFilename && !opts.skipProductOverlay) {
+      const encoded    = encodeURIComponent(`${opts.productFilename}.png`);
       const productUrl = `${SUPA_URL}/storage/v1/object/public/product-images/products/${encoded}`;
       const pRes = await fetch(productUrl);
       if (pRes.ok) {
@@ -73,41 +80,73 @@ async function applyBrandingAndProduct(
       }
     }
 
-    // 2. Faixa escura no rodapé (gradiente linha a linha)
-    const stripH = Math.round(H * 0.15);
-    for (let y = H - stripH; y < H; y++) {
-      const t = (y - (H - stripH)) / stripH; // 0→1
-      const dim = t * 0.75;
-      for (let x = 0; x < W; x++) {
-        const { r, g, b } = Jimp.intToRGBA(img.getPixelColor(x, y));
-        img.setPixelColor(
-          Jimp.rgbaToInt(Math.round(r * (1 - dim)), Math.round(g * (1 - dim)), Math.round(b * (1 - dim)), 255),
-          x, y,
-        );
+    // 2. Faixa escura no rodapé (apenas no modo branding completo)
+    //    Em lighterBranding (flyers comemorativos com texto da própria IA),
+    //    pula a faixa pra não cobrir o design — só o logo no canto.
+    if (!opts.lighterBranding) {
+      const stripH = Math.round(H * 0.15);
+      for (let y = H - stripH; y < H; y++) {
+        const t = (y - (H - stripH)) / stripH; // 0→1
+        const dim = t * 0.75;
+        for (let x = 0; x < W; x++) {
+          const { r, g, b } = Jimp.intToRGBA(img.getPixelColor(x, y));
+          img.setPixelColor(
+            Jimp.rgbaToInt(Math.round(r * (1 - dim)), Math.round(g * (1 - dim)), Math.round(b * (1 - dim)), 255),
+            x, y,
+          );
+        }
       }
     }
 
-    // 3. Logo EGP
+    // 3. Logo EGP no canto inferior esquerdo
     const logoRes = await fetch(LOGO_URL);
     if (logoRes.ok) {
       const logoBuf = await logoRes.arrayBuffer();
       const logo    = await Jimp.read(Buffer.from(logoBuf));
-      const logoW   = Math.round(W * 0.24);
+      // Logo menor em lighterBranding (não compete com o design do flyer)
+      const logoW   = Math.round(W * (opts.lighterBranding ? 0.16 : 0.24));
       logo.resize(logoW, Jimp.AUTO);
       const pad   = Math.round(W * 0.025);
       const logoY = H - logo.getHeight() - pad;
+
+      // Em lighterBranding, adiciona pílula branca translúcida atrás do logo
+      // pra garantir legibilidade sobre fundos coloridos
+      if (opts.lighterBranding) {
+        const pillPad = Math.round(W * 0.012);
+        const pillW = logo.getWidth() + pillPad * 2;
+        const pillH = logo.getHeight() + pillPad * 2;
+        const pillX = pad - pillPad;
+        const pillY = logoY - pillPad;
+        for (let y = Math.max(0, pillY); y < Math.min(H, pillY + pillH); y++) {
+          for (let x = Math.max(0, pillX); x < Math.min(W, pillX + pillW); x++) {
+            const c = Jimp.intToRGBA(img.getPixelColor(x, y));
+            img.setPixelColor(
+              Jimp.rgbaToInt(
+                Math.round(c.r * 0.2 + 255 * 0.8),
+                Math.round(c.g * 0.2 + 255 * 0.8),
+                Math.round(c.b * 0.2 + 255 * 0.8),
+                255,
+              ),
+              x, y,
+            );
+          }
+        }
+      }
+
       img.composite(logo, pad, logoY, { mode: Jimp.BLEND_SOURCE_OVER, opacitySource: 1, opacityDest: 1 });
     }
 
-    // 4. CNPJ + nome (fonte bitmap jimp)
-    try {
-      const font  = await Jimp.loadFont(Jimp.FONT_SANS_16_WHITE);
-      const pad   = Math.round(W * 0.025);
-      const nameW = img.measureText(font, CORP_NAME);
-      const cnpjW = img.measureText(font, CNPJ_TEXT);
-      img.print(font, W - nameW - pad, H - 44, CORP_NAME);
-      img.print(font, W - cnpjW - pad, H - 24, CNPJ_TEXT);
-    } catch { /* fallback silencioso */ }
+    // 4. CNPJ + nome (apenas no branding completo — em flyers fica poluído)
+    if (!opts.lighterBranding) {
+      try {
+        const font  = await Jimp.loadFont(Jimp.FONT_SANS_16_WHITE);
+        const pad   = Math.round(W * 0.025);
+        const nameW = img.measureText(font, CORP_NAME);
+        const cnpjW = img.measureText(font, CNPJ_TEXT);
+        img.print(font, W - nameW - pad, H - 44, CORP_NAME);
+        img.print(font, W - cnpjW - pad, H - 24, CNPJ_TEXT);
+      } catch { /* fallback silencioso */ }
+    }
 
     const buf = await img.getBufferAsync(Jimp.MIME_JPEG);
     return (buf as Buffer).buffer as ArrayBuffer;
@@ -121,7 +160,16 @@ Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS });
   if (req.method !== 'POST') return new Response('Method not allowed', { status: 405, headers: CORS });
 
-  let body: { prompt?: string; image_size?: string; image_data?: string; product_filename?: string };
+  let body: {
+    prompt?: string;
+    image_size?: string;
+    image_data?: string;
+    product_filename?: string;
+    model?: 'schnell' | 'dev';
+    reference_image_url?: string;
+    skip_product_overlay?: boolean;
+    lighter_branding?: boolean;
+  };
   try { body = await req.json(); } catch { return jsonError('Invalid JSON'); }
 
   // ── Modo upload direto (browser já fez o compositing) ──
@@ -137,13 +185,58 @@ Deno.serve(async (req) => {
   }
 
   // ── Modo geração via Fal.ai ──
-  const { prompt, image_size = 'landscape_4_3', product_filename } = body;
+  const {
+    prompt,
+    image_size = 'landscape_4_3',
+    product_filename,
+    model = 'schnell',
+    reference_image_url,
+    skip_product_overlay = false,
+    lighter_branding = false,
+  } = body;
   if (!prompt?.trim()) return jsonError('prompt ou image_data é obrigatório');
 
-  const falRes = await fetch('https://fal.run/fal-ai/flux/schnell', {
+  // Escolha do endpoint:
+  //   - schnell: 4 steps, rápido, texto na imagem médio
+  //   - dev:     28 steps, lento, texto bem renderizado (ideal pra flyer)
+  //   - dev img2img: usa reference_image_url como base
+  let endpoint: string;
+  let payload: Record<string, unknown>;
+
+  if (reference_image_url) {
+    endpoint = 'https://fal.run/fal-ai/flux/dev/image-to-image';
+    payload = {
+      prompt: prompt.trim(),
+      image_url: reference_image_url,
+      strength: 0.75, // 0=igual à referência, 1=ignora
+      num_inference_steps: 28,
+      num_images: 1,
+      enable_safety_checker: true,
+    };
+  } else if (model === 'dev') {
+    endpoint = 'https://fal.run/fal-ai/flux/dev';
+    payload = {
+      prompt: prompt.trim(),
+      image_size,
+      num_inference_steps: 28,
+      num_images: 1,
+      enable_safety_checker: true,
+    };
+  } else {
+    endpoint = 'https://fal.run/fal-ai/flux/schnell';
+    payload = {
+      prompt: prompt.trim(),
+      image_size,
+      num_inference_steps: 4,
+      num_images: 1,
+      enable_safety_checker: true,
+    };
+  }
+
+  const falRes = await fetch(endpoint, {
     method: 'POST',
     headers: { Authorization: `Key ${FAL_KEY}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ prompt: prompt.trim(), image_size, num_inference_steps: 4, num_images: 1, enable_safety_checker: true }),
+    body: JSON.stringify(payload),
   });
 
   if (!falRes.ok) {
@@ -158,12 +251,16 @@ Deno.serve(async (req) => {
   const imgRes = await fetch(tempUrl);
   if (!imgRes.ok) return jsonOk({ url: tempUrl, stored: false, branded: false });
 
-  const rawBuffer    = await imgRes.arrayBuffer();
-  const brandedBuffer = await applyBrandingAndProduct(rawBuffer, product_filename ?? undefined);
+  const rawBuffer = await imgRes.arrayBuffer();
+  const brandedBuffer = await applyBrandingAndProduct(rawBuffer, {
+    productFilename: product_filename,
+    skipProductOverlay: skip_product_overlay,
+    lighterBranding: lighter_branding,
+  });
 
   const publicUrl = await uploadBuffer(brandedBuffer);
   return jsonOk(publicUrl
-    ? { url: publicUrl, stored: true, branded: true }
-    : { url: tempUrl, stored: false, branded: false }
+    ? { url: publicUrl, stored: true, branded: true, model_used: reference_image_url ? 'flux-dev-img2img' : `flux-${model}` }
+    : { url: tempUrl, stored: false, branded: false, model_used: reference_image_url ? 'flux-dev-img2img' : `flux-${model}` }
   );
 });

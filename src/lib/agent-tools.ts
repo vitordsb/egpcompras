@@ -943,6 +943,93 @@ export const toolDeclarations = [
     },
   },
   {
+    name: 'generate_holiday_flyer',
+    description:
+      'Cria um flyer comemorativo da EGP usando IA (Flux/dev — melhor renderização de texto). ' +
+      'Use quando o usuário pedir imagem para datas comemorativas, parabenizações, posts temáticos. ' +
+      'Diferente de generate_image: NÃO insere foto de produto; gera a cena temática completa (mãe com filho, papai noel, etc) com TEXTO DESENHADO PELA IA na própria imagem (ex: "Feliz Dia das Mães"). ' +
+      'Logo EGP fica em pílula branca no canto inferior esquerdo, sem cobrir o design. ' +
+      'Demora ~15-30s (vs 3-5s do schnell). Mostre o preview ao usuário e pergunte se quer salvar (save_marketing_asset) e/ou enviar (send_whatsapp_image).',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        holiday: {
+          type: 'STRING' as Type,
+          description: 'Data/tema. Aceita: "maes", "pais", "namorados", "criancas", "professor", "natal", "ano_novo", "pascoa", "independencia", "consumidor", "consciencia_negra", "black_friday", "aniversario_empresa", "outro". Se "outro", explique no campo custom_theme.',
+        },
+        custom_theme: {
+          type: 'STRING' as Type,
+          description: 'Quando holiday="outro": descreva o tema/cena em PT-BR. Ex: "homenagem aos vendedores no dia do trabalho com pessoas trabalhando felizes". A tool traduz pra prompt em inglês.',
+        },
+        main_text: {
+          type: 'STRING' as Type,
+          description: 'Texto grande que a IA deve desenhar no flyer (ex: "Feliz Dia das Mães"). Mantenha CURTO (3-5 palavras). A IA do Flux escreve direto na imagem.',
+        },
+        secondary_text: {
+          type: 'STRING' as Type,
+          description: 'Texto menor opcional (ex: "12 de Maio" ou frase curta). Mantenha em 1 linha.',
+        },
+        style: {
+          type: 'STRING' as Type,
+          description: '"suave" (cores pastel, romântico, sereno) | "vibrante" (cores fortes, animado) | "elegante" (sóbrio, premium) | "festivo" (alegre, colorido). Default: "elegante".',
+        },
+        color_palette: {
+          type: 'STRING' as Type,
+          description: 'Paleta de cores predominante. Ex: "pink and rose gold" (dia das mães), "red and green" (natal), "blue and silver" (ano novo). Opcional — a tool sugere baseado em holiday se não passar.',
+        },
+        image_size: {
+          type: 'STRING' as Type,
+          description: '"square_hd" (Instagram post, default) | "portrait_4_3" (story) | "landscape_4_3" (banner).',
+        },
+        reference_image_url: {
+          type: 'STRING' as Type,
+          description: 'URL de uma imagem de referência (se o user mandou uma referência no chat e quer algo parecido). A tool usa Flux img2img — gera variação do estilo.',
+        },
+      },
+      required: ['holiday', 'main_text'],
+    },
+  },
+  {
+    name: 'save_marketing_asset',
+    description:
+      'Salva uma imagem de marketing já gerada na galeria interna (marketing_assets) pra reutilizar depois. ' +
+      'Use quando o usuário gostar de uma imagem que você gerou ("salva essa", "guarda essa pra mandar de novo no ano que vem"). Receba a URL de generate_image / generate_holiday_flyer e armazene com metadata.',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        image_url: { type: 'STRING' as Type, description: 'URL retornada por generate_image ou generate_holiday_flyer.' },
+        title:     { type: 'STRING' as Type, description: 'Título curto descritivo. Ex: "Dia das Mães 2026 — rosa elegante".' },
+        holiday:   { type: 'STRING' as Type, description: 'Data/tema (maes, pais, natal, etc).' },
+        tags:      { type: 'ARRAY' as Type, items: { type: 'STRING' as Type }, description: 'Tags livres. Ex: ["rosa", "elegante", "mae-e-filha"].' },
+        notes:     { type: 'STRING' as Type, description: 'Observações livres.' },
+        prompt_used: { type: 'STRING' as Type, description: 'Prompt usado pra gerar (passe se você lembra; ajuda a refazer variações).' },
+        model_used:  { type: 'STRING' as Type, description: 'Modelo usado (vem no retorno de generate_*). Ex: "flux-dev".' },
+      },
+      required: ['image_url', 'title'],
+    },
+  },
+  {
+    name: 'list_marketing_assets',
+    description: 'Lista imagens de marketing salvas. Filtros opcionais por holiday e tag.',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: {
+        holiday: { type: 'STRING' as Type, description: 'Filtra por data (maes, pais, natal...).' },
+        tag:     { type: 'STRING' as Type, description: 'Filtra por uma tag específica.' },
+        limit:   { type: 'INTEGER' as Type, description: 'Default 30.' },
+      },
+    },
+  },
+  {
+    name: 'delete_marketing_asset',
+    description: 'Remove uma imagem da galeria de marketing.',
+    parameters: {
+      type: 'OBJECT' as Type,
+      properties: { asset_id: { type: 'STRING' as Type } },
+      required: ['asset_id'],
+    },
+  },
+  {
     name: 'generate_image',
     description: 'Gera uma imagem promocional com IA e retorna a URL para o usuário aprovar ANTES de enviar. SEMPRE chame esta tool primeiro e mostre o preview. Somente após aprovação chame send_whatsapp_image. A imagem já inclui automaticamente logo EGP e CNPJ. Se product_filename for informado, a foto real do produto aparece na imagem.',
     parameters: {
@@ -4851,6 +4938,207 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
         .order('name');
       if (error) throw new Error(error.message);
       return { total: (data ?? []).length, contacts: data ?? [] };
+    }
+
+    case 'generate_holiday_flyer': {
+      const holiday = String(args.holiday ?? '').trim().toLowerCase();
+      const mainText = String(args.main_text ?? '').trim();
+      const secondaryText = args.secondary_text ? String(args.secondary_text).trim() : '';
+      const customTheme = args.custom_theme ? String(args.custom_theme).trim() : '';
+      const style = String(args.style ?? 'elegante').toLowerCase();
+      const colorPaletteArg = args.color_palette ? String(args.color_palette).trim() : '';
+      const imageSize = String(args.image_size ?? 'square_hd');
+      const referenceImageUrl = args.reference_image_url ? String(args.reference_image_url).trim() : null;
+
+      if (!mainText) throw new Error('main_text é obrigatório (texto que vai aparecer no flyer)');
+      if (mainText.length > 60) {
+        throw new Error('main_text muito longo — máximo 60 chars. A IA escreve no design, textos longos viram ilegíveis.');
+      }
+
+      // Mapeia holiday → cena + paleta default
+      const HOLIDAY_CFG: Record<string, { scene: string; palette: string; vibe: string }> = {
+        maes: {
+          scene: 'a tender Mother\'s Day scene with a mother joyfully lifting a smiling baby in soft warm light, floating rose petals and heart-shaped decorations, dreamy bokeh background',
+          palette: 'soft pink, rose gold, blush, cream',
+          vibe: 'tender, warm, loving, celebratory',
+        },
+        pais: {
+          scene: 'a heartwarming Father\'s Day scene with a smiling father and child sharing a moment outdoors, golden hour sunlight, sentimental atmosphere',
+          palette: 'navy blue, golden amber, warm earth tones',
+          vibe: 'strong, warm, family, gratitude',
+        },
+        namorados: {
+          scene: 'a romantic Valentine\'s Day scene with floating red roses, heart-shaped balloons, soft candlelight ambiance',
+          palette: 'deep red, rose gold, cream',
+          vibe: 'romantic, passionate, elegant',
+        },
+        criancas: {
+          scene: 'a joyful Children\'s Day scene with colorful balloons, candy and toys floating, cheerful playful atmosphere, cartoon-like illustration style',
+          palette: 'vibrant rainbow colors, primary colors',
+          vibe: 'playful, joyful, energetic',
+        },
+        professor: {
+          scene: 'a tribute scene to teachers: an apple, an open book, eyeglasses and chalkboard with knowledge symbols, warm appreciation atmosphere',
+          palette: 'forest green, warm brown, cream, gold accents',
+          vibe: 'respectful, appreciative, scholarly',
+        },
+        natal: {
+          scene: 'a magical Christmas scene with a decorated Christmas tree, falling snowflakes, golden lights, gift boxes, festive cozy atmosphere',
+          palette: 'deep red, evergreen, gold, white snow',
+          vibe: 'festive, magical, warm, family',
+        },
+        ano_novo: {
+          scene: 'a celebratory New Year\'s scene with golden fireworks bursting in a night sky, champagne glasses, confetti, year transition feel',
+          palette: 'midnight blue, gold, silver, white',
+          vibe: 'celebratory, hopeful, glamorous, exciting',
+        },
+        pascoa: {
+          scene: 'an Easter scene with decorated colorful eggs, spring flowers, soft pastel decoration, a bunny silhouette in background',
+          palette: 'pastel pink, mint green, lavender, cream',
+          vibe: 'fresh, joyful, soft, renewal',
+        },
+        independencia: {
+          scene: 'a patriotic Brazilian Independence Day scene with the Brazilian flag elements (green, yellow, blue), national pride atmosphere',
+          palette: 'Brazilian flag colors: green, yellow, blue, white',
+          vibe: 'patriotic, proud, celebratory',
+        },
+        consumidor: {
+          scene: 'a customer appreciation scene with shopping bags, gift boxes and stars, "thank you" atmosphere',
+          palette: 'corporate blue, white, gold accents',
+          vibe: 'grateful, premium, customer-focused',
+        },
+        consciencia_negra: {
+          scene: 'a powerful tribute scene celebrating Black consciousness with diverse smiling people, traditional African pattern accents, strong empowering atmosphere',
+          palette: 'rich earth tones, gold, deep red, warm brown',
+          vibe: 'powerful, respectful, celebratory, dignified',
+        },
+        black_friday: {
+          scene: 'a bold sales promotion scene with neon signs, price tags, shopping bags, dramatic lighting',
+          palette: 'pure black background, neon yellow and orange, white',
+          vibe: 'urgent, bold, energetic, exciting',
+        },
+        aniversario_empresa: {
+          scene: 'a corporate anniversary celebration scene with elegant balloons, golden confetti, premium party atmosphere, abstract company growth elements',
+          palette: 'corporate blue, gold, white, silver',
+          vibe: 'celebratory, premium, professional, milestone',
+        },
+        outro: {
+          scene: customTheme || 'a beautiful corporate celebration scene with elegant decorative elements',
+          palette: 'harmonious complementary colors',
+          vibe: 'professional, celebratory',
+        },
+      };
+
+      const cfg = HOLIDAY_CFG[holiday] ?? HOLIDAY_CFG['outro'];
+      const palette = colorPaletteArg || cfg.palette;
+
+      const STYLE_QUALIFIERS: Record<string, string> = {
+        suave: 'soft pastel tones, dreamy bokeh, gentle warm lighting, romantic atmosphere',
+        vibrante: 'vibrant saturated colors, dynamic energetic composition, bold contrast',
+        elegante: 'refined elegant composition, premium magazine-quality, sophisticated lighting',
+        festivo: 'cheerful festive atmosphere, decorative elements, joyful color palette',
+      };
+      const styleQualifier = STYLE_QUALIFIERS[style] ?? STYLE_QUALIFIERS['elegante'];
+
+      // Monta prompt em inglês (Flux performa melhor em EN). O texto fica em PT
+      // porque a IA escreve LITERAL o que vem entre aspas.
+      const textInstruction = secondaryText
+        ? `Large elegant calligraphic script text "${mainText}" as the main visual element, with smaller text "${secondaryText}" placed nearby in a complementary font.`
+        : `Large elegant calligraphic script text "${mainText}" as the main visual element, beautifully integrated into the composition.`;
+
+      const prompt = [
+        'Professional marketing flyer design for social media post.',
+        cfg.scene + '.',
+        textInstruction,
+        `Color palette: ${palette}.`,
+        styleQualifier + '.',
+        `Mood: ${cfg.vibe}.`,
+        'Leave clean empty space in the bottom-left corner for a small company logo.',
+        'High quality commercial photography or illustration. No watermarks. No stock-image disclaimers.',
+      ].join(' ');
+
+      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
+      const anonKey     = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+
+      const reqBody: Record<string, unknown> = {
+        prompt,
+        image_size: imageSize,
+        model: 'dev',
+        skip_product_overlay: true,
+        lighter_branding: true,
+      };
+      if (referenceImageUrl) reqBody.reference_image_url = referenceImageUrl;
+
+      const genRes = await fetch(`${supabaseUrl}/functions/v1/generate-image`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', apikey: anonKey, Authorization: `Bearer ${anonKey}` },
+        body: JSON.stringify(reqBody),
+      });
+      const genJson = await genRes.json();
+      if (!genRes.ok) throw new Error(genJson.error ?? 'Falha ao gerar flyer');
+
+      return {
+        image_url: genJson.url,
+        stored: genJson.stored,
+        branded: genJson.branded,
+        model_used: genJson.model_used ?? 'flux-dev',
+        prompt_used: prompt,
+        holiday,
+        main_text: mainText,
+        secondary_text: secondaryText || null,
+        instruction:
+          'Mostre o preview ao usuário com markdown: ![Preview](url). ' +
+          'Diga que o flyer foi gerado e pergunte: 1) Salvar na galeria (save_marketing_asset)? 2) Enviar pra alguém via WhatsApp (send_whatsapp_image)? 3) Gerar variação (chamar de novo com estilo diferente)? ' +
+          'NÃO envie nem salve sem aprovação explícita.',
+      };
+    }
+
+    case 'save_marketing_asset': {
+      const imageUrl = String(args.image_url ?? '').trim();
+      const title = String(args.title ?? '').trim();
+      if (!imageUrl) throw new Error('image_url é obrigatório');
+      if (!title) throw new Error('title é obrigatório');
+
+      const payload: Record<string, unknown> = {
+        image_url: imageUrl,
+        title,
+        holiday: args.holiday ? String(args.holiday).trim().toLowerCase() : null,
+        tags: Array.isArray(args.tags) ? args.tags.map((t: any) => String(t).trim()).filter(Boolean) : [],
+        notes: args.notes ? String(args.notes).trim() : null,
+        prompt_used: args.prompt_used ? String(args.prompt_used) : null,
+        model_used: args.model_used ? String(args.model_used) : null,
+        created_by: ctx.currentUser ?? null,
+      };
+
+      const { data, error } = await supabase
+        .from('marketing_assets')
+        .insert(payload)
+        .select('id, image_url, title, holiday, tags, created_at')
+        .single();
+      if (error || !data) throw new Error(error?.message ?? 'Falha ao salvar asset');
+      await verifyWrite('marketing_assets', (data as any).id, 'save_marketing_asset');
+      return { saved: true, verified: true, asset: data };
+    }
+
+    case 'list_marketing_assets': {
+      let q = supabase
+        .from('marketing_assets')
+        .select('id, image_url, title, holiday, tags, notes, created_at, created_by')
+        .order('created_at', { ascending: false })
+        .limit(Number(args.limit ?? 30));
+      if (args.holiday) q = q.eq('holiday', String(args.holiday).toLowerCase());
+      if (args.tag) q = q.contains('tags', [String(args.tag)]);
+      const { data, error } = await q;
+      if (error) throw new Error(error.message);
+      return { assets: data ?? [], count: (data ?? []).length };
+    }
+
+    case 'delete_marketing_asset': {
+      const id = String(args.asset_id ?? '');
+      if (!id) throw new Error('asset_id é obrigatório');
+      const { error } = await supabase.from('marketing_assets').delete().eq('id', id);
+      if (error) throw new Error(error.message);
+      return { deleted: true, id };
     }
 
     case 'generate_image': {
