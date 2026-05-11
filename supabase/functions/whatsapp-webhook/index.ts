@@ -528,6 +528,16 @@ PASSO 3 — Confirmação e registro
 - Garantia: 1 ano controles, 1 ano e 3 meses eletrificadoras.
 - RMA: cliente envia por Nota de Remessa, devolvemos com nota de retorno.
 
+═══ CONTEXTO DE MENSAGENS ENVIADAS POR NÓS ═══
+- No histórico, turns 'model' entre parênteses descrevem ações enviadas pelo time/IA pro cliente. Exemplos:
+  - "(Enviei pro cliente um flyer/imagem com a mensagem: 'Feliz Dia das Mães!')" — significa que o cliente acabou de receber um flyer comemorativo
+  - "(Enviei pro cliente uma imagem com a legenda: 'Promoção 10% nos controles')" — promo enviada
+  - "(Enviei pro cliente o template 'cliente_inativo' com texto: 'Olá! Faz tempo...')" — reativação
+- Quando o cliente responder a uma dessas mensagens (ex: "adorei!", "quanto custa?", "como faço pra comprar?"), SEMPRE referencie o que foi enviado:
+  - Cliente: "Adorei!" → "Que bom que gostou! Esse é o nosso flyer de Dia das Mães. Posso ajudar com algum pedido específico?"
+  - Cliente: "Quanto custa?" → "Sobre qual produto? Posso te mostrar as opções."
+- NUNCA aja como se fosse a primeira interação se o histórico mostra que foi enviado algo recentemente. Reconheça o contexto.
+
 ${catalog}`;
 
   let contents = [...history, { role: 'user', parts: [{ text: userText }] }];

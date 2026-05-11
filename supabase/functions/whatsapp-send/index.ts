@@ -74,6 +74,107 @@ async function logMessage(
   }).catch(() => {});
 }
 
+/**
+ * Append outbound message to whatsapp_sessions.history como turn 'model'.
+ * Crítico pra IA do webhook ter CONTEXTO da última coisa enviada quando o
+ * cliente responder. Se não atualizar, IA responde a "obrigada!" como se
+ * fosse 1ª interação.
+ *
+ * Cria session se não existir. Mantém últimos 20 turns (mesmo limite do webhook).
+ */
+async function appendOutboundToHistory(phone: string, modelText: string): Promise<void> {
+  try {
+    // Lookup session
+    const sessRes = await fetch(
+      `${SUPA_URL}/rest/v1/whatsapp_sessions?phone=eq.${encodeURIComponent(phone)}&select=id,history`,
+      { headers: { apikey: SUPA_JWT, Authorization: `Bearer ${SUPA_JWT}` } },
+    );
+    if (!sessRes.ok) return;
+    const rows = await sessRes.json();
+
+    let sessionId: string;
+    let history: any[];
+    if (Array.isArray(rows) && rows.length > 0) {
+      sessionId = rows[0].id;
+      history = Array.isArray(rows[0].history) ? rows[0].history : [];
+    } else {
+      // Cria session vazia
+      const createRes = await fetch(`${SUPA_URL}/rest/v1/whatsapp_sessions`, {
+        method: 'POST',
+        headers: {
+          apikey: SUPA_JWT,
+          Authorization: `Bearer ${SUPA_JWT}`,
+          'Content-Type': 'application/json',
+          Prefer: 'return=representation',
+        },
+        body: JSON.stringify({ phone, history: [], status: 'active' }),
+      });
+      if (!createRes.ok) return;
+      const created = await createRes.json();
+      sessionId = Array.isArray(created) ? created[0].id : created.id;
+      history = [];
+    }
+
+    // Append turn model + slice -20
+    const newHistory = [
+      ...history,
+      { role: 'model', parts: [{ text: modelText }] },
+    ].slice(-20);
+
+    // Update
+    await fetch(
+      `${SUPA_URL}/rest/v1/whatsapp_sessions?id=eq.${sessionId}`,
+      {
+        method: 'PATCH',
+        headers: {
+          apikey: SUPA_JWT,
+          Authorization: `Bearer ${SUPA_JWT}`,
+          'Content-Type': 'application/json',
+          Prefer: 'return=minimal',
+        },
+        body: JSON.stringify({ history: newHistory, updated_at: new Date().toISOString() }),
+      },
+    );
+  } catch (err) {
+    console.warn('[wa-send] appendOutboundToHistory falhou:', err);
+  }
+}
+
+/**
+ * Constrói uma descrição textual do que foi enviado, pra ser injetada
+ * no histórico do Gemini como turn 'model'. Importante: descreve o que
+ * o assistente fez, em 1ª pessoa, pra IA entender contexto da próxima
+ * mensagem do cliente.
+ */
+function buildHistoryEntry(opts: {
+  text?: string;
+  imageUrl?: string;
+  templateName?: string;
+  templateParams?: string[];
+  usedFallback?: boolean;
+}): string {
+  if (opts.imageUrl) {
+    if (opts.usedFallback && opts.templateName) {
+      // Template fallback automático com imagem
+      const body = opts.templateParams?.join(' / ') ?? '';
+      return body
+        ? `(Enviei pro cliente um flyer/imagem com a mensagem: "${body}")`
+        : `(Enviei pro cliente um flyer/imagem promocional)`;
+    }
+    return opts.text
+      ? `(Enviei pro cliente uma imagem com a legenda: "${opts.text}")`
+      : `(Enviei pro cliente uma imagem)`;
+  }
+  if (opts.templateName) {
+    const body = opts.templateParams?.join(' / ') ?? '';
+    return body
+      ? `(Enviei pro cliente o template "${opts.templateName}" com texto: "${body}")`
+      : `(Enviei pro cliente o template "${opts.templateName}")`;
+  }
+  // Texto simples
+  return opts.text ?? '';
+}
+
 // Extrai o primeiro nome de um email/label e capitaliza.
 // "vitor@grupoegp.com.br" → "Vitor"
 // "Nathanna" → "Nathanna"
@@ -254,6 +355,20 @@ Deno.serve(async (req) => {
 
   const messageId: string | undefined = json.messages?.[0]?.id;
   await logMessage(phone, 'out', logText, sender_label ?? null, messageId);
+
+  // CRÍTICO: atualiza history da session pra IA do webhook ter contexto
+  // quando o cliente responder. Sem isso, IA "esquece" o flyer/imagem
+  // que acabou de mandar e responde a "obrigada!" como se fosse 1ª msg.
+  const historyEntry = buildHistoryEntry({
+    text: text,
+    imageUrl: image_url,
+    templateName: template?.name ?? (usedFallback ? WA_FLYER_TEMPLATE : undefined),
+    templateParams: template?.params ?? (usedFallback && text ? [text] : undefined),
+    usedFallback,
+  });
+  if (historyEntry) {
+    await appendOutboundToHistory(phone, historyEntry);
+  }
 
   return new Response(JSON.stringify({
     sent: true,
