@@ -5068,16 +5068,17 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
       const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
       const anonKey     = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
 
+      // Usa Gemini 2.5 Flash Image (Nano Banana) — melhor pra img2img e
+      // pra integrar identidade visual em referência. image_size é gerenciado
+      // pelo modelo (não precisa passar).
       const reqBody: Record<string, unknown> = {
         prompt,
-        image_size: imageSize,
-        model: 'dev',
         skip_product_overlay: true,
         lighter_branding: true,
       };
       if (referenceImageUrl) reqBody.reference_image_url = referenceImageUrl;
 
-      const genRes = await fetch(`${supabaseUrl}/functions/v1/generate-image`, {
+      const genRes = await fetch(`${supabaseUrl}/functions/v1/generate-image-gemini`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', apikey: anonKey, Authorization: `Bearer ${anonKey}` },
         body: JSON.stringify(reqBody),
@@ -5089,11 +5090,13 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
         image_url: genJson.url,
         stored: genJson.stored,
         branded: genJson.branded,
-        model_used: genJson.model_used ?? 'flux-dev',
+        model_used: genJson.model_used ?? 'gemini-nano-banana',
+        had_reference: genJson.had_reference,
         prompt_used: prompt,
         holiday,
         main_text: mainText,
         secondary_text: secondaryText || null,
+        image_size: imageSize,
         instruction:
           'Mostre o preview ao usuário com markdown: ![Preview](url). ' +
           'Diga que o flyer foi gerado e pergunte: 1) Salvar na galeria (save_marketing_asset)? 2) Enviar pra alguém via WhatsApp (send_whatsapp_image)? 3) Gerar variação (chamar de novo com estilo diferente)? ' +
