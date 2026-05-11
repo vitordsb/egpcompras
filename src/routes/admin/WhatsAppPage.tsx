@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { supabase } from '@/lib/supabase';
 import { cn } from '@/lib/utils';
 import { useInternalAuth } from '@/lib/auth-context';
+import { markWhatsappAsSeen } from '@/hooks/useNavBadges';
 
 interface Session {
   phone: string;
@@ -290,7 +291,17 @@ export default function WhatsAppPage() {
   useEffect(() => {
     loadContacts();
     loadSessions();
+    // Marca como "visto" assim que abre a página — zera o badge global do nav
+    markWhatsappAsSeen();
   }, []);
+
+  // Re-marca como visto sempre que chega mensagem nova enquanto a página
+  // está aberta — assim o badge global não acumula enquanto o user já está
+  // olhando o WhatsApp.
+  useEffect(() => {
+    if (messages.length === 0) return;
+    markWhatsappAsSeen();
+  }, [messages]);
 
   // Auto-scroll para a última mensagem quando lista mudar
   useEffect(() => {

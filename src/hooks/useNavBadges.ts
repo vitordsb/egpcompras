@@ -44,11 +44,21 @@ export function useNavBadges(): NavBadges {
     };
   }, []);
 
-  // WhatsApp inbound recentes — Realtime
+  // WhatsApp inbound recentes — Realtime + "last seen" persistido
+  // Badge conta APENAS mensagens inbound chegadas DEPOIS da última vez
+  // que o user abriu a WhatsAppPage (timestamp em localStorage).
   useEffect(() => {
     let cancelled = false;
+
+    function getLastSeen(): string {
+      // Default: 24h atrás na primeira visita
+      const stored = localStorage.getItem(WA_LAST_SEEN_KEY);
+      if (stored) return stored;
+      return new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    }
+
     async function loadInitial() {
-      const since = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+      const since = getLastSeen();
       const { count } = await supabase
         .from('whatsapp_messages')
         .select('id', { count: 'exact', head: true })
@@ -59,7 +69,7 @@ export function useNavBadges(): NavBadges {
     }
     loadInitial();
 
-    // Realtime: incrementa o badge quando chega mensagem inbound
+    // Realtime: incrementa o badge quando chega mensagem inbound NOVA
     const channel = supabase
       .channel('nav-badge:whatsapp')
       .on(
@@ -76,12 +86,20 @@ export function useNavBadges(): NavBadges {
       )
       .subscribe();
 
-    // Refresh a cada 5 min pra expurgar mensagens > 60min do contador
+    // Escuta evento custom 'wa-seen' (disparado pela WhatsAppPage) → zera badge
+    function onSeen() {
+      if (cancelled) return;
+      setBadges((prev) => ({ ...prev, whatsapp_recent: 0 }));
+    }
+    window.addEventListener('wa-seen', onSeen);
+
+    // Re-sync a cada 5 min (cobre casos onde Realtime perde mensagem ou aba ficou em background)
     const refresh = setInterval(loadInitial, 5 * 60 * 1000);
 
     return () => {
       cancelled = true;
       clearInterval(refresh);
+      window.removeEventListener('wa-seen', onSeen);
       supabase.removeChannel(channel);
     };
   }, []);
@@ -89,9 +107,12 @@ export function useNavBadges(): NavBadges {
   return badges;
 }
 
-/** Marca todas as mensagens WhatsApp inbound como "vistas" — chamado pela
- *  WhatsAppPage quando ela é aberta. Zera o badge globalmente. */
-export function clearWhatsappBadge(setter: (b: NavBadges) => void) {
-  // Como não temos coluna read_at, só zera o estado local
-  setter({ ...EMPTY, whatsapp_recent: 0 });
+const WA_LAST_SEEN_KEY = 'wa_last_seen_at';
+
+/** Marca como "visto" — chamado pela WhatsAppPage no mount. Persiste o
+ *  timestamp em localStorage e dispara evento custom pra zerar o badge
+ *  no useNavBadges sem precisar de prop drilling. */
+export function markWhatsappAsSeen() {
+  localStorage.setItem(WA_LAST_SEEN_KEY, new Date().toISOString());
+  window.dispatchEvent(new CustomEvent('wa-seen'));
 }
