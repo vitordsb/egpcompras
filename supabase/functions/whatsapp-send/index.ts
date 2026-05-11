@@ -1,17 +1,52 @@
 // Proxy seguro para envio de mensagens WhatsApp.
 // Aceita: { to, text } para mensagem livre OU { to, template: { name, params[] } } para template aprovado.
 // O WA_TOKEN nunca vai pro frontend.
+//
+// Fallback automático janela 24h: quando body inclui template_fallback,
+// a função consulta whatsapp_messages e:
+//   - Se há mensagem inbound nas últimas 24h → manda livre (image/text)
+//   - Se NÃO há (janela fechada) → usa template_fallback com header IMAGE
 
 const WA_TOKEN    = Deno.env.get('WA_TOKEN') ?? '';
 const WA_PHONE_ID = Deno.env.get('WA_PHONE_ID') ?? '';
 const SUPA_URL    = Deno.env.get('SUPABASE_URL') ?? '';
 const SUPA_JWT    = Deno.env.get('SUPA_SERVICE_JWT') ?? '';
+// Template default pro flyer (env var pra trocar quando flyer_comemorativo_egp
+// for aprovado pela Meta). Hoje cai no promo_imagem_egp que já tá aprovado.
+const WA_FLYER_TEMPLATE = Deno.env.get('WA_FLYER_TEMPLATE') ?? 'promo_imagem_egp';
 
 const CORS = {
   'Access-Control-Allow-Origin':  '*',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, Authorization, apikey',
 };
+
+/**
+ * Verifica se há mensagem inbound nas últimas 24h pra esse número.
+ * Retorna true → janela aberta, pode mandar livre.
+ * Retorna false → janela fechada, precisa template.
+ */
+async function isWindowOpen(phone: string): Promise<boolean> {
+  const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  const url = `${SUPA_URL}/rest/v1/whatsapp_messages?phone=eq.${encodeURIComponent(phone)}&direction=eq.in&created_at=gte.${encodeURIComponent(since)}&select=id&limit=1`;
+  try {
+    const res = await fetch(url, {
+      headers: {
+        apikey: SUPA_JWT,
+        Authorization: `Bearer ${SUPA_JWT}`,
+      },
+    });
+    if (!res.ok) {
+      console.warn('[wa-send] window check fail', res.status);
+      return false; // conservador: se não dá pra checar, assume fechada
+    }
+    const rows = await res.json();
+    return Array.isArray(rows) && rows.length > 0;
+  } catch (err) {
+    console.warn('[wa-send] window check error:', err);
+    return false;
+  }
+}
 
 async function logMessage(
   phone: string,
@@ -63,11 +98,22 @@ Deno.serve(async (req) => {
       params?: string[];
       image_url?: string; // para templates com header IMAGE (ex: promo_imagem_egp)
     };
+    /** Quando informado, ativa fallback automático de janela 24h:
+     *  - Janela aberta → manda image/text livre
+     *  - Janela fechada → manda como template (com image_url no header e
+     *    body_params no body). Útil pra flyers comemorativos que podem
+     *    ser enviados pra clientes que não conversaram nas últimas 24h.
+     */
+    template_fallback?: {
+      name?: string; // default WA_FLYER_TEMPLATE
+      language?: string; // default pt_BR
+      body_params?: string[]; // params do body do template
+    };
     sender_label?: string;
   };
   try { body = await req.json(); } catch { return new Response('Invalid JSON', { status: 400, headers: CORS }); }
 
-  const { to, text, image_url, template, sender_label } = body;
+  const { to, text, image_url, template, template_fallback, sender_label } = body;
   const senderFirstName = senderName(sender_label);
   if (!to) return new Response(JSON.stringify({ error: 'to é obrigatório' }), { status: 400, headers: { ...CORS, 'Content-Type': 'application/json' } });
   if (!text && !template && !image_url) return new Response(JSON.stringify({ error: 'text, image_url OU template é obrigatório' }), { status: 400, headers: { ...CORS, 'Content-Type': 'application/json' } });
@@ -79,19 +125,61 @@ Deno.serve(async (req) => {
   // Monta payload — imagem, template ou texto livre
   let payload: Record<string, unknown>;
   let logText: string;
+  let usedFallback = false;
 
   if (image_url) {
     // Mensagem de imagem (gerada pela IA ou externa)
     const caption = text
       ? (senderFirstName ? `*${senderFirstName} · EGP*\n\n${text}` : text)
       : (senderFirstName ? `*${senderFirstName} · EGP*` : undefined);
-    payload = {
-      messaging_product: 'whatsapp',
-      to: phone,
-      type: 'image',
-      image: { link: image_url, ...(caption ? { caption } : {}) },
-    };
-    logText = `[imagem] ${caption ?? image_url}`;
+
+    // Se foi pedido fallback, checa janela 24h. Se fechada, usa template.
+    let useTemplate = false;
+    if (template_fallback) {
+      const open = await isWindowOpen(phone);
+      console.log(`[wa-send] window check ${phone}: ${open ? 'OPEN' : 'CLOSED'}`);
+      useTemplate = !open;
+    }
+
+    if (useTemplate) {
+      // Janela fechada — usa template aprovado com header IMAGE
+      const tmplName = template_fallback?.name ?? WA_FLYER_TEMPLATE;
+      const tmplLang = template_fallback?.language ?? 'pt_BR';
+      const tmplParams = template_fallback?.body_params ?? (text ? [text] : []);
+
+      const components: Record<string, unknown>[] = [];
+      components.push({
+        type: 'header',
+        parameters: [{ type: 'image', image: { link: image_url } }],
+      });
+      if (tmplParams.length > 0) {
+        components.push({
+          type: 'body',
+          parameters: tmplParams.map((p) => ({ type: 'text', text: p })),
+        });
+      }
+
+      payload = {
+        messaging_product: 'whatsapp',
+        to: phone,
+        type: 'template',
+        template: {
+          name: tmplName,
+          language: { code: tmplLang },
+          components,
+        },
+      };
+      usedFallback = true;
+      logText = `[template:${tmplName}] [imagem] ${tmplParams.join(' | ')}`;
+    } else {
+      payload = {
+        messaging_product: 'whatsapp',
+        to: phone,
+        type: 'image',
+        image: { link: image_url, ...(caption ? { caption } : {}) },
+      };
+      logText = `[imagem] ${caption ?? image_url}`;
+    }
   } else if (template) {
     const params   = template.params ?? [];
     const tmplImgUrl = template.image_url;
@@ -153,7 +241,13 @@ Deno.serve(async (req) => {
   const messageId: string | undefined = json.messages?.[0]?.id;
   await logMessage(phone, 'out', logText, sender_label ?? null, messageId);
 
-  return new Response(JSON.stringify({ sent: true, to: phone, message_id: messageId }), {
+  return new Response(JSON.stringify({
+    sent: true,
+    to: phone,
+    message_id: messageId,
+    used_template_fallback: usedFallback,
+    delivery_method: usedFallback ? 'template_24h_fallback' : (template ? 'template' : (image_url ? 'image' : 'text')),
+  }), {
     status: 200, headers: { ...CORS, 'Content-Type': 'application/json' },
   });
 });

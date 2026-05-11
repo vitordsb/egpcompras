@@ -312,6 +312,14 @@ Você tem DOIS tipos de geração de imagem. Escolha o certo:
 - Se o user NÃO mencionar usar como referência, NÃO passe reference_image_url — só siga o prompt normal.
 - Exemplo: user manda foto de flyer rosa de dia das mães + "transforma isso em versão EGP" → generate_holiday_flyer(holiday="maes", main_text="Feliz Dia das Mães", reference_image_url="https://...url_da_referencia...", style="elegante").
 
+**Janela 24h do WhatsApp + fallback de template (transparente):**
+- Quando você chama send_whatsapp_image, o sistema checa automaticamente se o contato mandou mensagem nas últimas 24h:
+  - Janela aberta (mensagem inbound nas últimas 24h) → manda imagem livre, do jeito normal
+  - Janela fechada (cliente nunca conversou ou passou de 24h) → cai automaticamente pro template Meta aprovado (promo_imagem_egp ou flyer_comemorativo_egp) com a imagem no header
+- O retorno traz delivery_method: "image" (livre) ou "template_24h_fallback" (template). Mencione brevemente ao usuário se foi via fallback de template — ajuda ele a entender porque a mensagem teve formato fixo.
+- Você NÃO precisa decidir nada — sempre chame send_whatsapp_image normal. A Edge Function resolve.
+- Limitação: o template wildcard suporta UMA frase no body ({{1}}). O caption que você passa vira essa frase. Mantenha curto (até ~120 chars) caso caia no fallback.
+
 **Galeria de imagens salvas (marketing_assets):**
 - save_marketing_asset: o usuário aprovou e quer guardar pra reusar depois ("salva essa pra ano que vem", "guarda essa do dia das mães"). Passe holiday + tags pra facilitar encontrar.
 - list_marketing_assets({holiday?, tag?}): "mostra as imagens de dia das mães que já fizemos", "quais imagens temos salvas de natal?".

@@ -5216,6 +5216,10 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
       const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
       const anonKey     = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
 
+      // Sempre passa template_fallback — Edge Function decide se usa
+      // baseado na janela 24h (mensagem inbound recente). Se janela
+      // aberta → manda imagem livre normal. Se fechada → cai pro
+      // template aprovado WA_FLYER_TEMPLATE com a imagem no header.
       const sendRes  = await fetch(`${supabaseUrl}/functions/v1/whatsapp-send`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', apikey: anonKey, Authorization: `Bearer ${anonKey}` },
@@ -5224,12 +5228,25 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
           image_url: imageUrl,
           text: caption || undefined,
           sender_label: ctx.currentUser,
+          template_fallback: {
+            // Sem name → Edge Function usa env WA_FLYER_TEMPLATE
+            // (padrão promo_imagem_egp; troca pra flyer_comemorativo_egp
+            //  quando o template wildcard for aprovado pela Meta)
+            body_params: caption ? [caption] : ['Mensagem da EGP Tecnologia'],
+          },
         }),
       });
       const sendJson = await sendRes.json();
       if (!sendRes.ok) throw new Error(sendJson.error ?? 'Falha ao enviar');
 
-      return { sent: true, to: phone, message_id: sendJson.message_id };
+      return {
+        sent: true,
+        to: phone,
+        message_id: sendJson.message_id,
+        delivery_method: sendJson.delivery_method,
+        used_template_fallback: sendJson.used_template_fallback,
+        verified: true,
+      };
     }
 
     case 'send_whatsapp_message': {
