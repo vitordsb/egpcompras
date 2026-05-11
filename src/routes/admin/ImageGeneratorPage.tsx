@@ -54,7 +54,33 @@ export default function ImageGeneratorPage() {
   const { userLabel } = useInternalAuth();
 
   // Abas da sidebar
-  const [sidebarTab, setSidebarTab] = useState<'criar' | 'salvos'>('criar');
+  const [sidebarTab, setSidebarTab] = useState<'criar' | 'flyer-ia' | 'salvos'>('criar');
+
+  // Estado da aba "Flyer IA" (Nano Banana — gera flyer comemorativo via IA)
+  const [iaHoliday,    setIaHoliday]    = useState<string>('maes');
+  const [iaMainText,   setIaMainText]   = useState<string>('');
+  const [iaSecondary,  setIaSecondary]  = useState<string>('');
+  const [iaStyle,      setIaStyle]      = useState<'suave' | 'vibrante' | 'elegante' | 'festivo'>('elegante');
+  const [iaPalette,    setIaPalette]    = useState<string>('');
+  const [iaGenerating, setIaGenerating] = useState(false);
+  const [iaError,      setIaError]      = useState<string | null>(null);
+
+  const HOLIDAYS: Array<{ value: string; label: string; defaultText: string }> = [
+    { value: 'maes',                 label: 'Dia das Mães',           defaultText: 'Feliz Dia das Mães' },
+    { value: 'pais',                 label: 'Dia dos Pais',           defaultText: 'Feliz Dia dos Pais' },
+    { value: 'namorados',            label: 'Dia dos Namorados',      defaultText: 'Feliz Dia dos Namorados' },
+    { value: 'criancas',             label: 'Dia das Crianças',       defaultText: 'Feliz Dia das Crianças' },
+    { value: 'professor',            label: 'Dia do Professor',       defaultText: 'Feliz Dia do Professor' },
+    { value: 'natal',                label: 'Natal',                  defaultText: 'Feliz Natal' },
+    { value: 'ano_novo',             label: 'Ano Novo',               defaultText: 'Feliz Ano Novo' },
+    { value: 'pascoa',               label: 'Páscoa',                 defaultText: 'Feliz Páscoa' },
+    { value: 'independencia',        label: 'Independência',          defaultText: '7 de Setembro' },
+    { value: 'consumidor',           label: 'Dia do Consumidor',      defaultText: 'Obrigado, cliente!' },
+    { value: 'consciencia_negra',    label: 'Consciência Negra',      defaultText: 'Consciência Negra' },
+    { value: 'black_friday',         label: 'Black Friday',           defaultText: 'Black Friday EGP' },
+    { value: 'aniversario_empresa',  label: 'Aniversário EGP',        defaultText: 'EGP comemora!' },
+    { value: 'outro',                label: 'Outro (custom)',         defaultText: '' },
+  ];
 
   // Templates salvos no banco
   const [savedTemplates, setSavedTemplates]   = useState<SavedTemplate[]>([]);
@@ -218,6 +244,84 @@ export default function ImageGeneratorPage() {
     }
   }
 
+  // ── Gerar Flyer Comemorativo via IA (Nano Banana) ──
+  async function generateHolidayFlyer() {
+    if (iaGenerating) return;
+    if (!iaMainText.trim()) {
+      setIaError('Digite o texto principal (ex: "Feliz Dia das Mães")');
+      return;
+    }
+    setIaGenerating(true);
+    setIaError(null);
+    setFinalUrl(null);
+    setUploadError(null);
+
+    // Monta o prompt usando os mesmos presets da tool generate_holiday_flyer
+    const HOLIDAY_CFG: Record<string, { scene: string; palette: string; vibe: string }> = {
+      maes:                 { scene: 'tender Mother\'s Day scene with mother joyfully holding a smiling baby in soft window light, floating pink rose petals',                                          palette: 'bright white background, EGP signature pink #CB1464, soft blush, rose gold',  vibe: 'tender, warm, loving' },
+      pais:                 { scene: 'heartwarming Father\'s Day scene with father and child sharing a moment, bright window light',                                                                  palette: 'clean white background, EGP brand pink #CB1464 accents, warm grey',          vibe: 'strong, warm, family' },
+      namorados:            { scene: 'romantic minimalist scene with floating pink roses and elegant hearts, bright airy background',                                                                 palette: 'pure white background, EGP brand pink #CB1464, blush rose',                  vibe: 'romantic, elegant, fresh' },
+      criancas:             { scene: 'joyful Children\'s Day scene with floating colorful pastel balloons, candies, playful stars on bright white background',                                        palette: 'white dominant background, EGP brand pink #CB1464, pastel rainbow accents',   vibe: 'playful, joyful, bright' },
+      professor:            { scene: 'elegant tribute to teachers: open book, eyeglasses, apple and chalk elements with pink ribbon details, bright clean background',                                palette: 'white background, EGP pink #CB1464 accents, soft gold',                      vibe: 'respectful, scholarly, modern' },
+      natal:                { scene: 'elegant minimalist Christmas scene with decorated tree, soft falling snowflakes, golden lights, pink and gold ornaments',                                       palette: 'white background, EGP brand pink #CB1464 ornaments, classic red and gold',   vibe: 'festive, magical, warm' },
+      ano_novo:             { scene: 'elegant New Year scene with golden fireworks, champagne glasses and confetti on bright minimalist white background',                                            palette: 'bright white background, gold and EGP pink #CB1464 confetti, silver',         vibe: 'celebratory, hopeful, glamorous' },
+      pascoa:               { scene: 'Easter scene with pastel decorated eggs, spring flowers, soft bunny silhouettes on bright white background',                                                    palette: 'clean white background, EGP brand pink #CB1464, pastel mint, lavender',      vibe: 'fresh, joyful, spring' },
+      independencia:        { scene: 'tasteful Brazilian Independence Day scene with subtle Brazilian flag color accents (green, yellow, blue) and EGP pink details, clean white background',         palette: 'white background, Brazilian flag colors with EGP brand pink #CB1464 ribbon',  vibe: 'patriotic, modern, clean' },
+      consumidor:           { scene: 'customer appreciation scene with elegant shopping bags, gift boxes and stars on bright minimalist white background',                                            palette: 'bright white background, EGP brand pink #CB1464, soft gold',                  vibe: 'grateful, premium, fresh' },
+      consciencia_negra:    { scene: 'powerful tribute scene celebrating Black consciousness with diverse smiling people portraits and traditional pattern accents',                                  palette: 'warm cream and white background, rich earth tones, gold, deep red, EGP pink #CB1464',  vibe: 'powerful, dignified, respectful' },
+      black_friday:         { scene: 'bold modern sales promotion scene with price tags, shopping bags and dynamic geometric elements',                                                               palette: 'bright white and EGP pink #CB1464 dominant, bold black price tags',          vibe: 'energetic, modern, fresh' },
+      aniversario_empresa:  { scene: 'corporate anniversary celebration with elegant balloons, golden confetti and EGP pink accents on bright background',                                            palette: 'bright white background, EGP brand pink #CB1464 dominant, gold and silver',  vibe: 'celebratory, premium, professional' },
+      outro:                { scene: 'beautiful corporate celebration scene on bright clean white background with pink decorative accents',                                                           palette: 'white background dominant, EGP brand pink #CB1464 accents',                  vibe: 'professional, fresh' },
+    };
+    const STYLE_QUALIFIER: Record<string, string> = {
+      suave:    'soft airy lighting, dreamy bokeh, romantic atmosphere',
+      vibrante: 'vibrant saturated colors with bright background, dynamic energetic',
+      elegante: 'refined elegant composition, premium magazine-quality, sophisticated bright lighting',
+      festivo:  'cheerful festive atmosphere on bright background, decorative elements',
+    };
+    const cfg = HOLIDAY_CFG[iaHoliday] ?? HOLIDAY_CFG.outro;
+    const palette = iaPalette.trim() ? `${iaPalette.trim()}, with EGP brand pink #CB1464 as accent` : cfg.palette;
+
+    const textInstr = iaSecondary.trim()
+      ? `Large elegant calligraphic script text "${iaMainText.trim()}" in EGP pink #CB1464 as the main visual, with smaller text "${iaSecondary.trim()}" nearby.`
+      : `Large elegant calligraphic script text "${iaMainText.trim()}" in EGP pink #CB1464 as the main visual.`;
+
+    const prompt = [
+      'Professional EGP-branded marketing flyer for social media (Instagram post).',
+      cfg.scene + '.',
+      textInstr,
+      `Color palette: ${palette}.`,
+      STYLE_QUALIFIER[iaStyle] + '.',
+      `Mood: ${cfg.vibe}.`,
+      `IMPORTANT BRANDING: bright white or very light background dominant (60-80%), EGP signature pink #CB1464 as main accent color, clean modern corporate aesthetic, NOT dark or moody.`,
+      'Place the EGP logo (provided as separate input image) prominently in bottom-left corner — composite the actual logo, do NOT redraw.',
+      'High quality commercial design. No watermarks. No "RESERVADO PARA LOGO" placeholder.',
+    ].join(' ');
+
+    try {
+      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
+      const anonKey     = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+      const res = await fetch(`${supabaseUrl}/functions/v1/generate-image-gemini`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', apikey: anonKey, Authorization: `Bearer ${anonKey}` },
+        body: JSON.stringify({
+          prompt,
+          skip_product_overlay: true,
+          lighter_branding: true,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error ?? 'Falha ao gerar flyer');
+      setFinalUrl(json.url);
+      // Limpa o canvas atual pra não confundir o user
+      setTemplate(null);
+    } catch (err) {
+      setIaError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setIaGenerating(false);
+    }
+  }
+
   // ── Salvar como template ──
   async function handleSaveTemplate() {
     if (!finalUrl || !tplName.trim() || !template || savingTpl) return;
@@ -297,19 +401,23 @@ export default function ImageGeneratorPage() {
 
         {/* Abas */}
         <div className="flex shrink-0 border-b border-slate-200">
-          {(['criar', 'salvos'] as const).map((tab) => (
+          {([
+            { key: 'criar' as const,     label: 'Criar Novo' },
+            { key: 'flyer-ia' as const,  label: '✨ Flyer IA' },
+            { key: 'salvos' as const,    label: `Salvos${savedTemplates.length ? ` (${savedTemplates.length})` : ''}` },
+          ]).map(({ key, label }) => (
             <button
-              key={tab}
+              key={key}
               type="button"
-              onClick={() => setSidebarTab(tab)}
+              onClick={() => setSidebarTab(key)}
               className={cn(
                 'flex-1 py-2.5 text-xs font-medium transition-colors',
-                sidebarTab === tab
+                sidebarTab === key
                   ? 'border-b-2 border-brand-500 text-brand-600'
                   : 'text-slate-500 hover:text-slate-700',
               )}
             >
-              {tab === 'criar' ? 'Criar Novo' : `Meus Templates${savedTemplates.length ? ` (${savedTemplates.length})` : ''}`}
+              {label}
             </button>
           ))}
         </div>
@@ -339,6 +447,117 @@ export default function ImageGeneratorPage() {
                 <p className="text-xs text-slate-500 leading-snug">{t.description}</p>
               </button>
             ))}
+          </div>
+        )}
+
+        {/* Aba: Flyer IA (Nano Banana — flyer comemorativo via IA) */}
+        {sidebarTab === 'flyer-ia' && (
+          <div className="flex-1 overflow-y-auto p-3 space-y-3">
+            <div className="rounded-lg border border-purple-200 bg-purple-50 px-3 py-2">
+              <p className="text-xs font-medium text-purple-900">Flyer comemorativo via IA</p>
+              <p className="mt-0.5 text-[10px] text-purple-700 leading-snug">
+                A IA gera o flyer do zero com cena temática + texto desenhado + identidade EGP. Demora 15-30s.
+              </p>
+            </div>
+
+            <div>
+              <label className="block text-[11px] font-medium text-slate-600 mb-1">Ocasião</label>
+              <select
+                value={iaHoliday}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setIaHoliday(v);
+                  // Auto-preenche o texto principal com sugestão da ocasião
+                  const def = HOLIDAYS.find((h) => h.value === v)?.defaultText;
+                  if (def && !iaMainText) setIaMainText(def);
+                }}
+                className="w-full rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
+              >
+                {HOLIDAYS.map((h) => (
+                  <option key={h.value} value={h.value}>{h.label}</option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-[11px] font-medium text-slate-600 mb-1">
+                Texto principal (CURTO — 3 a 5 palavras)
+              </label>
+              <input
+                type="text"
+                value={iaMainText}
+                onChange={(e) => setIaMainText(e.target.value)}
+                maxLength={60}
+                placeholder="Ex: Feliz Dia das Mães"
+                className="w-full rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
+              />
+              <p className="mt-0.5 text-[10px] text-slate-400">É o que vai aparecer DESENHADO no flyer. Mantenha curto.</p>
+            </div>
+
+            <div>
+              <label className="block text-[11px] font-medium text-slate-600 mb-1">
+                Texto secundário (opcional)
+              </label>
+              <input
+                type="text"
+                value={iaSecondary}
+                onChange={(e) => setIaSecondary(e.target.value)}
+                maxLength={60}
+                placeholder="Ex: 12 de Maio"
+                className="w-full rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
+              />
+            </div>
+
+            <div>
+              <label className="block text-[11px] font-medium text-slate-600 mb-1">Estilo</label>
+              <select
+                value={iaStyle}
+                onChange={(e) => setIaStyle(e.target.value as any)}
+                className="w-full rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
+              >
+                <option value="suave">Suave (pastel, romântico)</option>
+                <option value="vibrante">Vibrante (cores fortes)</option>
+                <option value="elegante">Elegante (premium)</option>
+                <option value="festivo">Festivo (alegre, colorido)</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-[11px] font-medium text-slate-600 mb-1">
+                Cores (opcional, sobrescreve o default)
+              </label>
+              <input
+                type="text"
+                value={iaPalette}
+                onChange={(e) => setIaPalette(e.target.value)}
+                placeholder="Ex: rosa pastel e dourado"
+                className="w-full rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
+              />
+            </div>
+
+            {iaError && (
+              <div className="rounded-md border border-red-200 bg-red-50 px-2.5 py-2 text-[11px] text-red-700">
+                {iaError}
+              </div>
+            )}
+
+            <button
+              type="button"
+              onClick={generateHolidayFlyer}
+              disabled={iaGenerating || !iaMainText.trim()}
+              className={cn(
+                'w-full rounded-md py-2 text-xs font-medium transition-colors',
+                iaGenerating || !iaMainText.trim()
+                  ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                  : 'bg-brand-600 text-white hover:bg-brand-700',
+              )}
+            >
+              {iaGenerating ? 'Gerando flyer… (15-30s)' : '✨ Gerar Flyer'}
+            </button>
+
+            <p className="text-[10px] text-slate-400 leading-relaxed">
+              Após gerar, use os botões da direita pra enviar via WhatsApp.
+            </p>
           </div>
         )}
 
