@@ -630,11 +630,48 @@ export default function BuyerAgentPage() {
 
     // Monta texto da mensagem: texto do usuário + todos os XMLs parseados
     const parsedText = parsedsToSend.map((p) => p.text).join('\n\n');
-    const finalMessage = parsedText
+
+    // Upload de imagens (jpg/png/webp) pra Storage pra IA poder usar como
+    // referência visual em generate_holiday_flyer (reference_image_url).
+    // PDFs e outros formatos ficam só como inlineData (Gemini lê inline).
+    const imageRefsForPrompt: string[] = [];
+    const imageFiles = filesToSend.filter((f) => f.mimeType.startsWith('image/'));
+    if (imageFiles.length > 0) {
+      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
+      const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
+      for (const f of imageFiles) {
+        try {
+          const uploadRes = await fetch(`${supabaseUrl}/functions/v1/generate-image`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              apikey: anonKey,
+              Authorization: `Bearer ${anonKey}`,
+            },
+            body: JSON.stringify({ image_data: f.data }),
+          });
+          const uploadJson = await uploadRes.json();
+          if (uploadRes.ok && uploadJson.url) {
+            imageRefsForPrompt.push(`[Imagem de referência "${f.name}": ${uploadJson.url}]`);
+          } else {
+            console.warn('[image-ref] upload falhou:', uploadJson);
+          }
+        } catch (err) {
+          console.warn('[image-ref] erro no upload:', err);
+        }
+      }
+    }
+    const imageRefsText = imageRefsForPrompt.length > 0
+      ? '\n\n' + imageRefsForPrompt.join('\n') +
+        '\n(Se for usar como referência visual pra gerar nova imagem, ' +
+        'passe a URL acima em reference_image_url do generate_holiday_flyer.)'
+      : '';
+
+    const finalMessage = (parsedText
       ? (message ? `${message}\n\n${parsedText}` : parsedText)
       : (message || (hasPdfs
           ? `Importar ${filesToSend.length} pedido${filesToSend.length > 1 ? 's' : ''}: ${filesToSend.map((f) => f.name).join(', ')}`
-          : ''));
+          : ''))) + imageRefsText;
 
     setInput('');
     setPendingFiles([]);
