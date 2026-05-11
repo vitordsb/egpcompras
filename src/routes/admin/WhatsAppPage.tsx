@@ -322,41 +322,58 @@ export default function WhatsAppPage() {
     // Focus no input ao abrir conversa
     setTimeout(() => inputRef.current?.focus(), 50);
 
-    // Realtime: subscribe a INSERT/UPDATE em whatsapp_messages pra esse phone.
-    // Substitui o polling de 10s — latência cai pra <1s sem requests extras.
+    // Realtime: subscribe a INSERT/UPDATE em whatsapp_messages.
+    // Ouve TODOS os eventos da tabela e filtra no client por phone — mais
+    // robusto que filter server-side (que às vezes falha silenciosamente
+    // dependendo de como a publication tá configurada).
     const channel = supabase
       .channel(`wa-msgs:${selected}`)
       .on(
         'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'whatsapp_messages',
-          filter: `phone=eq.${selected}`,
+        { event: '*', schema: 'public', table: 'whatsapp_messages' },
+        (payload) => {
+          const row = (payload.new ?? payload.old) as { phone?: string } | null;
+          if (row?.phone === selected) {
+            console.log('[wa-realtime] msg event:', payload.eventType, row);
+            loadConversation(selected);
+          }
         },
-        () => loadConversation(selected),
       )
-      .on(
-        'postgres_changes',
-        {
-          event: 'UPDATE',
-          schema: 'public',
-          table: 'whatsapp_messages',
-          filter: `phone=eq.${selected}`,
-        },
-        () => loadConversation(selected),
-      )
-      .subscribe();
+      .subscribe((status, err) => {
+        if (err) console.error('[wa-realtime] subscribe error:', err);
+        else console.log('[wa-realtime] msgs channel status:', status);
+      });
+
+    // Fallback: polling reduzido a 30s (vs 10s antes) só pra cobrir caso
+    // do Realtime cair. Se Realtime funciona, esse polling é redundante
+    // mas inofensivo.
+    const fallbackPoll = setInterval(() => loadConversation(selected), 30000);
+
     return () => {
       supabase.removeChannel(channel);
+      clearInterval(fallbackPoll);
     };
   }, [selected]);
 
-  // Realtime global: subscribe em whatsapp_sessions pra atualizar a lista
-  // de conversas quando uma nova chega ou o human_takeover muda em outra aba.
+  // Realtime global: ouve INSERTs em whatsapp_messages pra atualizar a
+  // lista de conversas (quando chega mensagem de NOVO contato, a lista
+  // precisa aparecer ele). Também ouve whatsapp_sessions pra mudanças
+  // de human_takeover/status em outra aba.
   useEffect(() => {
-    const channel = supabase
-      .channel('wa-sessions')
+    const msgChannel = supabase
+      .channel('wa-list:messages')
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'whatsapp_messages' },
+        () => loadSessions(),
+      )
+      .subscribe((status, err) => {
+        if (err) console.error('[wa-realtime] list channel error:', err);
+        else console.log('[wa-realtime] list channel status:', status);
+      });
+
+    const sessChannel = supabase
+      .channel('wa-list:sessions')
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'whatsapp_sessions' },
@@ -364,7 +381,8 @@ export default function WhatsAppPage() {
       )
       .subscribe();
     return () => {
-      supabase.removeChannel(channel);
+      supabase.removeChannel(msgChannel);
+      supabase.removeChannel(sessChannel);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

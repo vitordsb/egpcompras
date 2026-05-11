@@ -69,22 +69,26 @@ export function useNavBadges(): NavBadges {
     }
     loadInitial();
 
-    // Realtime: incrementa o badge quando chega mensagem inbound NOVA
+    // Realtime: incrementa o badge quando chega mensagem inbound NOVA.
+    // Ouve TODOS os INSERTs e filtra client-side por direction='in' —
+    // mais robusto que filter server-side.
     const channel = supabase
       .channel('nav-badge:whatsapp')
       .on(
         'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'whatsapp_messages',
-          filter: 'direction=eq.in',
-        },
-        () => {
-          setBadges((prev) => ({ ...prev, whatsapp_recent: prev.whatsapp_recent + 1 }));
+        { event: 'INSERT', schema: 'public', table: 'whatsapp_messages' },
+        (payload) => {
+          const row = payload.new as { direction?: string } | null;
+          if (row?.direction === 'in') {
+            console.log('[nav-badge] new inbound msg');
+            setBadges((prev) => ({ ...prev, whatsapp_recent: prev.whatsapp_recent + 1 }));
+          }
         },
       )
-      .subscribe();
+      .subscribe((status, err) => {
+        if (err) console.error('[nav-badge] subscribe error:', err);
+        else console.log('[nav-badge] status:', status);
+      });
 
     // Escuta evento custom 'wa-seen' (disparado pela WhatsAppPage) → zera badge
     function onSeen() {
