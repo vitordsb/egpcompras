@@ -101,6 +101,7 @@ function arrayBufferToBase64(buf: ArrayBuffer): string {
 }
 
 Deno.serve(async (req) => {
+  const reqStart = Date.now();
   if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS });
   if (req.method !== 'POST') return new Response('Method not allowed', { status: 405, headers: CORS });
 
@@ -241,11 +242,31 @@ Deno.serve(async (req) => {
   });
 
   const publicUrl = await uploadBuffer(brandedBuffer);
+
+  // Log estruturado JSON pra ferramenta de análise (Supabase Logs viewer
+  // filtra por substring "image_gen_event=" pra ver custo, latência, etc).
+  const latencyMs = Date.now() - reqStart;
+  // Custo estimado: Gemini 2.5 Flash Image ~$0.039/imagem (Mar 2026)
+  const estimatedCostUsd = 0.039;
+  console.log(JSON.stringify({
+    image_gen_event: true,
+    provider: 'gemini',
+    model: modelUsed || 'gemini-image',
+    success: !!publicUrl,
+    latency_ms: latencyMs,
+    estimated_cost_usd: estimatedCostUsd,
+    had_reference: !!referenceBase64,
+    prompt_chars: prompt.length,
+    stored: !!publicUrl,
+    timestamp: new Date().toISOString(),
+  }));
+
   return jsonOk({
     url: publicUrl,
     stored: !!publicUrl,
     branded: true,
     model_used: modelUsed || 'gemini-image',
     had_reference: !!referenceBase64,
+    latency_ms: latencyMs,
   });
 });

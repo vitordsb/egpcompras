@@ -14,8 +14,15 @@ const supaHeaders = {
 };
 
 // ── Valida assinatura HMAC-SHA256 da Meta ─────────────────────────────────────
+// SECURITY: se WA_APP_SECRET não estiver configurado, NEGAR ao invés de
+// aceitar. Antes o fallback era `return true` que deixava o webhook
+// completamente aberto pra qualquer POST se a env var sumisse.
 async function verifyMetaSignature(rawBody: ArrayBuffer, sig: string): Promise<boolean> {
-  if (!WA_APP_SECRET) return true;
+  if (!WA_APP_SECRET) {
+    console.error('[wa-webhook] WA_APP_SECRET ausente — recusando todas as requisições');
+    return false;
+  }
+  if (!sig) return false;
   try {
     const key = await crypto.subtle.importKey(
       'raw', new TextEncoder().encode(WA_APP_SECRET),
@@ -26,6 +33,29 @@ async function verifyMetaSignature(rawBody: ArrayBuffer, sig: string): Promise<b
       .map(b => b.toString(16).padStart(2, '0')).join('');
     return hex === sig;
   } catch { return false; }
+}
+
+// ── Rate limit por phone — proteção contra spam drenando quota Gemini ────────
+// Checa quantas mensagens INBOUND recebemos desse número nos últimos 60s.
+// Se excedeu o limite, retorna true (bloqueado). Log estruturado pra auditoria.
+const RATE_LIMIT_PER_MINUTE = 10;
+async function isRateLimited(phone: string): Promise<boolean> {
+  const since = new Date(Date.now() - 60 * 1000).toISOString();
+  const url = `${SUPA_URL}/rest/v1/whatsapp_messages?phone=eq.${encodeURIComponent(phone)}&direction=eq.in&created_at=gte.${encodeURIComponent(since)}&select=id`;
+  try {
+    const res = await fetch(url, { headers: supaHeaders });
+    if (!res.ok) return false; // fail-open: se não der pra checar, não bloqueia
+    const rows = await res.json();
+    const count = Array.isArray(rows) ? rows.length : 0;
+    if (count >= RATE_LIMIT_PER_MINUTE) {
+      console.warn(`[wa-webhook] rate limit: phone=${phone} count=${count}/min — bloqueado`);
+      return true;
+    }
+    return false;
+  } catch (err) {
+    console.warn('[wa-webhook] rate limit check failed:', err);
+    return false;
+  }
 }
 
 // ── DB helpers ────────────────────────────────────────────────────────────────
@@ -55,12 +85,23 @@ async function dbUpdate(table: string, id: string, body: Record<string, unknown>
 }
 
 // ── Sessão ────────────────────────────────────────────────────────────────────
-async function getSession(phone: string): Promise<{ id: string; history: any[]; status: string }> {
+interface Session {
+  id: string;
+  history: any[];
+  status: string;
+  human_takeover: boolean;
+}
+async function getSession(phone: string): Promise<Session> {
   const rows = await dbSelect('whatsapp_sessions', { phone });
-  if (rows.length > 0) return { id: rows[0].id, history: rows[0].history ?? [], status: rows[0].status ?? 'active' };
+  if (rows.length > 0) return {
+    id: rows[0].id,
+    history: rows[0].history ?? [],
+    status: rows[0].status ?? 'active',
+    human_takeover: rows[0].human_takeover === true,
+  };
   const created = await dbInsert('whatsapp_sessions', { phone, history: [], status: 'active' });
   if (!created?.id) throw new Error(`getSession: falha ao criar sessão para ${phone}`);
-  return { id: created.id, history: [], status: 'active' };
+  return { id: created.id, history: [], status: 'active', human_takeover: false };
 }
 
 async function saveSession(id: string, history: any[]): Promise<void> {
@@ -620,11 +661,24 @@ Deno.serve(async (req) => {
   try {
     await logMsg(phone, 'in', text, wamid);
 
+    // ── Rate limit: protege quota Gemini contra spam ──
+    if (await isRateLimited(phone)) {
+      // Não responde (silent drop). Log já registrado em isRateLimited.
+      return new Response('ok');
+    }
+
     const session = await getSession(phone);
 
-    // ── Se em handoff: não processa com IA, apenas loga ──
-    if (session.status === 'handoff') {
-      // Responde uma vez para o cliente saber que está aguardando
+    // ── Se em handoff OU vendedora ativou modo manual: não chama IA ──
+    if (session.status === 'handoff' || session.human_takeover === true) {
+      // Em modo manual (vendedora assumiu), não envia mensagem automática
+      // alguma — só registra o inbound e deixa a vendedora responder.
+      if (session.human_takeover === true) {
+        console.log(`[wa-webhook] human_takeover ativo pro phone ${phone} — IA não responde`);
+        return new Response('ok');
+      }
+      // Em handoff (handoff_requested → aguardando vendedora pegar):
+      // notifica o cliente uma vez que está aguardando.
       const lastMsgs = await dbSelect('whatsapp_messages', { phone }, '&direction=eq.out&order=created_at.desc&limit=2');
       const alreadyNotified = lastMsgs.some(m => m.text?.includes('aguardando atendimento'));
       if (!alreadyNotified) {

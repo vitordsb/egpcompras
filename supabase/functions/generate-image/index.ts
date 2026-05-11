@@ -260,6 +260,7 @@ async function applyBrandingAndProduct(
 }
 
 Deno.serve(async (req) => {
+  const reqStart = Date.now();
   if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS });
   if (req.method !== 'POST') return new Response('Method not allowed', { status: 405, headers: CORS });
 
@@ -362,8 +363,34 @@ Deno.serve(async (req) => {
   });
 
   const publicUrl = await uploadBuffer(brandedBuffer);
+  const modelUsed = reference_image_url ? 'flux-dev-img2img' : `flux-${model}`;
+
+  // Log estruturado pra observabilidade de custo
+  // Custo estimado por modelo (Fal.ai pricing Mar 2026):
+  //   flux/schnell: ~$0.003 (4 steps)
+  //   flux/dev: ~$0.025 (28 steps)
+  //   flux/dev img2img: ~$0.025
+  const costMap: Record<string, number> = {
+    'flux-schnell': 0.003,
+    'flux-dev': 0.025,
+    'flux-dev-img2img': 0.025,
+  };
+  console.log(JSON.stringify({
+    image_gen_event: true,
+    provider: 'fal',
+    model: modelUsed,
+    success: !!publicUrl,
+    latency_ms: Date.now() - reqStart,
+    estimated_cost_usd: costMap[modelUsed] ?? 0.005,
+    had_reference: !!reference_image_url,
+    product_overlay: !!product_filename && !skip_product_overlay,
+    prompt_chars: prompt.trim().length,
+    stored: !!publicUrl,
+    timestamp: new Date().toISOString(),
+  }));
+
   return jsonOk(publicUrl
-    ? { url: publicUrl, stored: true, branded: true, model_used: reference_image_url ? 'flux-dev-img2img' : `flux-${model}` }
-    : { url: tempUrl, stored: false, branded: false, model_used: reference_image_url ? 'flux-dev-img2img' : `flux-${model}` }
+    ? { url: publicUrl, stored: true, branded: true, model_used: modelUsed }
+    : { url: tempUrl, stored: false, branded: false, model_used: modelUsed }
   );
 });
