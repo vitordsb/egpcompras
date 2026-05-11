@@ -50,163 +50,212 @@ async function applyBrandingAndProduct(
   imageBuffer: ArrayBuffer,
   opts: CompositingOptions,
 ): Promise<ArrayBuffer> {
+  let img: any;
   try {
-    const img = await Jimp.read(Buffer.from(imageBuffer));
-    const W = img.getWidth();
-    const H = img.getHeight();
+    img = await Jimp.read(Buffer.from(imageBuffer));
+  } catch (err) {
+    console.error('[branding] Jimp.read FAIL:', err);
+    return imageBuffer;
+  }
+  const W = img.getWidth();
+  const H = img.getHeight();
+  console.log(`[branding] start: ${W}x${H}, lighter=${opts.lighterBranding}, skipProduct=${opts.skipProductOverlay}`);
 
-    // 1. Foto do produto centralizada (apenas se NÃO for skip_product_overlay)
+  // Wrap em block externo só pra logar — se falhar, retorna o que conseguiu até aqui
+  try {
+
+    const EGP_PINK = { r: 0xCB, g: 0x14, b: 0x64 }; // #CB1464
+    const pad = Math.round(W * 0.03);
+
+    // 1. Foto do produto centralizada (try/catch isolado)
     if (opts.productFilename && !opts.skipProductOverlay) {
-      const encoded    = encodeURIComponent(`${opts.productFilename}.png`);
-      const productUrl = `${SUPA_URL}/storage/v1/object/public/product-images/products/${encoded}`;
-      const pRes = await fetch(productUrl);
-      if (pRes.ok) {
-        const pBuf    = await pRes.arrayBuffer();
-        const product = await Jimp.read(Buffer.from(pBuf));
-
-        // Escala para caber em 55% largura × 72% altura (reserva espaço para branding)
-        const maxW  = Math.round(W * 0.55);
-        const maxH  = Math.round(H * 0.72);
-        const scale = Math.min(maxW / product.getWidth(), maxH / product.getHeight());
-        product.resize(Math.round(product.getWidth() * scale), Math.round(product.getHeight() * scale));
-
-        const px = Math.round((W - product.getWidth())  / 2);
-        const py = Math.round((H - product.getHeight()) / 2 - H * 0.04);
-
-        // Sombra simples: clona, escurece e composta ligeiramente deslocada
-        const shadow = product.clone().color([{ apply: 'darken', params: [80] }]);
-        img.composite(shadow, px + 6, py + 8, { mode: Jimp.BLEND_SOURCE_OVER, opacitySource: 0.35, opacityDest: 1 });
-        img.composite(product, px, py, { mode: Jimp.BLEND_SOURCE_OVER, opacitySource: 1, opacityDest: 1 });
-      }
+      try {
+        const encoded    = encodeURIComponent(`${opts.productFilename}.png`);
+        const productUrl = `${SUPA_URL}/storage/v1/object/public/product-images/products/${encoded}`;
+        const pRes = await fetch(productUrl);
+        if (pRes.ok) {
+          const pBuf    = await pRes.arrayBuffer();
+          const product = await Jimp.read(Buffer.from(pBuf));
+          const maxW  = Math.round(W * 0.55);
+          const maxH  = Math.round(H * 0.72);
+          const scale = Math.min(maxW / product.getWidth(), maxH / product.getHeight());
+          product.resize(Math.round(product.getWidth() * scale), Math.round(product.getHeight() * scale));
+          const px = Math.round((W - product.getWidth())  / 2);
+          const py = Math.round((H - product.getHeight()) / 2 - H * 0.04);
+          const shadow = product.clone().color([{ apply: 'darken', params: [80] }]);
+          img.composite(shadow, px + 6, py + 8, { mode: Jimp.BLEND_SOURCE_OVER, opacitySource: 0.35, opacityDest: 1 });
+          img.composite(product, px, py, { mode: Jimp.BLEND_SOURCE_OVER, opacitySource: 1, opacityDest: 1 });
+          console.log('[branding] product overlay OK');
+        } else {
+          console.warn(`[branding] product fetch ${pRes.status}: ${productUrl}`);
+        }
+      } catch (e) { console.error('[branding] product overlay FAIL:', e); }
     }
 
     // 2. Faixa escura no rodapé (apenas no modo branding completo)
-    //    Em lighterBranding (flyers comemorativos com texto da própria IA),
-    //    pula a faixa pra não cobrir o design — só o logo no canto.
     if (!opts.lighterBranding) {
-      const stripH = Math.round(H * 0.15);
-      for (let y = H - stripH; y < H; y++) {
-        const t = (y - (H - stripH)) / stripH; // 0→1
-        const dim = t * 0.75;
-        for (let x = 0; x < W; x++) {
-          const { r, g, b } = Jimp.intToRGBA(img.getPixelColor(x, y));
-          img.setPixelColor(
-            Jimp.rgbaToInt(Math.round(r * (1 - dim)), Math.round(g * (1 - dim)), Math.round(b * (1 - dim)), 255),
-            x, y,
-          );
+      try {
+        const stripH = Math.round(H * 0.15);
+        for (let y = H - stripH; y < H; y++) {
+          const t = (y - (H - stripH)) / stripH;
+          const dim = t * 0.75;
+          for (let x = 0; x < W; x++) {
+            const { r, g, b } = Jimp.intToRGBA(img.getPixelColor(x, y));
+            img.setPixelColor(
+              Jimp.rgbaToInt(Math.round(r * (1 - dim)), Math.round(g * (1 - dim)), Math.round(b * (1 - dim)), 255),
+              x, y,
+            );
+          }
         }
-      }
+      } catch (e) { console.error('[branding] dark strip FAIL:', e); }
     }
 
-    // 3. Logo EGP no canto inferior esquerdo
-    //    Em lighterBranding (flyer): logo maior + texto "EGP" ao lado +
-    //    barra rosa fina na lateral esquerda pra reforçar identidade.
-    const EGP_PINK = { r: 0xCB, g: 0x14, b: 0x64 }; // #CB1464
-
+    // 3. BARRA ROSA EGP NA LATERAL ESQUERDA (lighterBranding) — sem deps externas
     if (opts.lighterBranding) {
-      // Barra rosa vertical fina na lateral esquerda — accent visual da marca
-      const stripeW = Math.max(4, Math.round(W * 0.008));
-      for (let y = 0; y < H; y++) {
-        for (let x = 0; x < stripeW; x++) {
-          img.setPixelColor(
-            Jimp.rgbaToInt(EGP_PINK.r, EGP_PINK.g, EGP_PINK.b, 255),
-            x, y,
-          );
+      try {
+        const stripeW = Math.max(6, Math.round(W * 0.012));
+        for (let y = 0; y < H; y++) {
+          for (let x = 0; x < stripeW; x++) {
+            img.setPixelColor(Jimp.rgbaToInt(EGP_PINK.r, EGP_PINK.g, EGP_PINK.b, 255), x, y);
+          }
         }
-      }
+        console.log('[branding] lateral pink stripe OK');
+      } catch (e) { console.error('[branding] pink stripe FAIL:', e); }
     }
 
-    const logoRes = await fetch(LOGO_URL);
-    if (logoRes.ok) {
-      const logoBuf = await logoRes.arrayBuffer();
-      const logo    = await Jimp.read(Buffer.from(logoBuf));
-      // Logo: 22% no lighterBranding (era 16%), 24% no completo
-      const logoW   = Math.round(W * (opts.lighterBranding ? 0.22 : 0.24));
-      logo.resize(logoW, Jimp.AUTO);
-      const pad   = Math.round(W * 0.03);
-      const logoY = H - logo.getHeight() - pad;
+    // 4. CARTÃO BRANCO + LOGO + "EGP" NO CANTO INFERIOR ESQUERDO (lighterBranding)
+    //    Cada sub-etapa em try próprio pra que falhar uma não destrua as outras.
+    if (opts.lighterBranding) {
+      // 4a. Tenta carregar logo
+      let logo: any = null;
+      try {
+        const logoRes = await fetch(LOGO_URL);
+        if (!logoRes.ok) {
+          console.error(`[branding] logo fetch ${logoRes.status}`);
+        } else {
+          const logoBuf = await logoRes.arrayBuffer();
+          logo = await Jimp.read(Buffer.from(logoBuf));
+          const logoW = Math.round(W * 0.20);
+          logo.resize(logoW, Jimp.AUTO);
+          console.log(`[branding] logo loaded ${logo.getWidth()}x${logo.getHeight()}`);
+        }
+      } catch (e) { console.error('[branding] logo load FAIL:', e); logo = null; }
 
-      // Em lighterBranding, adiciona "cartão" branco arredondado atrás do
-      // logo + nome "EGP" ao lado em fonte grande pra reforçar a marca.
-      if (opts.lighterBranding) {
-        // Carrega fonte grande pro nome EGP
-        let egpFont: any = null;
+      // 4b. Tenta carregar fonte EGP
+      let egpFont: any = null;
+      const FONT_CANDIDATES = [
+        Jimp.FONT_SANS_64_BLACK,
+        Jimp.FONT_SANS_32_BLACK,
+        Jimp.FONT_SANS_16_BLACK,
+      ];
+      for (const f of FONT_CANDIDATES) {
         try {
-          egpFont = await Jimp.loadFont(Jimp.FONT_SANS_64_BLACK);
-        } catch { /* fallback */ }
+          egpFont = await Jimp.loadFont(f);
+          console.log('[branding] font loaded:', f);
+          break;
+        } catch (e) { console.warn('[branding] font fail', f, e); }
+      }
 
+      // 4c. Calcula dimensões do cartão (logo + "EGP" texto)
+      try {
         const egpText = 'EGP';
         const textW = egpFont ? img.measureText(egpFont, egpText) : 0;
         const textH = egpFont ? img.measureTextHeight(egpFont, egpText, textW) : 0;
-        const gap   = Math.round(W * 0.015);
+        const gap = Math.round(W * 0.015);
+        const logoW = logo ? logo.getWidth() : 0;
+        const logoH = logo ? logo.getHeight() : 0;
+        const contentH = Math.max(logoH, textH);
+        const contentW = logoW + (egpFont && logoW > 0 ? gap : 0) + textW;
+        const cardPad = Math.round(W * 0.022);
+        const cardW = contentW + cardPad * 2;
+        const cardH = contentH + cardPad * 2;
+        const cardX = pad;
+        const cardY = H - cardH - pad;
 
-        // Cartão branco que envolve logo + texto
-        const cardPad = Math.round(W * 0.018);
-        const cardW   = logo.getWidth() + (egpFont ? gap + textW : 0) + cardPad * 2;
-        const cardH   = Math.max(logo.getHeight(), textH) + cardPad * 2;
-        const cardX   = pad - cardPad;
-        const cardY   = H - cardH - pad + cardPad;
-
+        // Pinta cartão branco sólido
         for (let y = Math.max(0, cardY); y < Math.min(H, cardY + cardH); y++) {
           for (let x = Math.max(0, cardX); x < Math.min(W, cardX + cardW); x++) {
-            // Branco sólido com leve transparência onde tem fundo escuro
-            const c = Jimp.intToRGBA(img.getPixelColor(x, y));
-            img.setPixelColor(
-              Jimp.rgbaToInt(
-                Math.round(c.r * 0.06 + 255 * 0.94),
-                Math.round(c.g * 0.06 + 255 * 0.94),
-                Math.round(c.b * 0.06 + 255 * 0.94),
-                255,
-              ),
-              x, y,
-            );
+            img.setPixelColor(Jimp.rgbaToInt(255, 255, 255, 255), x, y);
           }
         }
 
-        // Borda rosa fina embaixo do cartão (acent EGP)
-        const borderH = Math.max(2, Math.round(W * 0.004));
-        for (let y = cardY + cardH - borderH; y < cardY + cardH; y++) {
+        // Borda rosa fina embaixo do cartão
+        const borderH = Math.max(3, Math.round(W * 0.005));
+        for (let y = cardY + cardH; y < cardY + cardH + borderH && y < H; y++) {
           for (let x = Math.max(0, cardX); x < Math.min(W, cardX + cardW); x++) {
-            img.setPixelColor(
-              Jimp.rgbaToInt(EGP_PINK.r, EGP_PINK.g, EGP_PINK.b, 255),
-              x, y,
-            );
+            img.setPixelColor(Jimp.rgbaToInt(EGP_PINK.r, EGP_PINK.g, EGP_PINK.b, 255), x, y);
+          }
+        }
+        // Borda rosa fina em cima do cartão também
+        for (let y = Math.max(0, cardY - borderH); y < cardY; y++) {
+          for (let x = Math.max(0, cardX); x < Math.min(W, cardX + cardW); x++) {
+            img.setPixelColor(Jimp.rgbaToInt(EGP_PINK.r, EGP_PINK.g, EGP_PINK.b, 255), x, y);
           }
         }
 
-        // Logo (centralizado verticalmente no cartão)
-        const logoYInCard = cardY + Math.round((cardH - logo.getHeight()) / 2);
-        img.composite(logo, pad, logoYInCard, { mode: Jimp.BLEND_SOURCE_OVER, opacitySource: 1, opacityDest: 1 });
+        // Composita logo (centralizado vertical no cartão)
+        if (logo) {
+          const logoYInCard = cardY + Math.round((cardH - logoH) / 2);
+          const logoXInCard = cardX + cardPad;
+          img.composite(logo, logoXInCard, logoYInCard, { mode: Jimp.BLEND_SOURCE_OVER, opacitySource: 1, opacityDest: 1 });
+        }
 
-        // Texto "EGP" ao lado direito do logo
+        // Imprime texto "EGP"
         if (egpFont) {
-          const textX = pad + logo.getWidth() + gap;
+          const textX = cardX + cardPad + logoW + (logoW > 0 ? gap : 0);
           const textY = cardY + Math.round((cardH - textH) / 2);
           img.print(egpFont, textX, textY, egpText);
         }
-      } else {
-        // Branding completo (não-flyer) — logo simples no canto
-        img.composite(logo, pad, logoY, { mode: Jimp.BLEND_SOURCE_OVER, opacitySource: 1, opacityDest: 1 });
-      }
-    }
 
-    // 4. CNPJ + nome (apenas no branding completo — em flyers fica poluído)
-    if (!opts.lighterBranding) {
+        // Fallback: se nem logo nem font carregaram, ainda assim deixa um
+        // cartão rosa pequeno só pra ter ALGUM signal visual da marca
+        if (!logo && !egpFont) {
+          console.warn('[branding] no logo nor font — drawing pink fallback square');
+          const fbSize = Math.round(W * 0.08);
+          for (let y = H - fbSize - pad; y < H - pad && y < H; y++) {
+            for (let x = pad; x < pad + fbSize && x < W; x++) {
+              img.setPixelColor(Jimp.rgbaToInt(EGP_PINK.r, EGP_PINK.g, EGP_PINK.b, 255), x, y);
+            }
+          }
+        }
+
+        console.log('[branding] EGP card composited');
+      } catch (e) { console.error('[branding] EGP card FAIL:', e); }
+    } else {
+      // Branding completo (não-flyer) — logo simples + CNPJ
+      try {
+        const logoRes = await fetch(LOGO_URL);
+        if (logoRes.ok) {
+          const logoBuf = await logoRes.arrayBuffer();
+          const logo = await Jimp.read(Buffer.from(logoBuf));
+          const logoW = Math.round(W * 0.24);
+          logo.resize(logoW, Jimp.AUTO);
+          const logoY = H - logo.getHeight() - pad;
+          img.composite(logo, pad, logoY, { mode: Jimp.BLEND_SOURCE_OVER, opacitySource: 1, opacityDest: 1 });
+        }
+      } catch (e) { console.error('[branding] full logo FAIL:', e); }
+
       try {
         const font  = await Jimp.loadFont(Jimp.FONT_SANS_16_WHITE);
-        const pad   = Math.round(W * 0.025);
+        const padR  = Math.round(W * 0.025);
         const nameW = img.measureText(font, CORP_NAME);
         const cnpjW = img.measureText(font, CNPJ_TEXT);
-        img.print(font, W - nameW - pad, H - 44, CORP_NAME);
-        img.print(font, W - cnpjW - pad, H - 24, CNPJ_TEXT);
-      } catch { /* fallback silencioso */ }
+        img.print(font, W - nameW - padR, H - 44, CORP_NAME);
+        img.print(font, W - cnpjW - padR, H - 24, CNPJ_TEXT);
+      } catch (e) { console.error('[branding] CNPJ text FAIL:', e); }
     }
 
+  } catch (err) {
+    console.error('[branding] outer error (continuing with partial branding):', err);
+  }
+
+  // Sempre tenta serializar o img (mesmo que parcial) — se falhar tudo, devolve original
+  try {
     const buf = await img.getBufferAsync(Jimp.MIME_JPEG);
     return (buf as Buffer).buffer as ArrayBuffer;
   } catch (err) {
-    console.error('applyBrandingAndProduct error:', err);
-    return imageBuffer; // fallback: imagem sem modificação
+    console.error('[branding] final serialize FAIL:', err);
+    return imageBuffer;
   }
 }
 
