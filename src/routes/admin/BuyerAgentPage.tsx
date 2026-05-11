@@ -1420,7 +1420,35 @@ export default function BuyerAgentPage() {
                       </div>
                     );
                   }
-                  return null; // sucesso: o toolCall já confirma visualmente
+                  // Auto-preview: se a tool retornou image_url, renderiza o
+                  // preview automaticamente — fallback caso a IA esqueça de
+                  // colocar ![Preview](url) no texto da resposta.
+                  const data = t.toolResponse.data as { image_url?: string; url?: string } | null;
+                  const imgUrl = data?.image_url ?? data?.url;
+                  if (imgUrl && typeof imgUrl === 'string' && /^https?:\/\//.test(imgUrl)) {
+                    return (
+                      <div key={idx} className="flex justify-start">
+                        <div className="max-w-sm overflow-hidden rounded-xl border border-violet-200 shadow-sm">
+                          <img
+                            src={imgUrl}
+                            alt="Imagem gerada por IA"
+                            className="block w-full object-cover"
+                            loading="lazy"
+                          />
+                          <div className="flex items-center gap-2 bg-violet-50 px-3 py-2">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-3.5 w-3.5 shrink-0 text-violet-500">
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09Z" />
+                            </svg>
+                            <span className="text-xs text-violet-700 font-medium">Imagem gerada por IA — aguardando aprovação</span>
+                            <a href={imgUrl} target="_blank" rel="noreferrer" className="ml-auto text-[10px] text-violet-500 hover:underline">
+                              abrir
+                            </a>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  }
+                  return null; // sucesso sem preview: o toolCall já confirma visualmente
                 }
                 return null;
               })}
