@@ -109,11 +109,20 @@ Deno.serve(async (req) => {
       language?: string; // default pt_BR
       body_params?: string[]; // params do body do template
     };
+    /** Default false. Se true, força envio como imagem livre mesmo fora
+     *  da janela 24h (Meta vai rejeitar se cliente não tiver opt-in
+     *  recente — use por sua conta e risco). */
+    force_image?: boolean;
     sender_label?: string;
   };
   try { body = await req.json(); } catch { return new Response('Invalid JSON', { status: 400, headers: CORS }); }
 
-  const { to, text, image_url, template, template_fallback, sender_label } = body;
+  const { to, text, image_url, template, sender_label } = body;
+  const forceImage = Boolean(body.force_image);
+  // Quando vem imagem SEM force_image, sempre ativa o fallback automático
+  // (mesmo se o cliente não passou template_fallback explícito). Assim
+  // protege contra calls antigos que não conhecem o param novo.
+  const template_fallback = body.template_fallback ?? (image_url && !forceImage ? {} : undefined);
   const senderFirstName = senderName(sender_label);
   if (!to) return new Response(JSON.stringify({ error: 'to é obrigatório' }), { status: 400, headers: { ...CORS, 'Content-Type': 'application/json' } });
   if (!text && !template && !image_url) return new Response(JSON.stringify({ error: 'text, image_url OU template é obrigatório' }), { status: 400, headers: { ...CORS, 'Content-Type': 'application/json' } });
@@ -145,7 +154,12 @@ Deno.serve(async (req) => {
       // Janela fechada — usa template aprovado com header IMAGE
       const tmplName = template_fallback?.name ?? WA_FLYER_TEMPLATE;
       const tmplLang = template_fallback?.language ?? 'pt_BR';
-      const tmplParams = template_fallback?.body_params ?? (text ? [text] : []);
+      // body_params: usa explícito se passado, senão usa o text (caption)
+      // ou um fallback genérico pra não falhar (template exige {{1}})
+      const fallbackBody = text || 'Mensagem da EGP Tecnologia';
+      const tmplParams = template_fallback?.body_params && template_fallback.body_params.length > 0
+        ? template_fallback.body_params
+        : [fallbackBody];
 
       const components: Record<string, unknown>[] = [];
       components.push({
