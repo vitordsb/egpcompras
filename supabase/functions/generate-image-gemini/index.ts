@@ -45,9 +45,17 @@ interface CompositingOptions {
   lighterBranding?: boolean;
 }
 
-// Reusa exatamente a mesma lógica do generate-image: barra rosa lateral +
-// cartão branco com logo + "EGP" + bordas rosa. Try/catch granular.
+// Post-process MÍNIMO: como o próprio Nano Banana agora coloca o logo
+// EGP nativamente (recebe o logo como inlineData), aqui só adiciona uma
+// fina barra rosa lateral como reforço sutil da identidade visual.
+// Cartão branco com logo NÃO é mais sobreposto — atrapalharia o logo que
+// o Gemini já colocou organicamente.
 async function applyEgpBranding(imageBuffer: ArrayBuffer, opts: CompositingOptions): Promise<ArrayBuffer> {
+  if (!opts.lighterBranding) {
+    // Modo branding completo (produto promocional) usa a Edge Function
+    // generate-image. Aqui só aplicamos o stripe em modo lighter.
+    return imageBuffer;
+  }
   let img: any;
   try {
     img = await Jimp.read(Buffer.from(imageBuffer));
@@ -57,98 +65,18 @@ async function applyEgpBranding(imageBuffer: ArrayBuffer, opts: CompositingOptio
   }
   const W = img.getWidth();
   const H = img.getHeight();
-  console.log(`[gemini-branding] start: ${W}x${H}, lighter=${opts.lighterBranding}`);
-
   const EGP_PINK = { r: 0xCB, g: 0x14, b: 0x64 };
-  const pad = Math.round(W * 0.03);
 
   try {
-    // 1. Barra rosa lateral
-    if (opts.lighterBranding) {
-      try {
-        const stripeW = Math.max(6, Math.round(W * 0.012));
-        for (let y = 0; y < H; y++) {
-          for (let x = 0; x < stripeW; x++) {
-            img.setPixelColor(Jimp.rgbaToInt(EGP_PINK.r, EGP_PINK.g, EGP_PINK.b, 255), x, y);
-          }
-        }
-        console.log('[gemini-branding] stripe OK');
-      } catch (e) { console.error('[gemini-branding] stripe FAIL:', e); }
-    }
-
-    // 2. Cartão EGP no canto
-    if (opts.lighterBranding) {
-      let logo: any = null;
-      try {
-        const logoRes = await fetch(LOGO_URL);
-        if (logoRes.ok) {
-          const logoBuf = await logoRes.arrayBuffer();
-          logo = await Jimp.read(Buffer.from(logoBuf));
-          const logoW = Math.round(W * 0.20);
-          logo.resize(logoW, Jimp.AUTO);
-        }
-      } catch (e) { console.error('[gemini-branding] logo FAIL:', e); }
-
-      let egpFont: any = null;
-      for (const f of [Jimp.FONT_SANS_64_BLACK, Jimp.FONT_SANS_32_BLACK, Jimp.FONT_SANS_16_BLACK]) {
-        try { egpFont = await Jimp.loadFont(f); break; } catch { /* try next */ }
+    const stripeW = Math.max(4, Math.round(W * 0.008));
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < stripeW; x++) {
+        img.setPixelColor(Jimp.rgbaToInt(EGP_PINK.r, EGP_PINK.g, EGP_PINK.b, 255), x, y);
       }
-
-      try {
-        const egpText = 'EGP';
-        const textW = egpFont ? img.measureText(egpFont, egpText) : 0;
-        const textH = egpFont ? img.measureTextHeight(egpFont, egpText, textW) : 0;
-        const gap = Math.round(W * 0.015);
-        const logoW = logo ? logo.getWidth() : 0;
-        const logoH = logo ? logo.getHeight() : 0;
-        const contentH = Math.max(logoH, textH);
-        const contentW = logoW + (egpFont && logoW > 0 ? gap : 0) + textW;
-        const cardPad = Math.round(W * 0.022);
-        const cardW = contentW + cardPad * 2;
-        const cardH = contentH + cardPad * 2;
-        const cardX = pad;
-        const cardY = H - cardH - pad;
-
-        // Cartão branco
-        for (let y = Math.max(0, cardY); y < Math.min(H, cardY + cardH); y++) {
-          for (let x = Math.max(0, cardX); x < Math.min(W, cardX + cardW); x++) {
-            img.setPixelColor(Jimp.rgbaToInt(255, 255, 255, 255), x, y);
-          }
-        }
-        // Borda rosa
-        const borderH = Math.max(3, Math.round(W * 0.005));
-        for (let y = cardY + cardH; y < cardY + cardH + borderH && y < H; y++) {
-          for (let x = Math.max(0, cardX); x < Math.min(W, cardX + cardW); x++) {
-            img.setPixelColor(Jimp.rgbaToInt(EGP_PINK.r, EGP_PINK.g, EGP_PINK.b, 255), x, y);
-          }
-        }
-        for (let y = Math.max(0, cardY - borderH); y < cardY; y++) {
-          for (let x = Math.max(0, cardX); x < Math.min(W, cardX + cardW); x++) {
-            img.setPixelColor(Jimp.rgbaToInt(EGP_PINK.r, EGP_PINK.g, EGP_PINK.b, 255), x, y);
-          }
-        }
-        if (logo) {
-          const logoYInCard = cardY + Math.round((cardH - logoH) / 2);
-          img.composite(logo, cardX + cardPad, logoYInCard, { mode: Jimp.BLEND_SOURCE_OVER, opacitySource: 1, opacityDest: 1 });
-        }
-        if (egpFont) {
-          const textX = cardX + cardPad + logoW + (logoW > 0 ? gap : 0);
-          const textY = cardY + Math.round((cardH - textH) / 2);
-          img.print(egpFont, textX, textY, egpText);
-        }
-        if (!logo && !egpFont) {
-          const fbSize = Math.round(W * 0.08);
-          for (let y = H - fbSize - pad; y < H - pad && y < H; y++) {
-            for (let x = pad; x < pad + fbSize && x < W; x++) {
-              img.setPixelColor(Jimp.rgbaToInt(EGP_PINK.r, EGP_PINK.g, EGP_PINK.b, 255), x, y);
-            }
-          }
-        }
-        console.log('[gemini-branding] card OK');
-      } catch (e) { console.error('[gemini-branding] card FAIL:', e); }
     }
+    console.log(`[gemini-branding] thin pink stripe applied ${W}x${H}`);
   } catch (err) {
-    console.error('[gemini-branding] outer FAIL:', err);
+    console.error('[gemini-branding] stripe FAIL:', err);
   }
 
   try {
@@ -199,7 +127,7 @@ Deno.serve(async (req) => {
         const refBuf = await refRes.arrayBuffer();
         referenceBase64 = arrayBufferToBase64(refBuf);
         referenceMime = refRes.headers.get('content-type') ?? 'image/jpeg';
-        console.log(`[gemini] referência carregada: ${(refBuf.byteLength / 1024).toFixed(1)}KB, mime=${referenceMime}`);
+        console.log(`[gemini] referência carregada: ${(refBuf.byteLength / 1024).toFixed(1)}KB`);
       } else {
         console.warn(`[gemini] falha ao baixar referência: ${refRes.status}`);
       }
@@ -208,11 +136,44 @@ Deno.serve(async (req) => {
     }
   }
 
-  // Monta request para Gemini 2.5 Flash Image (Nano Banana)
-  const parts: any[] = [{ text: prompt }];
+  // SEMPRE baixa o logo EGP e manda como input — assim o Nano Banana
+  // desenha ele de verdade no flyer, integrado nativamente, em vez de
+  // depender de compositing post-process por cima.
+  let logoBase64: string | null = null;
+  let logoMime = 'image/png';
+  try {
+    const logoRes = await fetch(LOGO_URL);
+    if (logoRes.ok) {
+      const logoBuf = await logoRes.arrayBuffer();
+      logoBase64 = arrayBufferToBase64(logoBuf);
+      logoMime = logoRes.headers.get('content-type') ?? 'image/png';
+      console.log(`[gemini] logo EGP carregado: ${(logoBuf.byteLength / 1024).toFixed(1)}KB`);
+    } else {
+      console.warn(`[gemini] falha ao baixar logo: ${logoRes.status}`);
+    }
+  } catch (err) {
+    console.warn('[gemini] erro ao buscar logo:', err);
+  }
+
+  // Monta request para Gemini Nano Banana com instruções claras de uso
+  // de cada imagem. ORDEM IMPORTA — o Gemini distingue "imagem 1" vs "imagem 2"
+  // pelo texto que vem ANTES de cada uma.
+  const parts: any[] = [];
   if (referenceBase64) {
+    parts.push({ text: 'REFERENCE IMAGE (use as visual style/composition inspiration — keep similar mood, color treatment, layout style):' });
     parts.push({ inlineData: { mimeType: referenceMime, data: referenceBase64 } });
   }
+  if (logoBase64) {
+    parts.push({ text: 'COMPANY LOGO (place this exact logo prominently in the bottom-left corner of the final design — must be clearly visible and recognizable, around 18-22% of image width):' });
+    parts.push({ inlineData: { mimeType: logoMime, data: logoBase64 } });
+  }
+  parts.push({
+    text:
+      'TASK: Generate a high-quality social media flyer following the prompt below. ' +
+      (referenceBase64 ? 'Adapt the reference image style/composition but apply the EGP brand identity and theme described. ' : '') +
+      (logoBase64 ? 'INTEGRATE the EGP logo image (shown above) into the bottom-left corner of the design — keep the logo shape and colors EXACTLY as provided. Do not redraw, recreate or modify the logo — composite the actual logo image into the design. ' : '') +
+      '\n\nPROMPT:\n' + prompt,
+  });
 
   // Modelos disponíveis (em ordem de qualidade decrescente). Tenta o primeiro,
   // se falhar com 404 (modelo não existe pra essa key), cai pro próximo.

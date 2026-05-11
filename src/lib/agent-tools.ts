@@ -5061,8 +5061,11 @@ export async function executeTool(name: string, args: any, ctx: ToolContext = {}
         `Mood: ${cfg.vibe}.`,
         // Reforço crítico de identidade EGP — o que mais impacta o resultado:
         `IMPORTANT BRANDING: bright white or very light background dominant (60-80% of the image), EGP signature pink ${EGP_BRAND_PINK} as the main accent color throughout the composition, clean modern corporate aesthetic, generous white space, NOT dark or moody.`,
-        'Leave the bottom-left corner clean and uncluttered for company logo placement.',
-        'High quality commercial design. No watermarks. No stock-image text overlays.',
+        // Logo EGP é injetado pela Edge Function como inlineData adicional
+        // — o Nano Banana coloca o logo de verdade no canto inferior esquerdo,
+        // integrado nativamente. NÃO peça pra "reservar espaço" — peça pra integrar.
+        'Place the EGP logo (provided as a separate input image) prominently and visibly in the bottom-left corner, well-integrated with the design but unmistakable as the company brand. Composite the actual logo image — do NOT recreate or redraw it.',
+        'High quality commercial design. No watermarks. No stock-image text overlays. No "RESERVADO PARA LOGO" placeholder text — actually place the logo.',
       ].join(' ');
 
       const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string;
