@@ -214,20 +214,51 @@ Deno.serve(async (req) => {
     parts.push({ inlineData: { mimeType: referenceMime, data: referenceBase64 } });
   }
 
-  const geminiRes = await fetch(
-    'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image-preview:generateContent',
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': GEMINI_API_KEY },
-      body: JSON.stringify({
-        contents: [{ role: 'user', parts }],
-        generationConfig: {
-          responseModalities: ['IMAGE', 'TEXT'],
-          temperature: 0.8,
-        },
-      }),
-    },
-  );
+  // Modelos disponíveis (em ordem de qualidade decrescente). Tenta o primeiro,
+  // se falhar com 404 (modelo não existe pra essa key), cai pro próximo.
+  const MODEL_FALLBACKS = [
+    'gemini-3.1-flash-image-preview',
+    'gemini-2.5-flash-image',
+    'nano-banana-pro-preview',
+  ];
+
+  let geminiRes: Response | null = null;
+  let lastErr: any = null;
+  let modelUsed = '';
+  for (const model of MODEL_FALLBACKS) {
+    const r = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': GEMINI_API_KEY },
+        body: JSON.stringify({
+          contents: [{ role: 'user', parts }],
+          generationConfig: {
+            responseModalities: ['IMAGE', 'TEXT'],
+            temperature: 0.8,
+          },
+        }),
+      },
+    );
+    if (r.ok) {
+      geminiRes = r;
+      modelUsed = model;
+      console.log(`[gemini] model usado: ${model}`);
+      break;
+    }
+    lastErr = await r.json().catch(() => ({ status: r.status }));
+    console.warn(`[gemini] model ${model} falhou:`, lastErr);
+    // Se foi 404/not found, tenta o próximo. Outros erros (auth, quota) param aqui.
+    const errMsg = (lastErr as any).error?.message ?? '';
+    if (!/not found|is not supported|404/i.test(errMsg) && r.status !== 404) {
+      geminiRes = r;
+      break;
+    }
+  }
+
+  if (!geminiRes) {
+    return jsonError((lastErr as any)?.error?.message ?? 'Nenhum modelo Gemini de imagem disponível');
+  }
 
   if (!geminiRes.ok) {
     const errJson = await geminiRes.json().catch(() => ({}));
@@ -253,7 +284,7 @@ Deno.serve(async (req) => {
     url: publicUrl,
     stored: !!publicUrl,
     branded: true,
-    model_used: 'gemini-nano-banana',
+    model_used: modelUsed || 'gemini-image',
     had_reference: !!referenceBase64,
   });
 });
