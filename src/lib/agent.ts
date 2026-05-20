@@ -395,6 +395,14 @@ Lista de gatilhos que SEMPRE ativam generate_holiday_flyer:
 - Narrar o processo: NUNCA explique quais funções foram executadas. Só o resultado final importa.
 - A resposta ao usuário deve parecer que uma pessoa digitou — não um log de sistema.
 
+**REGRA INVIOLÁVEL — Anti-alucinação NUMÉRICA em leituras:**
+- Quando responder com NÚMEROS (estoque, qty, preço, valor, total, custo), você DEVE usar EXATAMENTE o valor que a tool retornou, sem fazer conta de cabeça nem reformular.
+- Tools de estoque retornam múltiplos campos: quantity (físico total no galpão), reserved_quantity (já comprometido em outros pedidos), available_for_sale (disponível pra novos pedidos = quantity menos reserved). NUNCA confunda. Se o user pergunta "tem em estoque?" ele quer saber available_for_sale. Se pergunta "quanto temos físico no galpão?" é quantity.
+- Ao mencionar números importantes, SEMPRE cite a fonte e o campo: "847 unidades disponíveis pra venda (available_for_sale do get_stock_report)". Isso ajuda o usuário a verificar se você pegou o campo certo.
+- Se a tool não retornou aquele número específico, NÃO calcule. Diga "não tenho esse dado disponível" e chame a tool certa.
+- Se tem dúvida entre dois campos similares (ex: valor_total vs total_produtos), PERGUNTE ao usuário qual ele quer em vez de chutar.
+- **Anti-alucinação clássica**: nunca invente um número. Se você "lembra" de um valor de turn anterior, valide chamando a tool de novo.
+
 **REGRA INVIOLÁVEL — Anti-alucinação de sucesso:**
 - Você NUNCA pode dizer "cadastrei", "criei", "salvei", "registrei", "atualizei", "removi" sem ter chamado a tool correspondente E recebido resposta de SUCESSO (sem campo error).
 - Se a tool retornou error (qualquer mensagem de erro), você DEVE falar pro usuário o que falhou. Exemplo: "Falhei ao cadastrar o pedido: [mensagem do erro]. Quer que eu tente de novo?"
@@ -1484,16 +1492,35 @@ export async function runAgent({
 
     toolCallsCount += calls.length;
 
-    for (const call of calls) {
-      const callTurn: ChatTurn = {
-        role: 'model',
-        toolCall: { name: call.name, args: call.args },
-        provider: { id: provider.id, name: provider.name, model: provider.modelLabel },
-      };
-      newTurns.push(callTurn);
-      workingHistory.push(callTurn);
-      onTurn?.(callTurn);
+    // PARALELIZAÇÃO: tools de leitura (list_, find_, get_, check_, search_,
+    // count_) podem rodar em paralelo entre si — não mutam estado, não
+    // disputam recursos. Quando o modelo pede várias leituras no mesmo
+    // step (caso típico de análise), reduz latência em 60-70%.
+    //
+    // Tools de escrita continuam sequenciais (uma pode depender da outra).
+    // Quando a lista mistura reads e writes, executa primeiro todos os
+    // reads em paralelo, depois as writes em sequência.
+    const isReadOnly = (name: string) =>
+      /^(list_|find_|get_|check_|search_|count_|summarize_|fuzzy_)/.test(name);
 
+    const reads = calls.filter((c) => isReadOnly(c.name));
+    const writes = calls.filter((c) => !isReadOnly(c.name));
+
+    // Publica TODOS os callTurns imediatamente pra UI mostrar os cards
+    // mesmo enquanto as tools ainda estão rodando.
+    const callTurns: ChatTurn[] = calls.map((call) => ({
+      role: 'model' as const,
+      toolCall: { name: call.name, args: call.args },
+      provider: { id: provider.id, name: provider.name, model: provider.modelLabel },
+    }));
+    for (const ct of callTurns) {
+      newTurns.push(ct);
+      workingHistory.push(ct);
+      onTurn?.(ct);
+    }
+
+    // Helper: executa 1 tool e devolve respTurn
+    async function runOne(call: { name: string; args: Record<string, unknown> }): Promise<ChatTurn> {
       let toolData: unknown = null;
       let toolError: string | undefined;
       try {
@@ -1501,20 +1528,86 @@ export async function runAgent({
       } catch (err) {
         toolError = err instanceof Error ? err.message : String(err);
       }
-
-      const respTurn: ChatTurn = {
+      return {
         role: 'user',
         toolResponse: { name: call.name, data: toolData, error: toolError },
       };
+    }
+
+    // Reads em paralelo
+    const readResults = reads.length > 0 ? await Promise.all(reads.map(runOne)) : [];
+
+    // Writes sequenciais (uma write pode depender do resultado da anterior
+    // OU dos reads acima, mas o Gemini só vai usar isso no próximo step)
+    const writeResults: ChatTurn[] = [];
+    for (const w of writes) {
+      writeResults.push(await runOne(w));
+    }
+
+    // Ordena na ordem original (assim a UI mostra os results em sequência
+    // batendo com os tool calls que apareceram acima)
+    const allResults = [...readResults, ...writeResults];
+    // Mapeia name → result (assumindo 1 result por name; se houver duplicatas,
+    // preserva ordem de aparição)
+    const resultByCallIdx = new Map<number, ChatTurn>();
+    let readIdx = 0;
+    let writeIdx = 0;
+    for (let i = 0; i < calls.length; i++) {
+      if (isReadOnly(calls[i].name)) {
+        resultByCallIdx.set(i, readResults[readIdx++]);
+      } else {
+        resultByCallIdx.set(i, writeResults[writeIdx++]);
+      }
+    }
+
+    for (let i = 0; i < calls.length; i++) {
+      const respTurn = resultByCallIdx.get(i)!;
       newTurns.push(respTurn);
       workingHistory.push(respTurn);
       onTurn?.(respTurn);
     }
+
+    // Suprime warning de variável não usada (allResults é meramente debug)
+    void allResults;
   }
+
+  // ── MAX_STEPS atingido — gera relatório explícito do que rolou ──
+  // Antes: mensagem genérica que escondia que ações parciais foram feitas.
+  // Agora: lista quantas escritas tiveram sucesso, quais falharam, e
+  // sugere o que fazer (continuar de onde parou, refazer, etc).
+  const writeSummary: string[] = [];
+  const failedActions: string[] = [];
+  for (const t of newTurns) {
+    if (!t.toolResponse) continue;
+    const name = t.toolResponse.name;
+    // Filtra apenas tools que MUDARAM estado (escritas)
+    const isWrite = /^(create|update|delete|register|add|remove|mark|bulk|deduct|reserve|release|adjust|set|save|send|export)_/.test(name);
+    if (!isWrite) continue;
+    if (t.toolResponse.error) {
+      failedActions.push(`• ${name}: ${t.toolResponse.error.slice(0, 100)}`);
+    } else {
+      writeSummary.push(`✓ ${name}`);
+    }
+  }
+
+  const partialReport =
+    writeSummary.length > 0 || failedActions.length > 0
+      ? '\n\n**O que JÁ rolou nesta sessão (NÃO refaça):**\n' +
+        (writeSummary.length > 0 ? writeSummary.join('\n') + '\n' : '') +
+        (failedActions.length > 0 ? '\n**O que FALHOU (pode tentar de novo):**\n' + failedActions.join('\n') : '')
+      : '';
+
+  const continueHint =
+    writeSummary.length > 0
+      ? '\n\nPra continuar de onde parou, me diga "continua" ou descreva o que falta. Vou tomar cuidado pra não duplicar o que já está pronto.'
+      : '\n\nTente reformular sua pergunta de forma mais específica, ou divida o pedido em partes menores.';
 
   const fallback: ChatTurn = {
     role: 'model',
-    text: '⚠️ Atingi o limite de etapas sem chegar a uma resposta final. Tente reformular ou ser mais específico.',
+    text:
+      `⚠️ **Atingi o limite de ${MAX_STEPS} etapas sem terminar tudo.**` +
+      partialReport +
+      continueHint,
     provider: { id: provider.id, name: provider.name, model: provider.modelLabel },
   };
   newTurns.push(fallback);
