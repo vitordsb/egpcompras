@@ -15,6 +15,13 @@ ARCHITECTURE.md
 .claude/
 _sessions/
 
+# Certificados digitais (NUNCA commitar)
+cert/
+*.pfx
+*.p12
+*.pem
+*.key
+
 # Artefatos de teste local (Playwright, screenshots, etc)
 .playwright-mcp/
 *.png
