@@ -619,6 +619,18 @@ export default function AdminLayout() {
     return () => window.removeEventListener('keydown', onKey);
   }, [navigate]);
 
+  // Evento custom 'open-quick-chat' — disparado por páginas que querem
+  // pedir algo pra IA (botão 🤖 inline, action bar com chips, etc).
+  // Combinado com setPendingAiMessage do ai-bridge, a IA recebe o prompt
+  // e dispara automaticamente.
+  useEffect(() => {
+    function onOpen() {
+      setQuickChatOpen(true);
+    }
+    window.addEventListener('open-quick-chat', onOpen);
+    return () => window.removeEventListener('open-quick-chat', onOpen);
+  }, []);
+
   // Fecha popover de config ao clicar fora
   useEffect(() => {
     if (!configOpen) return;

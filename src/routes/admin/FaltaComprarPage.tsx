@@ -180,9 +180,26 @@ export default function FaltaComprarPage() {
 
       {/* ── Painel esquerdo: Falta Comprar ── */}
       <div className="flex flex-1 flex-col overflow-hidden border-r border-slate-200">
-        <div className="shrink-0 border-b border-slate-200 px-6 py-4">
-          <h1 className="text-xl font-semibold text-slate-900">Falta Comprar</h1>
-          <p className="text-xs text-slate-500">Itens faltantes por pedido. Clique no card para ver os itens.</p>
+        <div className="shrink-0 border-b border-slate-200 px-6 py-4 flex items-start justify-between gap-3">
+          <div>
+            <h1 className="text-xl font-semibold text-slate-900">Falta Comprar</h1>
+            <p className="text-xs text-slate-500">Itens faltantes por pedido. Clique no card para ver os itens.</p>
+          </div>
+          {/* Atalho IA contextual — abre o chat já com prompt pré-formado */}
+          <button
+            type="button"
+            onClick={async () => {
+              const { askAi } = await import('@/lib/ai-bridge');
+              askAi('O que tá faltando comprar pros pedidos pendentes? Mostra agrupado por urgência.');
+            }}
+            className="flex items-center gap-1.5 rounded-full border border-violet-300 bg-violet-50 px-3 py-1.5 text-xs font-medium text-violet-800 hover:bg-violet-100 transition-colors shrink-0"
+            title="Perguntar pra IA sobre essa página"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-3.5 w-3.5">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09Z" />
+            </svg>
+            Resumir com IA
+          </button>
         </div>
 
         {/* Stats */}

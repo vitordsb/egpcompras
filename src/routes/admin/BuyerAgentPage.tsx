@@ -17,13 +17,11 @@ import MarkdownText from '@/components/MarkdownText';
 import { cn } from '@/lib/utils';
 import { isCorrection, proposeMemoryFromCorrection, type MemoryProposal } from '@/lib/correction-detector';
 import { startRecording, transcribeAudio, type ActiveRecording } from '@/lib/voice-input';
+import { useLocation } from 'react-router-dom';
+import { getSuggestionsForRoute, getPendingAiMessage, setPendingAiMessage, onPendingAiMessage } from '@/lib/ai-bridge';
 
-const QUICK_SUGGESTIONS = [
-  'Qual o custo do produto X?',
-  'Liste meus produtos com preço de venda',
-  'Cria uma cotação pro produto X com 100 unidades, sem o componente caixa',
-  'Cadastra o componente "resistor 10k"',
-];
+// QUICK_SUGGESTIONS agora é DINÂMICO baseado na rota atual via getSuggestionsForRoute.
+// Mantido como fallback estático aqui só se a rota não tiver sugestão específica.
 
 interface ChatSummary {
   id: string;
@@ -168,6 +166,11 @@ export default function BuyerAgentPage() {
   const { userLabel, userEmail, userRole, allowedPageKeys } = useInternalAuth();
   const isRhUser = userEmail != null && RH_AUTHORIZED_EMAILS.includes(userEmail.toLowerCase());
   const provider = geminiProvider;
+  const location = useLocation();
+  // Sugestões contextuais pela rota atual. Quando o drawer abre numa página
+  // específica (ex: /admin/falta-comprar), o user vê prompts relevantes a
+  // essa página em vez dos genéricos hardcoded.
+  const contextualSuggestions = getSuggestionsForRoute(location.pathname);
   const [providerStatus, setProviderStatus] = useState<{ ok: boolean; message?: string } | null>(null);
   const [chats, setChats] = useState<ChatSummary[]>([]);
   const [currentChatId, setCurrentChatId] = useState<string | null>(null);
@@ -615,6 +618,28 @@ export default function BuyerAgentPage() {
     setRecording(null);
     setRecordingMs(0);
   }
+
+  // pendingAiMessage: páginas manuais (FaltaComprarPage, QuotationsPage etc)
+  // podem injetar uma mensagem via setPendingAiMessage("Cria cotação X") +
+  // openQuickChat(). Quando esse componente monta com pendingMessage não-null,
+  // dispara automaticamente — user vê o prompt + resposta sem digitar nada.
+  useEffect(() => {
+    const initial = getPendingAiMessage();
+    if (initial && !running) {
+      setPendingAiMessage(null);
+      // pequeno delay pra UI estabilizar
+      setTimeout(() => send(initial), 100);
+    }
+    // Escuta updates do pendingMessage caso seja setado enquanto o componente
+    // já está montado (user clica em outro botão 🤖 com drawer aberto)
+    return onPendingAiMessage((msg) => {
+      if (msg && !running) {
+        setPendingAiMessage(null);
+        setTimeout(() => send(msg), 100);
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function send(text?: string) {
     const message = (text ?? input).trim();
@@ -1161,7 +1186,7 @@ export default function BuyerAgentPage() {
                     Sugestões pra começar
                   </p>
                   <div className="grid gap-2 sm:grid-cols-2">
-                    {QUICK_SUGGESTIONS.map((s) => (
+                    {contextualSuggestions.map((s) => (
                       <button
                         key={s}
                         type="button"
@@ -1281,39 +1306,60 @@ export default function BuyerAgentPage() {
                       {summary && (
                         <div
                           className={cn(
-                            'mt-1.5 max-w-[85%] rounded-md border px-2.5 py-1.5 text-[11px]',
+                            'mt-2 max-w-[85%] rounded-lg border-2 px-4 py-3 text-sm shadow-sm animate-in fade-in slide-in-from-top-1 duration-300',
                             summary.failed.length > 0
-                              ? 'border-red-200 bg-red-50 text-red-800'
+                              ? 'border-red-300 bg-red-50 text-red-900'
                               : summary.verified === summary.success && summary.success > 0
-                                ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
-                                : 'border-amber-200 bg-amber-50 text-amber-800'
+                                ? 'border-emerald-400 bg-emerald-50 text-emerald-900'
+                                : 'border-amber-300 bg-amber-50 text-amber-900'
                           )}
                           title="Status real das ações executadas no banco — independente do que a IA falou no texto"
                         >
                           {summary.failed.length === 0 ? (
-                            <span>
-                              <strong>✓ {summary.success} {summary.success === 1 ? 'ação executada' : 'ações executadas'}</strong>
-                              {summary.verified > 0 && (
-                                <span className="ml-1.5 opacity-75">· {summary.verified} verificada{summary.verified === 1 ? '' : 's'} no banco</span>
-                              )}
-                              {summary.verified < summary.success && (
-                                <span className="ml-1.5 opacity-60">· {summary.success - summary.verified} sem confirmação automática</span>
-                              )}
-                            </span>
-                          ) : (
-                            <div className="space-y-0.5">
-                              <div className="font-semibold">
-                                ⚠ {summary.failed.length} de {summary.total} {summary.total === 1 ? 'ação falhou' : 'ações falharam'}
-                                {summary.success > 0 && <span className="ml-1 opacity-75">· {summary.success} ok</span>}
-                              </div>
-                              {summary.failed.slice(0, 3).map((f, i) => (
-                                <div key={i} className="truncate opacity-80">
-                                  • <code className="font-mono text-[10px]">{f.name}</code>: {f.error.slice(0, 120)}
+                            <div className="flex items-start gap-2">
+                              <span className={cn(
+                                'flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-white text-sm font-bold',
+                                summary.verified === summary.success
+                                  ? 'bg-emerald-600'
+                                  : 'bg-amber-500'
+                              )}>
+                                {summary.verified === summary.success ? '✓' : '!'}
+                              </span>
+                              <div className="flex-1 min-w-0">
+                                <div className="font-bold text-base leading-tight">
+                                  {summary.success} {summary.success === 1 ? 'ação executada' : 'ações executadas'}
                                 </div>
-                              ))}
-                              {summary.failed.length > 3 && (
-                                <div className="opacity-60">+ {summary.failed.length - 3} outros erros</div>
-                              )}
+                                {summary.verified > 0 && (
+                                  <div className="mt-0.5 text-xs opacity-90">
+                                    ✓ {summary.verified} {summary.verified === 1 ? 'verificada' : 'verificadas'} no banco — pode confiar
+                                  </div>
+                                )}
+                                {summary.verified < summary.success && (
+                                  <div className="mt-0.5 text-xs opacity-70">
+                                    ⚠ {summary.success - summary.verified} sem confirmação automática (tool antiga sem read-after-write)
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="flex items-start gap-2">
+                              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-red-600 text-white text-sm font-bold">
+                                ⚠
+                              </span>
+                              <div className="flex-1 min-w-0 space-y-1">
+                                <div className="font-bold text-base leading-tight">
+                                  {summary.failed.length} de {summary.total} {summary.total === 1 ? 'ação falhou' : 'ações falharam'}
+                                  {summary.success > 0 && <span className="ml-1.5 font-normal opacity-75">({summary.success} ok)</span>}
+                                </div>
+                                {summary.failed.slice(0, 3).map((f, i) => (
+                                  <div key={i} className="truncate text-xs opacity-90">
+                                    • <code className="font-mono text-[11px] bg-red-100 px-1 rounded">{f.name}</code>: {f.error.slice(0, 120)}
+                                  </div>
+                                ))}
+                                {summary.failed.length > 3 && (
+                                  <div className="text-xs opacity-70">+ {summary.failed.length - 3} outros erros</div>
+                                )}
+                              </div>
                             </div>
                           )}
                         </div>

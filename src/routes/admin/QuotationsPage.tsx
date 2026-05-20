@@ -417,7 +417,23 @@ export default function QuotationsPage() {
             Crie rodadas de cotação a partir de um produto e envie links únicos pra cada fornecedor.
           </p>
         </div>
-        <Button onClick={openNew}>+ Nova cotação</Button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={async () => {
+              const { askAi } = await import('@/lib/ai-bridge');
+              askAi('Quais cotações estão abertas e sem resposta dos fornecedores? Quais já estão vencidas?');
+            }}
+            className="flex items-center gap-1.5 rounded-full border border-violet-300 bg-violet-50 px-3 py-1.5 text-xs font-medium text-violet-800 hover:bg-violet-100 transition-colors"
+            title="Perguntar pra IA sobre cotações"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-3.5 w-3.5">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09Z" />
+            </svg>
+            Status com IA
+          </button>
+          <Button onClick={openNew}>+ Nova cotação</Button>
+        </div>
       </div>
 
       {listError && (
