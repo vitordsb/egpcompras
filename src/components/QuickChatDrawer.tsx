@@ -1,8 +1,12 @@
-import { useEffect } from 'react';
+import { lazy, Suspense, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import BuyerAgentPage from '@/routes/admin/BuyerAgentPage';
 import Logo from '@/components/Logo';
 import { writeUIMode } from '@/lib/ui-mode';
+
+// Lazy: BuyerAgentPage carrega @google/genai, voice-input, nfe-parser,
+// xlsx, jspdf — pesado. Lazy load remove ~150KB do bundle inicial
+// (quem nunca abre o chat não paga o custo).
+const BuyerAgentPage = lazy(() => import('@/routes/admin/BuyerAgentPage'));
 
 interface Props {
   onClose: () => void;
@@ -72,7 +76,23 @@ export default function QuickChatDrawer({ onClose }: Props) {
           </div>
         </div>
         <div className="flex-1 min-h-0 overflow-hidden">
-          <BuyerAgentPage />
+          <Suspense
+            fallback={
+              <div className="flex h-full items-center justify-center bg-slate-50">
+                <div className="flex flex-col items-center gap-3 text-slate-400">
+                  <Logo size={32} />
+                  <div className="flex items-center gap-1">
+                    <span className="h-2 w-2 animate-pulse rounded-full bg-brand-500" />
+                    <span className="h-2 w-2 animate-pulse rounded-full bg-brand-500 [animation-delay:120ms]" />
+                    <span className="h-2 w-2 animate-pulse rounded-full bg-brand-500 [animation-delay:240ms]" />
+                  </div>
+                  <p className="text-xs">Carregando chat…</p>
+                </div>
+              </div>
+            }
+          >
+            <BuyerAgentPage />
+          </Suspense>
         </div>
       </div>
     </>
